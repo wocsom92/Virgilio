@@ -1,0 +1,117 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: server-monitor-db
+    command:
+      - --default-authentication-plugin=mysql_native_password
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pchangeme"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: server-monitor-backend
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG}
+      SERVER_MONITOR_DB_USER: ${SERVER_MONITOR_DB_USER}
+      SERVER_MONITOR_DB_PASSWORD: ${SERVER_MONITOR_DB_PASSWORD}
+      SERVER_MONITOR_DB_HOST: ${SERVER_MONITOR_DB_HOST}
+      SERVER_MONITOR_DB_PORT: ${SERVER_MONITOR_DB_PORT}
+      SERVER_MONITOR_DB_NAME: ${SERVER_MONITOR_DB_NAME}
+      SERVER_MONITOR_AUTH_SECRET_KEY: ${SERVER_MONITOR_AUTH_SECRET_KEY}
+      SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES: ${SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES:-1440}
+      SERVER_MONITOR_TELEGRAM_BOT_TOKEN: ${SERVER_MONITOR_TELEGRAM_BOT_TOKEN}
+      SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID: ${SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID}
+      SERVER_MONITOR_TELEGRAM_ALLOWED_USERS: ${SERVER_MONITOR_TELEGRAM_ALLOWED_USERS:-[]}
+      SERVER_MONITOR_MONITOR_REQUEST_TIMEOUT_SECONDS: ${SERVER_MONITOR_MONITOR_REQUEST_TIMEOUT_SECONDS}
+      SERVER_MONITOR_CORS_ALLOW_ORIGINS: ${SERVER_MONITOR_CORS_ALLOW_ORIGINS}
+      SERVER_MONITOR_ALLOW_HOST_REBOOT: ${SERVER_MONITOR_ALLOW_HOST_REBOOT:-false}
+      SERVER_MONITOR_REBOOT_COMMAND: "${SERVER_MONITOR_REBOOT_COMMAND:-/sbin/shutdown -r now}"
+    ports:
+      - "${SERVER_MONITOR_PORT:-28000}:8000"
+    volumes:
+      - type: bind
+        source: ${MONITOR_HOST_ROOT_SOURCE:-./docker/monitor/host-root-placeholder}
+        target: ${MONITOR_HOST_ROOT_TARGET:-/hostfs}
+        read_only: true
+
+  monitor:
+    build:
+      context: .
+      dockerfile: monitor/Dockerfile
+    container_name: "${MONITOR_CONTAINER_NAME:-server-monitor-agent}"
+    privileged: true
+    restart: unless-stopped
+    environment:
+      MONITOR_DEBUG: ${MONITOR_DEBUG}
+      MONITOR_API_TOKEN: ${MONITOR_API_TOKEN}
+      MONITOR_MOUNTED_POINTS: '${MONITOR_MOUNTED_POINTS:-["auto"]}'
+      MONITOR_ALLOW_EXTERNAL_IP_LOOKUP: ${MONITOR_ALLOW_EXTERNAL_IP_LOOKUP}
+      MONITOR_HOST_ROOT_SOURCE: ${MONITOR_HOST_ROOT_SOURCE:-}
+      MONITOR_HOST_ROOT_TARGET: ${MONITOR_HOST_ROOT_TARGET:-/hostfs}
+      MONITOR_HISTORY_RETENTION_SECONDS: ${MONITOR_HISTORY_RETENTION_SECONDS:-86400}
+      MONITOR_HISTORY_MAX_ENTRIES: ${MONITOR_HISTORY_MAX_ENTRIES:-1440}
+      MONITOR_ALLOW_HOST_REBOOT: ${MONITOR_ALLOW_HOST_REBOOT:-false}
+      MONITOR_REBOOT_COMMAND: "${MONITOR_REBOOT_COMMAND:-/sbin/shutdown -r now}"
+    ports:
+      - "${MONITOR_PORT:-29000}:9000"
+    volumes:
+      - type: bind
+        source: ${MONITOR_HOST_ROOT_SOURCE:-./docker/monitor/host-root-placeholder}
+        target: ${MONITOR_HOST_ROOT_TARGET:-/hostfs}
+        read_only: true
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-http://localhost:28000}"
+    container_name: server-monitor-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
+
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: server-monitor-telegram-bot
+    privileged: true
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "backend.app.bot.polling"]
+    environment:
+      SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG}
+      SERVER_MONITOR_DB_USER: ${SERVER_MONITOR_DB_USER}
+      SERVER_MONITOR_DB_PASSWORD: ${SERVER_MONITOR_DB_PASSWORD}
+      SERVER_MONITOR_DB_HOST: ${SERVER_MONITOR_DB_HOST}
+      SERVER_MONITOR_DB_PORT: ${SERVER_MONITOR_DB_PORT}
+      SERVER_MONITOR_DB_NAME: ${SERVER_MONITOR_DB_NAME}
+      SERVER_MONITOR_TELEGRAM_BOT_TOKEN: ${SERVER_MONITOR_TELEGRAM_BOT_TOKEN}
+      SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID: ${SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID}
+      SERVER_MONITOR_TELEGRAM_ALLOWED_USERS: ${SERVER_MONITOR_TELEGRAM_ALLOWED_USERS}
+
+volumes:
+  mysql-data:

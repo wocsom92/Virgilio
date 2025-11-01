@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  monitor:
+    build:
+      context: .
+      dockerfile: monitor/Dockerfile
+    container_name: "${MONITOR_CONTAINER_NAME:-server-monitor-agent}"
+    privileged: true
+    restart: unless-stopped
+    environment:
+      MONITOR_DEBUG: "${MONITOR_DEBUG:-false}"
+      MONITOR_API_TOKEN: "${MONITOR_API_TOKEN:-monitor-token}"
+      MONITOR_MOUNTED_POINTS: '${MONITOR_MOUNTED_POINTS:-["auto"]}'
+      MONITOR_ALLOW_EXTERNAL_IP_LOOKUP: "${MONITOR_ALLOW_EXTERNAL_IP_LOOKUP:-false}"
+      MONITOR_HOST_ROOT_SOURCE: "${MONITOR_HOST_ROOT_SOURCE:-}"
+      MONITOR_HOST_ROOT_TARGET: "${MONITOR_HOST_ROOT_TARGET:-/hostfs}"
+      MONITOR_HISTORY_RETENTION_SECONDS: "${MONITOR_HISTORY_RETENTION_SECONDS:-86400}"
+      MONITOR_HISTORY_MAX_ENTRIES: "${MONITOR_HISTORY_MAX_ENTRIES:-1440}"
+      MONITOR_ALLOW_HOST_REBOOT: "${MONITOR_ALLOW_HOST_REBOOT:-false}"
+      MONITOR_REBOOT_COMMAND: "${MONITOR_REBOOT_COMMAND:-/sbin/shutdown -r now}"
+    ports:
+      - "${MONITOR_PORT:-9000}:9000"
+    volumes:
+      - type: bind
+        source: ${MONITOR_HOST_ROOT_SOURCE:-./docker/monitor/host-root-placeholder}
+        target: ${MONITOR_HOST_ROOT_TARGET:-/hostfs}
+        read_only: true

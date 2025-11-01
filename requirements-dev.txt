@@ -1,0 +1,5 @@
+-r backend/requirements.txt
+-r monitor/requirements.txt
+pytest
+pytest-asyncio
+aiosqlite

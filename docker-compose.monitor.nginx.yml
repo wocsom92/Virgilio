@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  monitor-proxy:
+    image: nginx:1.27-alpine
+    container_name: "${MONITOR_NGINX_CONTAINER_NAME:-server-monitor-agent-nginx}"
+    restart: unless-stopped
+    depends_on:
+      - monitor
+    volumes:
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ${MONITOR_NGINX_CERT_PATH:-./docker/nginx/certs/fullchain.pem}:/etc/nginx/certs/fullchain.pem:ro
+      - ${MONITOR_NGINX_KEY_PATH:-./docker/nginx/certs/privkey.pem}:/etc/nginx/certs/privkey.pem:ro
+    environment:
+      - NGINX_ENTRYPOINT_QUIET_LOGS=1
+    ports:
+      - "${MONITOR_HTTPS_PORT:-9443}:443"

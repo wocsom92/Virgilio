@@ -1,0 +1,111 @@
+body {
+  font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+  background-color: #121212;
+  color: #f8f9fa;
+}
+
+.card {
+  border-radius: 1.25rem;
+  background-color: #1a1a1a;
+  color: #f8f9fa;
+}
+
+.card-header,
+.card-body {
+  background-color: transparent;
+}
+
+.card-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f8f9fa;
+}
+
+.navbar {
+  backdrop-filter: blur(12px);
+}
+
+.btn-outline-light {
+  border-width: 1.5px;
+}
+
+.bg-dark .form-label,
+.bg-dark .form-check-label {
+  color: #f8f9fa;
+}
+
+.bg-dark .form-text {
+  color: rgba(248, 249, 250, 0.7);
+}
+
+.bg-dark .text-secondary {
+  color: rgba(248, 249, 250, 0.6) !important;
+}
+
+.list-group-item.bg-dark {
+  background-color: #1a1a1a !important;
+  color: #f8f9fa !important;
+}
+
+.metric-pill {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8f9fa;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.metric-pill__icon {
+  color: #f8f9fa;
+  display: flex;
+  align-items: center;
+}
+
+.metric-pill__label {
+  color: rgba(248, 249, 250, 0.7);
+  letter-spacing: 0.08em;
+}
+
+.metric-pill__value {
+  color: #ffffff;
+}
+
+.card-panel {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #f8f9fa;
+}
+
+.card-panel__heading {
+  color: rgba(248, 249, 250, 0.75);
+  letter-spacing: 0.08em;
+}
+
+.card-panel__item {
+  color: #ffffff;
+}
+
+.card-panel__muted {
+  color: rgba(248, 249, 250, 0.55);
+}
+
+.card-panel .form-check-input {
+  background-color: transparent;
+  border-color: rgba(248, 249, 250, 0.4);
+}
+
+.card-panel .form-check-input:checked {
+  background-color: #f8f9fa;
+  border-color: #f8f9fa;
+}
+
+.card-panel .form-check-label {
+  color: #f8f9fa;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
