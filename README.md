@@ -17,93 +17,11 @@ A full-stack monitoring suite built with FastAPI, React, MySQL, and Bootstrap. I
 - Adjustable metric retention window (1–90 days) from the admin panel.
 - Modern minimal UI using Bootstrap with black/white iconography.
 
-Current release: Backend **2.0.0**, Frontend **2.0.0**, Monitor **2.0.0**.
-
-## Architecture (C4 Overview)
-
-```mermaid
-%% C4 Container Diagram
-graph LR
-    subgraph Users
-        Admin["Admin User\nBrowser"]
-        BotUser["Telegram User"]
-    end
-
-    subgraph DockerCompose["Docker / Host"]
-        Frontend["Frontend (React/Vite)\nContainer"]
-        Backend["Front Backend (FastAPI)\nContainer"]
-        MonitorAgent["Monitor Agent (FastAPI)\nContainer per host"]
-        MySQL[("MySQL 8\nserver_monitor & backend_monitor databases")]
-        Prometheus[("Optional Prometheus\n(data source for future extensions)")]
-    end
-
-    subgraph TelegramCloud["Telegram Cloud"]
-        TelegramAPI["Telegram Bot API"]
-    end
-
-    Admin -->|"HTTP/S"| Frontend
-    Frontend -->|"REST JSON"| Backend
-    Backend -->|"MySQL client"| MySQL
-    Backend -->|"Fetch metrics"| MonitorAgent
-    MonitorAgent -.->|"Push optional metrics"| Backend
-    Backend -->|"Webhook & polling helpers"| TelegramAPI
-    BotUser -->|"/stats /warn"| TelegramAPI
-    TelegramAPI -->|"deliver messages"| BotUser
-    Backend -."optional".-> BotUser
-```
-
-```mermaid
-%% C4 Component Diagram - Front Backend
-graph TB
-    subgraph FastAPI Backend
-        Controllers["Routers\n(backends, metrics, telegram)"]
-        Services["Services\n(monitor client, telegram notifications, metrics formatter)"]
-        Repos["SQLAlchemy ORM\n(models & session)"]
-    end
-
-    FrontendUI["React Admin UI"] -->|REST| Controllers
-    MonitorAgentAPI["Monitor Agent API"] -->|Token fetch| Controllers
-    Controllers --> Services
-    Services --> Repos
-    Repos --> MySQLDB[("MySQL DBs")] 
-    Services --> TelegramBotAPI[["Telegram Bot API"]]
-```
-
-```mermaid
-%% C4 Component Diagram - Monitor Agent
-graph TB
-    subgraph Monitor Agent
-        CollectMetrics["metrics.collect_metrics()\n(psutil, Prometheus queries)"]
-        APIEndpoints["FastAPI endpoints\n/metrics, /metrics/latest"]
-        ORM["SQLAlchemy models\nMetricReading"]
-    end
-
-    CollectMetrics --> APIEndpoints
-    APIEndpoints --> ORM
-    ORM --> AgentDB[("backend_monitor DB")]
-    BackendAPI[["Front Backend"]] -->|Bearer token| APIEndpoints
-```
-
-Use these diagrams as a reference when deploying to multiple hosts or extending the system with additional services (e.g., Prometheus exporters, alerting channels).
-
 ## Prerequisites
 
-- Python 3.11+
-- Node.js 18+
-- MySQL 8+ (or a compatible server)
+- Docker with the Compose plugin
 
-## Getting Started
-
-### 1. Prepare MySQL schemas
-
-```sql
-CREATE DATABASE server_monitor CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE DATABASE backend_monitor CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-```
-
-Create users or grant credentials to match the `.env` files below.
-
-### 2. Configure environments
+## Configuration
 
 Copy the provided examples and adjust as needed.
 
@@ -122,68 +40,7 @@ Key values:
 - `MONITOR_HOST_ROOT_SOURCE` and `MONITOR_HOST_ROOT_TARGET`: optional bind parameters (host path → container path) that expose the host filesystem to the monitor. Set `MONITOR_HOST_ROOT_SOURCE=/` and `MONITOR_HOST_ROOT_TARGET=/hostfs` to surface the host’s mount points when using `MONITOR_MOUNTED_POINTS=auto`.
 - `SERVER_MONITOR_ALLOW_HOST_REBOOT` / `MONITOR_ALLOW_HOST_REBOOT`: enable host-level reboot endpoints; requires privileged containers and a valid reboot command (e.g., `/usr/sbin/shutdown -r now`).
 
-### 3. Install Python dependencies
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-pip install -r monitor/requirements.txt
-```
-
-> `psutil`, `asyncmy`, and `httpx` are required; install any system dependencies for MySQL drivers (e.g., `libmysqlclient-dev`).
-
-### 4. Run the services
-
-In separate shells (with the virtual environment activated):
-
-```bash
-# Front backend API (default port 8000)
-uvicorn backend.app.main:app --reload
-
-# Backend monitor (example port 9000)
-uvicorn monitor.app.main:app --reload --port 9000
-```
-
-Ensure the monitor is reachable at the `base_url` configured for each backend (e.g., `http://<server-host>:9000`).
-
-### 5. Start the frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Set `VITE_API_BASE_URL` in `frontend/.env` to point to the front backend (defaults to `http://localhost:8000`).
-
-### 6. Add a backend via the admin UI
-
-1. Open the frontend dev server (usually http://localhost:5173).
-2. On first launch you'll be prompted to create the initial admin username/password; otherwise sign in with an existing account.
-3. Switch to the **Admin** tab.
-4. Add a backend with the monitor's base URL (e.g., `http://localhost:9000`) and set the polling interval (minimum 30 seconds).
-
-### Metrics Flow
-
-1. The monitor exposes `GET /metrics` (requires `Authorization: Bearer <MONITOR_API_TOKEN>`).
-2. The front backend polls via `/backends/{id}/refresh` or accepts push data via `/metrics/{id}`.
-3. Metrics are stored in MySQL and surfaced to the dashboard.
-
-### Telegram Integration
-
-- Configure the bot token and default chat inside the Admin » Telegram form.
-- Use the buttons to send `/stats` or `/warn` messages manually, or configure Telegram webhooks to post to `/telegram/webhook`.
-- Alternative: run a polling bot that reuses the same message builders via `python -m backend.app.bot.polling`. The bot honours `SERVER_MONITOR_TELEGRAM_ALLOWED_USERS` and delivers `/stats` and `/warn` responses in chat.
-
-### Running in production
-
-- Configure environment variables securely (e.g., systemd service files or container secrets).
-- Use a process manager such as `gunicorn` or `uvicorn` behind a reverse proxy.
-- Secure the frontend/API with HTTPS and keep `SERVER_MONITOR_AUTH_SECRET_KEY` private.
-- To enable host-level restart commands from the UI/Telegram, set `SERVER_MONITOR_ALLOW_HOST_REBOOT=true` (and optionally override `SERVER_MONITOR_REBOOT_COMMAND`, default `/sbin/shutdown -r now`) on the API host and ensure the service user is allowed to execute it.
-
-## Docker Deployment
+## Run with Docker Compose
 
 Build and run the complete stack (MySQL, backend API, monitor agent, and frontend) with Docker Compose:
 
@@ -201,7 +58,6 @@ Default credentials and runtime settings are defined in `docker-compose.yml`. Up
 - `SERVER_MONITOR_CORS_ALLOW_ORIGINS` (JSON array) when the frontend is hosted from a custom domain.
 - `SERVER_MONITOR_DATABASE_URI` if you need to override the DSN for scripts/migrations.
 - `VITE_API_BASE_URL` build arg if the frontend should reach the API via a different hostname (defaults to `http://localhost:8000` for local browser access).
-- `VITE_API_BASE_URL` build arg (within the `frontend` service) when the backend is exposed behind a different host/port).
 - If you need host reboot support, run the backend and monitor containers with `privileged: true` (as shown in the compose files) and ensure the reboot command exists on the host (e.g., `/sbin/shutdown -r now`).
 
 The Compose file exposes the services locally on:
@@ -269,9 +125,3 @@ frontend/
     hooks/       # Shared React hooks
     styles/      # Global theme overrides
 ```
-
-## Testing & Linting
-
-- Add FastAPI unit tests using `pytest` + `httpx.AsyncClient` as desired.
-- Apply TypeScript/ESLint or Prettier for the frontend if needed.
-- Consider database migrations via Alembic for production use.
