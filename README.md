@@ -1,5 +1,7 @@
 # Virgilio - System Monitoring
 
+Current version: 3.0.0
+
 A full-stack monitoring suite built with FastAPI, React, MySQL, and Bootstrap. It consists of:
 
 - **Frontend**: Vite + React dashboard and admin console.
@@ -35,6 +37,7 @@ Create a root `.env` to drive the Docker Compose deployment (ports, shared secre
 Key values:
 
 - `SERVER_MONITOR_AUTH_SECRET_KEY`: secret used to sign access tokens (keep this private).
+- `SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES`: access token lifetime in minutes (higher means fewer login prompts).
 - `MONITOR_API_TOKEN`: token used by the aggregator when requesting metrics from a Backend Monitor instance.
 - `MONITOR_MOUNTED_POINTS`: JSON array of mount points to include in disk usage reporting (e.g. `["/", "/mnt/storage"]`), or include `"auto"` (e.g. `["auto"]`) to discover all local mounts automatically.
 - `MONITOR_HOST_ROOT_SOURCE` and `MONITOR_HOST_ROOT_TARGET`: optional bind parameters (host path → container path) that expose the host filesystem to the monitor. Set `MONITOR_HOST_ROOT_SOURCE=/` and `MONITOR_HOST_ROOT_TARGET=/hostfs` to surface the host’s mount points when using `MONITOR_MOUNTED_POINTS=auto`.

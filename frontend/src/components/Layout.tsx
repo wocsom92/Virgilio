@@ -40,7 +40,7 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
       <nav className="navbar navbar-expand-lg navbar-dark border-bottom border-secondary">
         <div className="container-fluid">
           <div className="d-flex align-items-center justify-content-between w-100 gap-3">
-            <span className="navbar-brand fw-semibold text-uppercase mb-0">
+            <span className="navbar-brand brand-title fw-semibold text-uppercase mb-0">
               Virgilio - System Monitoring
               <small
                 className="d-block text-secondary fw-normal fst-italic"

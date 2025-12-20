@@ -8,10 +8,12 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.core.security import get_current_user
 from backend.app.db.session import get_session
-from backend.app.models.monitors import MetricSnapshot, MonitoredBackend
+from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, QuickStatusItem
 from backend.app.schemas.backend import BackendWithLatestSnapshot
 from backend.app.schemas.common import MetricSnapshotRead
 from backend.app.schemas.metrics import MetricSeriesPoint, MetricSeriesResponse
+from backend.app.schemas.quick_status import QuickStatusTileRead
+from backend.app.services.quick_status import build_quick_status_tiles
 
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -45,6 +47,20 @@ async def fetch_dashboard_data(
             )
         )
     return payload
+
+
+@router.get("/quick-status", response_model=list[QuickStatusTileRead])
+async def fetch_quick_status_tiles(
+    _: object = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[QuickStatusTileRead]:
+    result = await session.execute(
+        select(QuickStatusItem)
+        .options(selectinload(QuickStatusItem.backend))
+        .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
+    )
+    items = list(result.scalars())
+    return await build_quick_status_tiles(session, items)
 
 
 @router.get(

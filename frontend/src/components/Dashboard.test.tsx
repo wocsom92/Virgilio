@@ -4,10 +4,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MonitoredBackend } from '../api/client';
 import { Dashboard } from './Dashboard';
-import { fetchDashboard, refreshBackend } from '../api/client';
+import { fetchDashboard, fetchQuickStatusTiles, refreshBackend } from '../api/client';
 
 vi.mock('../api/client', () => ({
   fetchDashboard: vi.fn(),
+  fetchQuickStatusTiles: vi.fn(),
   refreshBackend: vi.fn(),
 }));
 
@@ -50,6 +51,7 @@ describe('Dashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([]);
   });
 
   it('renders sorted backend cards after fetching data', async () => {

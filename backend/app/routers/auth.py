@@ -13,6 +13,7 @@ from backend.app.core.security import (
 )
 from backend.app.db.session import get_session
 from backend.app.models.users import User, UserRole
+from backend.app.services.system_settings import get_auth_session_minutes
 from backend.app.schemas.auth import (
     AuthRole,
     AuthStatusResponse,
@@ -52,7 +53,11 @@ async def bootstrap_admin(
     await session.commit()
     await session.refresh(user)
 
-    token = create_access_token({"sub": user.username, "role": user.role}, expires_delta=timedelta(days=2))
+    session_minutes = await get_auth_session_minutes(session)
+    token = create_access_token(
+        {"sub": user.username, "role": user.role},
+        expires_delta=timedelta(minutes=session_minutes),
+    )
     return TokenResponse(access_token=token, username=user.username, role=AuthRole.ADMIN, user_id=user.id)
 
 
@@ -70,7 +75,11 @@ async def login(
             detail="Invalid username or password",
         )
 
-    token = create_access_token({"sub": user.username, "role": user.role})
+    session_minutes = await get_auth_session_minutes(session)
+    token = create_access_token(
+        {"sub": user.username, "role": user.role},
+        expires_delta=timedelta(minutes=session_minutes),
+    )
     return TokenResponse(access_token=token, username=user.username, role=AuthRole(user.role), user_id=user.id)
 
 

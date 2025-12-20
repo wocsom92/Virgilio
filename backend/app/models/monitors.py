@@ -77,3 +77,19 @@ class SystemSettings(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     metric_retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
+    auth_session_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=1440)
+
+
+class QuickStatusItem(TimestampMixin, Base):
+    __tablename__ = "quick_status_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    backend_id: Mapped[int] = mapped_column(ForeignKey("monitored_backends.id"), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    mount_path: Mapped[str | None] = mapped_column(String(255))
+    warning_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    critical_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    backend: Mapped[MonitoredBackend] = relationship("MonitoredBackend")

@@ -9,19 +9,27 @@ import {
   TelegramSettings,
   AuthUser,
   AuthRole,
+  QuickStatusItem,
+  QuickStatusMetricKey,
   fetchDatabaseSize,
+  createQuickStatusItem,
   createBackend,
   createUser,
+  deleteQuickStatusItem,
   deleteBackend,
   deleteUser,
   fetchBackendMounts,
+  fetchAuthSessionSettings,
   fetchSystemSettings,
   getTelegramSettings,
+  listQuickStatusItems,
   listBackends,
   listUsers,
   sendTelegramStats,
   sendTelegramWarnings,
+  updateAuthSessionSettings,
   updateBackend,
+  updateQuickStatusItem,
   updateTelegramSettings,
   updateSystemSettings,
   requestReboot,
@@ -34,6 +42,8 @@ interface AdminPanelProps {
 }
 
 const MOUNTED_USAGE_KEY = 'mounted_usage' as const;
+const AUTH_SESSION_MINUTES_MIN = 15;
+const AUTH_SESSION_MINUTES_MAX = 60 * 24 * 30;
 
 const metricOptions = [
   { key: 'cpu_temperature_c', label: 'CPU temperature' },
@@ -44,10 +54,29 @@ const metricOptions = [
   { key: 'uptime_seconds', label: 'Uptime' },
 ] as const;
 
+const quickStatusMetricOptions: Array<{
+  key: QuickStatusMetricKey;
+  label: string;
+  defaultWarning: number;
+  defaultCritical: number;
+  helper: string;
+}> = [
+  { key: 'disk_usage_percent', label: 'Disk usage (%)', defaultWarning: 80, defaultCritical: 90, helper: 'Percent used' },
+  { key: 'ram_used_percent', label: 'RAM usage (%)', defaultWarning: 80, defaultCritical: 90, helper: 'Percent used' },
+  { key: 'cpu_temperature_c', label: 'CPU temperature (C)', defaultWarning: 75, defaultCritical: 85, helper: 'Celsius' },
+  { key: 'cpu_load_one', label: 'CPU load (1m)', defaultWarning: 1.0, defaultCritical: 2.0, helper: '1-minute load avg' },
+  { key: 'mount_used_percent', label: 'Mounted volume usage (%)', defaultWarning: 80, defaultCritical: 90, helper: 'Percent used' },
+];
+
 const metricOptionKeys = new Set(metricOptions.map((option) => option.key));
 const extraSelectedKeys = ['network_interfaces'];
 const ADMIN_SECTIONS = [
   { id: 'manage-backends', label: 'Manage backends', description: 'Create, edit, and order monitored servers.' },
+  {
+    id: 'quick-status',
+    label: 'Quick status tiles',
+    description: 'Configure the overview status tiles shown on the dashboard.',
+  },
   { id: 'telegram-bots', label: 'Telegram bots', description: 'Configure notifications and test commands.' },
   { id: 'administration', label: 'Administration', description: 'Access control and host-level controls.' },
 ];
@@ -268,12 +297,37 @@ const warnThresholdFields: Array<{
 
 type BackendFormState = BackendCreatePayload & { selected_metrics: SelectedMetrics };
 
+type QuickStatusFormState = {
+  backend_id: number | '';
+  label: string;
+  metric_key: QuickStatusMetricKey;
+  mount_path: string;
+  warning_threshold: number | '';
+  critical_threshold: number | '';
+  display_order: number;
+};
+
+const defaultQuickStatusThresholds = (metric: QuickStatusMetricKey) => {
+  const match = quickStatusMetricOptions.find((option) => option.key === metric);
+  return match
+    ? { warning: match.defaultWarning, critical: match.defaultCritical }
+    : { warning: 80, critical: 90 };
+};
+
 const sortBackends = (items: MonitoredBackend[]): MonitoredBackend[] =>
   [...items].sort((a, b) => {
     if (a.display_order !== b.display_order) {
       return a.display_order - b.display_order;
     }
     return a.name.localeCompare(b.name);
+  });
+
+const sortQuickStatusItems = (items: QuickStatusItem[]): QuickStatusItem[] =>
+  [...items].sort((a, b) => {
+    if (a.display_order !== b.display_order) {
+      return a.display_order - b.display_order;
+    }
+    return a.label.localeCompare(b.label);
   });
 
 const createInitialForm = (): BackendFormState => ({
@@ -286,6 +340,19 @@ const createInitialForm = (): BackendFormState => ({
   notes: '',
   selected_metrics: createDefaultSelectedMetrics(),
 });
+
+const createQuickStatusForm = (): QuickStatusFormState => {
+  const defaults = defaultQuickStatusThresholds('disk_usage_percent');
+  return {
+    backend_id: '',
+    label: '',
+    metric_key: 'disk_usage_percent',
+    mount_path: '',
+    warning_threshold: defaults.warning,
+    critical_threshold: defaults.critical,
+    display_order: 0,
+  };
+};
 
 export function AdminPanel({ currentUser }: AdminPanelProps) {
   const extractErrorMessage = (err: unknown, fallback: string): string => {
@@ -315,6 +382,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [dbSizeStatus, setDbSizeStatus] = useState<string | null>(null);
   const [retentionDays, setRetentionDays] = useState<number | ''>('');
   const [retentionStatus, setRetentionStatus] = useState<string | null>(null);
+  const [authSessionMinutes, setAuthSessionMinutes] = useState<number | ''>('');
+  const [authSessionStatus, setAuthSessionStatus] = useState<string | null>(null);
   const [mountOptions, setMountOptions] = useState<string[]>([]);
   const [loadingMountOptions, setLoadingMountOptions] = useState(false);
   const [mountOptionsError, setMountOptionsError] = useState<string | null>(null);
@@ -322,6 +391,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [rebootingBackendId, setRebootingBackendId] = useState<number | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>(ADMIN_SECTIONS[0].id);
   const [showNewForm, setShowNewForm] = useState(false);
+  const [quickStatusItems, setQuickStatusItems] = useState<QuickStatusItem[]>([]);
+  const [quickStatusForm, setQuickStatusForm] = useState<QuickStatusFormState>(() => createQuickStatusForm());
+  const [quickStatusEditingId, setQuickStatusEditingId] = useState<number | null>(null);
+  const [quickStatusStatus, setQuickStatusStatus] = useState<string | null>(null);
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [userStatus, setUserStatus] = useState<string | null>(null);
   const [userForm, setUserForm] = useState<{ username: string; password: string; role: AuthRole }>({
@@ -376,6 +449,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const isAuthenticated = Boolean(currentUser);
   const isAdmin = currentUser?.role === 'admin';
   const canFetchMountOptions = Boolean(editingId && isAdmin);
+  const getQuickStatusMetricLabel = (key: QuickStatusMetricKey) =>
+    quickStatusMetricOptions.find((option) => option.key === key)?.label ?? key;
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -405,6 +480,22 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       } catch (err) {
         setTelegram(null);
         setTelegramStatus('Unable to load Telegram settings - admin access required.');
+      }
+    })();
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setQuickStatusItems([]);
+      return;
+    }
+    void (async () => {
+      try {
+        const items = await listQuickStatusItems();
+        setQuickStatusItems(sortQuickStatusItems(items));
+      } catch (err) {
+        setQuickStatusItems([]);
+        setQuickStatusStatus(err instanceof Error ? err.message : 'Unable to load quick status tiles');
       }
     })();
   }, [isAdmin]);
@@ -443,6 +534,25 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       } catch (err) {
         setRetentionDays('');
         setRetentionStatus(extractErrorMessage(err, 'Unable to load retention settings'));
+      }
+    })();
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setAuthSessionMinutes('');
+      setAuthSessionStatus(null);
+      return;
+    }
+    setAuthSessionStatus('Loading session settings…');
+    void (async () => {
+      try {
+        const settings = await fetchAuthSessionSettings();
+        setAuthSessionMinutes(settings.auth_session_minutes);
+        setAuthSessionStatus(null);
+      } catch (err) {
+        setAuthSessionMinutes('');
+        setAuthSessionStatus(extractErrorMessage(err, 'Unable to load session settings'));
       }
     })();
   }, [isAdmin]);
@@ -593,6 +703,107 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       ...selection,
       mounts: selection.mounts.filter((_, idx) => idx !== index),
     }));
+  };
+
+  const resetQuickStatusForm = (options: { keepStatus?: boolean } = {}) => {
+    setQuickStatusForm(createQuickStatusForm());
+    setQuickStatusEditingId(null);
+    if (!options.keepStatus) {
+      setQuickStatusStatus(null);
+    }
+  };
+
+  const handleQuickStatusMetricChange = (metric: QuickStatusMetricKey) => {
+    const defaults = defaultQuickStatusThresholds(metric);
+    setQuickStatusForm((prev) => ({
+      ...prev,
+      metric_key: metric,
+      mount_path: '',
+      warning_threshold: defaults.warning,
+      critical_threshold: defaults.critical,
+    }));
+  };
+
+  const handleQuickStatusSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!isAdmin) return;
+
+    if (quickStatusForm.backend_id === '') {
+      setQuickStatusStatus('Select a backend.');
+      return;
+    }
+    if (!quickStatusForm.label.trim()) {
+      setQuickStatusStatus('Enter a label.');
+      return;
+    }
+    if (quickStatusForm.warning_threshold === '' || quickStatusForm.critical_threshold === '') {
+      setQuickStatusStatus('Enter both warning and critical thresholds.');
+      return;
+    }
+    if (Number(quickStatusForm.warning_threshold) >= Number(quickStatusForm.critical_threshold)) {
+      setQuickStatusStatus('Warning threshold must be less than critical threshold.');
+      return;
+    }
+    if (quickStatusForm.metric_key === 'mount_used_percent' && !quickStatusForm.mount_path.trim()) {
+      setQuickStatusStatus('Enter a mount path for mounted volume tiles.');
+      return;
+    }
+
+    const payload = {
+      backend_id: Number(quickStatusForm.backend_id),
+      label: quickStatusForm.label.trim(),
+      metric_key: quickStatusForm.metric_key,
+      mount_path: quickStatusForm.metric_key === 'mount_used_percent' ? quickStatusForm.mount_path.trim() : null,
+      warning_threshold: Number(quickStatusForm.warning_threshold),
+      critical_threshold: Number(quickStatusForm.critical_threshold),
+      display_order: Number(quickStatusForm.display_order) || 0,
+    };
+
+    try {
+      if (quickStatusEditingId) {
+        const updated = await updateQuickStatusItem(quickStatusEditingId, payload);
+        setQuickStatusItems((prev) =>
+          sortQuickStatusItems(prev.map((item) => (item.id === updated.id ? updated : item)))
+        );
+        setQuickStatusStatus('Quick status tile updated.');
+      } else {
+        const created = await createQuickStatusItem(payload);
+        setQuickStatusItems((prev) => sortQuickStatusItems([...prev, created]));
+        setQuickStatusStatus('Quick status tile added.');
+      }
+      resetQuickStatusForm({ keepStatus: true });
+    } catch (err) {
+      setQuickStatusStatus(extractErrorMessage(err, 'Unable to save quick status tile'));
+    }
+  };
+
+  const handleQuickStatusEdit = (item: QuickStatusItem) => {
+    setQuickStatusEditingId(item.id);
+    setQuickStatusForm({
+      backend_id: item.backend_id,
+      label: item.label,
+      metric_key: item.metric_key,
+      mount_path: item.mount_path ?? '',
+      warning_threshold: item.warning_threshold,
+      critical_threshold: item.critical_threshold,
+      display_order: item.display_order,
+    });
+    setQuickStatusStatus(null);
+    setActiveSection('quick-status');
+  };
+
+  const handleQuickStatusDelete = async (item: QuickStatusItem) => {
+    if (!isAdmin) return;
+    try {
+      await deleteQuickStatusItem(item.id);
+      setQuickStatusItems((prev) => prev.filter((entry) => entry.id !== item.id));
+      setQuickStatusStatus(`Removed ${item.label}.`);
+      if (quickStatusEditingId === item.id) {
+        resetQuickStatusForm();
+      }
+    } catch (err) {
+      setQuickStatusStatus(extractErrorMessage(err, 'Unable to delete quick status tile'));
+    }
   };
 
   const renderBackendSection = ({
@@ -1032,6 +1243,23 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     }
   };
 
+  const handleAuthSessionSave = async () => {
+    if (!isAdmin) return;
+    if (authSessionMinutes === '') {
+      setAuthSessionStatus('Please enter a session length.');
+      return;
+    }
+    try {
+      setAuthSessionStatus('Saving session length…');
+      const clamped = Math.min(AUTH_SESSION_MINUTES_MAX, Math.max(AUTH_SESSION_MINUTES_MIN, Number(authSessionMinutes)));
+      const updated = await updateAuthSessionSettings({ auth_session_minutes: clamped });
+      setAuthSessionMinutes(updated.auth_session_minutes);
+      setAuthSessionStatus('Session length saved.');
+    } catch (err) {
+      setAuthSessionStatus(extractErrorMessage(err, 'Unable to update session length'));
+    }
+  };
+
   const handleRebootRequest = async () => {
     if (!isAdmin) return;
     try {
@@ -1277,6 +1505,200 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             description: activeBackend.base_url || 'Enter new values to update this backend.',
             cardTitle: activeBackend.name,
           })}
+        {activeSection === 'quick-status' && (
+          <section id="quick-status" className="d-flex flex-column gap-3">
+            <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <div>
+                <h5 className="mb-0">Quick status tiles</h5>
+                <p className="text-secondary small mb-0">Add fast-glance tiles to the dashboard overview.</p>
+              </div>
+              {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
+            </div>
+            <div className="card bg-dark border border-secondary">
+              <div className="card-header border-secondary text-uppercase fw-semibold">Existing tiles</div>
+              <div className="card-body d-flex flex-column gap-3">
+                {quickStatusItems.length === 0 ? (
+                  <div className="text-secondary small">No quick status tiles configured yet.</div>
+                ) : (
+                  quickStatusItems.map((item) => {
+                    const backendName =
+                      backends.find((backend) => backend.id === item.backend_id)?.name ?? `Backend #${item.backend_id}`;
+                    return (
+                      <div
+                        className="card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center"
+                        key={item.id}
+                      >
+                        <div className="flex-grow-1">
+                          <div className="fw-semibold">{item.label}</div>
+                          <div className="text-secondary small">
+                            {getQuickStatusMetricLabel(item.metric_key)} · {backendName}
+                          </div>
+                          <div className="text-secondary small">
+                            Warn {item.warning_threshold} / Critical {item.critical_threshold}
+                            {item.metric_key === 'mount_used_percent' && item.mount_path
+                              ? ` · ${item.mount_path}`
+                              : ''}
+                          </div>
+                        </div>
+                        <div className="d-flex gap-2">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-light"
+                            onClick={() => handleQuickStatusEdit(item)}
+                            disabled={!isAdmin}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => void handleQuickStatusDelete(item)}
+                            disabled={!isAdmin}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            <div className="card bg-dark border border-secondary">
+              <div className="card-header border-secondary text-uppercase fw-semibold">
+                {quickStatusEditingId ? 'Edit quick status tile' : 'Add quick status tile'}
+              </div>
+              <div className="card-body">
+                <form className="d-flex flex-column gap-3" onSubmit={handleQuickStatusSubmit}>
+                  <div className="row g-3">
+                    <div className="col-md-6">
+                      <label className="form-label">Backend</label>
+                      <select
+                        className="form-select bg-dark text-light border-secondary"
+                        value={quickStatusForm.backend_id}
+                        onChange={(event) =>
+                          setQuickStatusForm((prev) => ({
+                            ...prev,
+                            backend_id: event.target.value === '' ? '' : Number(event.target.value),
+                          }))
+                        }
+                        required
+                      >
+                        <option value="">Select backend...</option>
+                        {backends.map((backend) => (
+                          <option key={backend.id} value={backend.id}>
+                            {backend.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="col-md-6">
+                      <label className="form-label">Metric</label>
+                      <select
+                        className="form-select bg-dark text-light border-secondary"
+                        value={quickStatusForm.metric_key}
+                        onChange={(event) =>
+                          handleQuickStatusMetricChange(event.target.value as QuickStatusMetricKey)
+                        }
+                      >
+                        {quickStatusMetricOptions.map((option) => (
+                          <option key={option.key} value={option.key}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="form-text text-secondary small">
+                        {quickStatusMetricOptions.find((option) => option.key === quickStatusForm.metric_key)?.helper}
+                      </div>
+                    </div>
+                    {quickStatusForm.metric_key === 'mount_used_percent' && (
+                      <div className="col-12">
+                        <label className="form-label">Mount path</label>
+                        <input
+                          className="form-control bg-dark text-light border-secondary"
+                          value={quickStatusForm.mount_path}
+                          onChange={(event) =>
+                            setQuickStatusForm((prev) => ({ ...prev, mount_path: event.target.value }))
+                          }
+                          placeholder="/mnt/storage"
+                          required
+                        />
+                      </div>
+                    )}
+                    <div className="col-md-6">
+                      <label className="form-label">Label</label>
+                      <input
+                        className="form-control bg-dark text-light border-secondary"
+                        value={quickStatusForm.label}
+                        onChange={(event) =>
+                          setQuickStatusForm((prev) => ({ ...prev, label: event.target.value }))
+                        }
+                        placeholder="HDD"
+                        required
+                      />
+                    </div>
+                    <div className="col-md-3">
+                      <label className="form-label">Warning threshold</label>
+                      <input
+                        type="number"
+                        className="form-control bg-dark text-light border-secondary"
+                        value={quickStatusForm.warning_threshold}
+                        onChange={(event) =>
+                          setQuickStatusForm((prev) => ({
+                            ...prev,
+                            warning_threshold: event.target.value === '' ? '' : Number(event.target.value),
+                          }))
+                        }
+                        min={0}
+                        required
+                      />
+                    </div>
+                    <div className="col-md-3">
+                      <label className="form-label">Critical threshold</label>
+                      <input
+                        type="number"
+                        className="form-control bg-dark text-light border-secondary"
+                        value={quickStatusForm.critical_threshold}
+                        onChange={(event) =>
+                          setQuickStatusForm((prev) => ({
+                            ...prev,
+                            critical_threshold: event.target.value === '' ? '' : Number(event.target.value),
+                          }))
+                        }
+                        min={0}
+                        required
+                      />
+                    </div>
+                    <div className="col-md-3">
+                      <label className="form-label">Display order</label>
+                      <input
+                        type="number"
+                        className="form-control bg-dark text-light border-secondary"
+                        value={quickStatusForm.display_order}
+                        onChange={(event) =>
+                          setQuickStatusForm((prev) => ({
+                            ...prev,
+                            display_order: Number(event.target.value),
+                          }))
+                        }
+                        min={0}
+                      />
+                    </div>
+                  </div>
+                  <div className="d-flex gap-2 flex-wrap">
+                    <button className="btn btn-light text-dark" type="submit" disabled={!isAdmin}>
+                      {quickStatusEditingId ? 'Save tile' : 'Add tile'}
+                    </button>
+                    <button className="btn btn-outline-light" type="button" onClick={resetQuickStatusForm}>
+                      Reset
+                    </button>
+                    {quickStatusStatus && <span className="text-secondary align-self-center">{quickStatusStatus}</span>}
+                  </div>
+                </form>
+              </div>
+            </div>
+          </section>
+        )}
         {activeSection === 'telegram-bots' && (
           <section id="telegram-bots" className="d-flex flex-column gap-3">
             <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -1510,6 +1932,35 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       </button>
                     </div>
                     {retentionStatus && <div className="col-12 text-secondary small">{retentionStatus}</div>}
+                  </div>
+                  <div className="row g-3 align-items-end mb-2">
+                    <div className="col-sm-6 col-md-4">
+                      <label className="form-label">Session length (minutes)</label>
+                      <input
+                        type="number"
+                        min={AUTH_SESSION_MINUTES_MIN}
+                        max={AUTH_SESSION_MINUTES_MAX}
+                        className="form-control bg-dark text-light border-secondary"
+                        value={authSessionMinutes}
+                        onChange={(event) =>
+                          setAuthSessionMinutes(event.target.value === '' ? '' : Number(event.target.value))
+                        }
+                      />
+                      <div className="form-text text-secondary small">
+                        15 minutes to 30 days (1440 = 24 hours).
+                      </div>
+                    </div>
+                    <div className="col-auto d-flex align-items-end">
+                      <button
+                        type="button"
+                        className="btn btn-light text-dark"
+                        onClick={() => void handleAuthSessionSave()}
+                        disabled={authSessionMinutes === '' || !isAdmin}
+                      >
+                        Save session
+                      </button>
+                    </div>
+                    {authSessionStatus && <div className="col-12 text-secondary small">{authSessionStatus}</div>}
                   </div>
                   <div className="small text-secondary mb-2 d-flex flex-column">
                     <span>

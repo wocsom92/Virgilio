@@ -187,6 +187,40 @@ export interface SystemSettings {
   retention_days: number;
 }
 
+export interface AuthSessionSettings {
+  auth_session_minutes: number;
+}
+
+export type QuickStatusMetricKey =
+  | 'disk_usage_percent'
+  | 'ram_used_percent'
+  | 'cpu_temperature_c'
+  | 'cpu_load_one'
+  | 'mount_used_percent';
+
+export interface QuickStatusItem {
+  id: number;
+  backend_id: number;
+  label: string;
+  metric_key: QuickStatusMetricKey;
+  mount_path?: string | null;
+  warning_threshold: number;
+  critical_threshold: number;
+  display_order: number;
+}
+
+export interface QuickStatusTile {
+  id: number;
+  backend_id: number;
+  backend_name: string;
+  label: string;
+  metric_key: QuickStatusMetricKey;
+  value?: number | null;
+  display_value: string;
+  status: 'ok' | 'warn' | 'critical' | 'unknown';
+  reported_at?: string | null;
+}
+
 export interface WarningThresholds {
   cpu_temperature_c?: number | null;
   ram_used_percent?: number | null;
@@ -201,6 +235,11 @@ export interface RebootResponse {
 
 export async function fetchDashboard(): Promise<MonitoredBackend[]> {
   const { data } = await api.get<MonitoredBackend[]>('/dashboard/');
+  return data;
+}
+
+export async function fetchQuickStatusTiles(): Promise<QuickStatusTile[]> {
+  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status');
   return data;
 }
 
@@ -294,6 +333,35 @@ export async function fetchSystemSettings() {
 export async function updateSystemSettings(payload: SystemSettings) {
   const { data } = await api.put<SystemSettings>('/system/retention', payload);
   return data;
+}
+
+export async function fetchAuthSessionSettings() {
+  const { data } = await api.get<AuthSessionSettings>('/system/auth-session');
+  return data;
+}
+
+export async function updateAuthSessionSettings(payload: AuthSessionSettings) {
+  const { data } = await api.put<AuthSessionSettings>('/system/auth-session', payload);
+  return data;
+}
+
+export async function listQuickStatusItems() {
+  const { data } = await api.get<QuickStatusItem[]>('/system/quick-status');
+  return data;
+}
+
+export async function createQuickStatusItem(payload: Omit<QuickStatusItem, 'id'>) {
+  const { data } = await api.post<QuickStatusItem>('/system/quick-status', payload);
+  return data;
+}
+
+export async function updateQuickStatusItem(id: number, payload: Omit<QuickStatusItem, 'id'>) {
+  const { data } = await api.put<QuickStatusItem>(`/system/quick-status/${id}`, payload);
+  return data;
+}
+
+export async function deleteQuickStatusItem(id: number) {
+  await api.delete(`/system/quick-status/${id}`);
 }
 
 export async function requestReboot(reason?: string) {

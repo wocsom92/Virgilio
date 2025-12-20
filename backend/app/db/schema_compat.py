@@ -4,6 +4,8 @@ from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from backend.app.core.config import settings
+
 
 def ensure_schema_compat(connection: Connection) -> None:
     """Lightweight, safe migrations for small schema deltas."""
@@ -53,6 +55,17 @@ def ensure_schema_compat(connection: Connection) -> None:
                 """
             )
         )
+
+    # Add auth_session_minutes to system_settings if missing (introduced in 2025-03).
+    if inspector.has_table("system_settings"):
+        columns = {col["name"] for col in inspector.get_columns("system_settings")}
+        if "auth_session_minutes" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE system_settings "
+                    f"ADD COLUMN auth_session_minutes INT NOT NULL DEFAULT {settings.auth_access_token_exp_minutes}"
+                )
+            )
 
 
 async def ensure_schema_compat_async(engine: AsyncEngine) -> None:

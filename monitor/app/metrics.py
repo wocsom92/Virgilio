@@ -294,13 +294,13 @@ async def reboot_host() -> None:
         stderr = (result.stderr or "").strip()
         stdout = (result.stdout or "").strip()
         output = stderr or stdout or str(result.returncode)
-        errors.append(f\"{' '.join(attempt_args)}: {output}\")
+        errors.append(f"{' '.join(attempt_args)}: {output}")
 
     if _try_sysrq_reboot():
         return
 
-    detail = \"; \".join(errors) if errors else \"No executable reboot command found.\"
-    raise RuntimeError(f\"Reboot command failed. Attempts: {len(candidates)}. Details: {detail}\")
+    detail = "; ".join(errors) if errors else "No executable reboot command found."
+    raise RuntimeError(f"Reboot command failed. Attempts: {len(candidates)}. Details: {detail}")
 
 
 def _try_sysrq_reboot() -> bool:

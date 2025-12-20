@@ -24,6 +24,17 @@ body {
   backdrop-filter: blur(12px);
 }
 
+.brand-title {
+  white-space: normal;
+  line-height: 1.15;
+}
+
+@media (max-width: 576px) {
+  .brand-title {
+    font-size: 0.95rem;
+  }
+}
+
 .btn-outline-light {
   border-width: 1.5px;
 }
@@ -98,6 +109,58 @@ body {
 
 .card-panel .form-check-label {
   color: #f8f9fa;
+}
+
+.quick-status-tile {
+  border-radius: 1rem;
+  padding: 0.7rem 0.8rem;
+  min-height: 84px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: center;
+}
+
+.quick-status-server {
+  font-size: 0.65rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(248, 249, 250, 0.7);
+}
+
+.quick-status-value {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.quick-status-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(248, 249, 250, 0.8);
+}
+
+.quick-status--ok {
+  background: linear-gradient(135deg, rgba(24, 125, 80, 0.5), rgba(14, 64, 46, 0.6));
+  border-color: rgba(38, 194, 129, 0.45);
+}
+
+.quick-status--warn {
+  background: linear-gradient(135deg, rgba(168, 108, 23, 0.55), rgba(88, 56, 8, 0.65));
+  border-color: rgba(255, 168, 0, 0.4);
+}
+
+.quick-status--critical {
+  background: linear-gradient(135deg, rgba(156, 38, 38, 0.6), rgba(86, 16, 16, 0.75));
+  border-color: rgba(255, 77, 77, 0.45);
+}
+
+.quick-status--unknown {
+  background: linear-gradient(135deg, rgba(85, 85, 85, 0.5), rgba(32, 32, 32, 0.6));
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 ::-webkit-scrollbar {

@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from fastapi import HTTPException
-from telegram import ReplyKeyboardMarkup, Update
+from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -197,6 +197,26 @@ async def notify_on_reboot(_: Application) -> None:
         logger.warning("Failed to send reboot notice: %s", exc)
 
 
+async def configure_bot_commands(application: Application) -> None:
+    commands = [
+        BotCommand("stats", "Show latest metrics"),
+        BotCommand("warn", "Show current warnings"),
+        BotCommand("reboot", "Reboot backend: /reboot <backend>"),
+    ]
+    if settings.allow_host_reboot:
+        commands.append(BotCommand("hostreboot", "Reboot the monitor host"))
+
+    try:
+        await application.bot.set_my_commands(commands)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to configure bot commands: %s", exc)
+
+
+async def post_init(application: Application) -> None:
+    await configure_bot_commands(application)
+    await notify_on_reboot(application)
+
+
 def build_application() -> Application:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
@@ -207,7 +227,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("warn", with_session(handle_warn)))
     application.add_handler(CommandHandler(["reboot", "restart"], with_session(handle_reboot_backend)))
     application.add_handler(CommandHandler("hostreboot", with_session(handle_host_reboot)))
-    application.post_init = notify_on_reboot
+    application.post_init = post_init
     return application
 
 
