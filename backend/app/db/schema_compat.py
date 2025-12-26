@@ -21,6 +21,19 @@ def ensure_schema_compat(connection: Connection) -> None:
         if "disk_temperatures" not in columns:
             connection.execute(text("ALTER TABLE metric_snapshots ADD COLUMN disk_temperatures JSON NULL"))
 
+    # Add ping fields to quick status items if missing (introduced in 2025-03).
+    if inspector.has_table("quick_status_items"):
+        columns = {col["name"] for col in inspector.get_columns("quick_status_items")}
+        if "ping_endpoint" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN ping_endpoint VARCHAR(255) NULL"))
+        if "ping_interval_seconds" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE quick_status_items "
+                    f"ADD COLUMN ping_interval_seconds INT NOT NULL DEFAULT 60"
+                )
+            )
+
     # Create reboot_events table if missing (introduced in 2025-02).
     if not inspector.has_table("reboot_events"):
         connection.execute(

@@ -111,33 +111,45 @@ body {
   color: #f8f9fa;
 }
 
+.quick-status-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (min-width: 992px) {
+  .quick-status-grid {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
 .quick-status-tile {
   border-radius: 1rem;
-  padding: 0.7rem 0.8rem;
-  min-height: 84px;
+  padding: 0.55rem 0.6rem;
+  min-height: 72px;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 0.25rem;
+  gap: 0.2rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   text-align: center;
 }
 
 .quick-status-server {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: rgba(248, 249, 250, 0.7);
 }
 
 .quick-status-value {
-  font-size: 1.3rem;
+  font-size: 1.1rem;
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 
 .quick-status-label {
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: rgba(248, 249, 250, 0.8);

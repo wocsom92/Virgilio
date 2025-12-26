@@ -196,7 +196,12 @@ export type QuickStatusMetricKey =
   | 'ram_used_percent'
   | 'cpu_temperature_c'
   | 'cpu_load_one'
-  | 'mount_used_percent';
+  | 'cpu_load_five'
+  | 'cpu_load_fifteen'
+  | 'mount_used_percent'
+  | 'last_restart'
+  | 'ping_result'
+  | 'ping_delay_ms';
 
 export interface QuickStatusItem {
   id: number;
@@ -206,6 +211,8 @@ export interface QuickStatusItem {
   mount_path?: string | null;
   warning_threshold: number;
   critical_threshold: number;
+  ping_endpoint?: string | null;
+  ping_interval_seconds?: number | null;
   display_order: number;
 }
 

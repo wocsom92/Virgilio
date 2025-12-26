@@ -90,6 +90,8 @@ class QuickStatusItem(TimestampMixin, Base):
     mount_path: Mapped[str | None] = mapped_column(String(255))
     warning_threshold: Mapped[float] = mapped_column(Float, nullable=False)
     critical_threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    ping_endpoint: Mapped[str | None] = mapped_column(String(255))
+    ping_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     backend: Mapped[MonitoredBackend] = relationship("MonitoredBackend")

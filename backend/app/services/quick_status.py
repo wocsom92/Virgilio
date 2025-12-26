@@ -1,16 +1,37 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
+import asyncio
+
+import ping3
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.app.core.config import settings
 from backend.app.models.monitors import MetricSnapshot, QuickStatusItem
 from backend.app.schemas.quick_status import QuickStatusItemCreate, QuickStatusTileRead
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "mount_used_percent"}
+_REVERSE_THRESHOLD_METRICS = {"last_restart"}
+_PING_METRICS = {"ping_result", "ping_delay_ms"}
+
+
+@dataclass(slots=True)
+class PingCheckResult:
+    checked_at: datetime
+    success: bool
+    latency_ms: float | None
+
+
+_PING_CACHE: dict[int, PingCheckResult] = {}
+_PING_LOCK = asyncio.Lock()
+
+ping3.EXCEPTIONS = True
 
 
 def _extract_mount_used_percent(snapshot: MetricSnapshot, mount_path: str | None) -> float | None:
@@ -34,6 +55,28 @@ def _extract_cpu_load_one(snapshot: MetricSnapshot) -> float | None:
     return None
 
 
+def _extract_cpu_load_five(snapshot: MetricSnapshot) -> float | None:
+    payload = snapshot.cpu_load or {}
+    if isinstance(payload, dict):
+        value = payload.get("five")
+        return float(value) if isinstance(value, (int, float)) else None
+    return None
+
+
+def _extract_cpu_load_fifteen(snapshot: MetricSnapshot) -> float | None:
+    payload = snapshot.cpu_load or {}
+    if isinstance(payload, dict):
+        value = payload.get("fifteen")
+        return float(value) if isinstance(value, (int, float)) else None
+    return None
+
+
+def _extract_uptime_hours(snapshot: MetricSnapshot) -> float | None:
+    if snapshot.uptime_seconds is None:
+        return None
+    return float(snapshot.uptime_seconds) / 3600
+
+
 def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | None) -> float | None:
     if metric_key == "disk_usage_percent":
         return float(snapshot.disk_usage_percent) if snapshot.disk_usage_percent is not None else None
@@ -43,8 +86,14 @@ def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | N
         return float(snapshot.cpu_temperature_c) if snapshot.cpu_temperature_c is not None else None
     if metric_key == "cpu_load_one":
         return _extract_cpu_load_one(snapshot)
+    if metric_key == "cpu_load_five":
+        return _extract_cpu_load_five(snapshot)
+    if metric_key == "cpu_load_fifteen":
+        return _extract_cpu_load_fifteen(snapshot)
     if metric_key == "mount_used_percent":
         return _extract_mount_used_percent(snapshot, mount_path)
+    if metric_key == "last_restart":
+        return _extract_uptime_hours(snapshot)
     return None
 
 
@@ -55,17 +104,65 @@ def _format_value(metric_key: str, value: float | None) -> str:
         return f"{value:.0f}%"
     if metric_key == "cpu_temperature_c":
         return f"{value:.1f}C"
+    if metric_key == "last_restart":
+        return _format_uptime_hours(value)
+    if metric_key == "ping_delay_ms":
+        return f"{value:.0f}ms"
     return f"{value:.2f}"
 
 
-def _resolve_status(value: float | None, warning_threshold: float, critical_threshold: float) -> str:
+def _format_uptime_hours(value: float) -> str:
+    total_minutes = int(round(value * 60))
+    days, rem_minutes = divmod(total_minutes, 1440)
+    hours, minutes = divmod(rem_minutes, 60)
+    if days > 0:
+        return f"{days}d {hours}h"
+    if hours > 0:
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    return f"{minutes}m"
+
+
+def _resolve_status(value: float | None, warning_threshold: float, critical_threshold: float, metric_key: str) -> str:
     if value is None:
         return "unknown"
+    if metric_key in _REVERSE_THRESHOLD_METRICS:
+        if value <= critical_threshold:
+            return "critical"
+        if value <= warning_threshold:
+            return "warn"
+        return "ok"
     if value >= critical_threshold:
         return "critical"
     if value >= warning_threshold:
         return "warn"
     return "ok"
+
+
+async def _check_ping(item: QuickStatusItem) -> PingCheckResult | None:
+    if not item.ping_endpoint:
+        return None
+    interval = max(5, int(item.ping_interval_seconds or 60))
+    now = datetime.now(tz=timezone.utc)
+    async with _PING_LOCK:
+        cached = _PING_CACHE.get(item.id)
+        if cached and now - cached.checked_at < timedelta(seconds=interval):
+            return cached
+    timeout_seconds = max(1, int(settings.monitor_request_timeout_seconds or 1))
+
+    def _run_ping() -> float | None:
+        return ping3.ping(item.ping_endpoint, timeout=timeout_seconds)
+
+    try:
+        result = await asyncio.to_thread(_run_ping)
+    except Exception:
+        result = None
+
+    success = result is not None
+    latency_ms = float(result) * 1000 if result is not None else None
+    result = PingCheckResult(checked_at=now, success=success, latency_ms=latency_ms)
+    async with _PING_LOCK:
+        _PING_CACHE[item.id] = result
+    return result
 
 
 async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem]:
@@ -108,7 +205,32 @@ async def build_quick_status_tiles(
     for item in items_list:
         backend = getattr(item, "backend", None)
         snapshot = snapshots.get(item.backend_id)
+        ping_result = await _check_ping(item) if item.metric_key in _PING_METRICS else None
         value = _metric_value(snapshot, item.metric_key, item.mount_path) if snapshot else None
+        status = _resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key)
+        display_value = _format_value(item.metric_key, value)
+        reported_at = snapshot.reported_at if snapshot else None
+        if item.metric_key in _PING_METRICS:
+            if ping_result is None:
+                status = "unknown"
+                display_value = "—"
+                value = None
+                reported_at = None
+            else:
+                reported_at = ping_result.checked_at
+                if item.metric_key == "ping_result":
+                    status = "ok" if ping_result.success else "critical"
+                    display_value = "OK" if ping_result.success else "NOK"
+                    value = 1.0 if ping_result.success else 0.0
+                else:
+                    if ping_result.success and ping_result.latency_ms is not None:
+                        value = ping_result.latency_ms
+                        display_value = _format_value(item.metric_key, value)
+                        status = _resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key)
+                    else:
+                        value = None
+                        display_value = "timeout"
+                        status = "critical"
         tiles.append(
             QuickStatusTileRead(
                 id=item.id,
@@ -117,9 +239,9 @@ async def build_quick_status_tiles(
                 label=item.label,
                 metric_key=item.metric_key,
                 value=value,
-                display_value=_format_value(item.metric_key, value),
-                status=_resolve_status(value, item.warning_threshold, item.critical_threshold),
-                reported_at=snapshot.reported_at if snapshot else None,
+                display_value=display_value,
+                status=status,
+                reported_at=reported_at,
             )
         )
     return tiles
@@ -133,6 +255,8 @@ async def create_quick_status_item(session: AsyncSession, payload: QuickStatusIt
         mount_path=payload.mount_path,
         warning_threshold=payload.warning_threshold,
         critical_threshold=payload.critical_threshold,
+        ping_endpoint=payload.ping_endpoint,
+        ping_interval_seconds=payload.ping_interval_seconds,
         display_order=payload.display_order,
     )
     session.add(item)
@@ -152,6 +276,8 @@ async def update_quick_status_item(
     item.mount_path = payload.mount_path
     item.warning_threshold = payload.warning_threshold
     item.critical_threshold = payload.critical_threshold
+    item.ping_endpoint = payload.ping_endpoint
+    item.ping_interval_seconds = payload.ping_interval_seconds
     item.display_order = payload.display_order
     session.add(item)
     await session.commit()

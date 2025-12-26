@@ -60,12 +60,110 @@ const quickStatusMetricOptions: Array<{
   defaultWarning: number;
   defaultCritical: number;
   helper: string;
+  requiresThresholds: boolean;
+  thresholdDirection: 'higher' | 'lower';
+  requiresPing: boolean;
 }> = [
-  { key: 'disk_usage_percent', label: 'Disk usage (%)', defaultWarning: 80, defaultCritical: 90, helper: 'Percent used' },
-  { key: 'ram_used_percent', label: 'RAM usage (%)', defaultWarning: 80, defaultCritical: 90, helper: 'Percent used' },
-  { key: 'cpu_temperature_c', label: 'CPU temperature (C)', defaultWarning: 75, defaultCritical: 85, helper: 'Celsius' },
-  { key: 'cpu_load_one', label: 'CPU load (1m)', defaultWarning: 1.0, defaultCritical: 2.0, helper: '1-minute load avg' },
-  { key: 'mount_used_percent', label: 'Mounted volume usage (%)', defaultWarning: 80, defaultCritical: 90, helper: 'Percent used' },
+  {
+    key: 'disk_usage_percent',
+    label: 'Disk usage (%)',
+    defaultWarning: 80,
+    defaultCritical: 90,
+    helper: 'Percent used',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'ram_used_percent',
+    label: 'RAM usage (%)',
+    defaultWarning: 80,
+    defaultCritical: 90,
+    helper: 'Percent used',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'cpu_temperature_c',
+    label: 'CPU temperature (C)',
+    defaultWarning: 75,
+    defaultCritical: 85,
+    helper: 'Celsius',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'cpu_load_one',
+    label: 'CPU load (1m)',
+    defaultWarning: 1.0,
+    defaultCritical: 2.0,
+    helper: '1-minute load avg',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'cpu_load_five',
+    label: 'CPU load (5m)',
+    defaultWarning: 1.0,
+    defaultCritical: 2.0,
+    helper: '5-minute load avg',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'cpu_load_fifteen',
+    label: 'CPU load (15m)',
+    defaultWarning: 1.0,
+    defaultCritical: 2.0,
+    helper: '15-minute load avg',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'mount_used_percent',
+    label: 'Mounted volume usage (%)',
+    defaultWarning: 80,
+    defaultCritical: 90,
+    helper: 'Percent used',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'last_restart',
+    label: 'Last restart (hours)',
+    defaultWarning: 24,
+    defaultCritical: 2,
+    helper: 'Hours since last restart (green if above warning)',
+    requiresThresholds: true,
+    thresholdDirection: 'lower',
+    requiresPing: false,
+  },
+  {
+    key: 'ping_result',
+    label: 'Ping result',
+    defaultWarning: 0,
+    defaultCritical: 1,
+    helper: 'ICMP ping; green if host responds, red if not',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
+    requiresPing: true,
+  },
+  {
+    key: 'ping_delay_ms',
+    label: 'Ping delay (ms)',
+    defaultWarning: 150,
+    defaultCritical: 300,
+    helper: 'ICMP latency in milliseconds',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: true,
+  },
 ];
 
 const metricOptionKeys = new Set(metricOptions.map((option) => option.key));
@@ -295,7 +393,10 @@ const warnThresholdFields: Array<{
   },
 ];
 
-type BackendFormState = BackendCreatePayload & { selected_metrics: SelectedMetrics };
+type BackendFormState = Omit<BackendCreatePayload, 'display_order'> & {
+  display_order: number | '';
+  selected_metrics: SelectedMetrics;
+};
 
 type QuickStatusFormState = {
   backend_id: number | '';
@@ -304,7 +405,9 @@ type QuickStatusFormState = {
   mount_path: string;
   warning_threshold: number | '';
   critical_threshold: number | '';
-  display_order: number;
+  ping_endpoint: string;
+  ping_interval_seconds: number | '';
+  display_order: number | '';
 };
 
 const defaultQuickStatusThresholds = (metric: QuickStatusMetricKey) => {
@@ -350,6 +453,8 @@ const createQuickStatusForm = (): QuickStatusFormState => {
     mount_path: '',
     warning_threshold: defaults.warning,
     critical_threshold: defaults.critical,
+    ping_endpoint: '',
+    ping_interval_seconds: 60,
     display_order: 0,
   };
 };
@@ -395,6 +500,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [quickStatusForm, setQuickStatusForm] = useState<QuickStatusFormState>(() => createQuickStatusForm());
   const [quickStatusEditingId, setQuickStatusEditingId] = useState<number | null>(null);
   const [quickStatusStatus, setQuickStatusStatus] = useState<string | null>(null);
+  const [quickStatusDraggingId, setQuickStatusDraggingId] = useState<number | null>(null);
+  const [quickStatusOrdering, setQuickStatusOrdering] = useState(false);
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [userStatus, setUserStatus] = useState<string | null>(null);
   const [userForm, setUserForm] = useState<{ username: string; password: string; role: AuthRole }>({
@@ -623,6 +730,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setStatus('Saving…');
       const payload: BackendCreatePayload = {
         ...form,
+        display_order: form.display_order === '' ? 0 : Number(form.display_order),
         selected_metrics: sanitizeSelectedMetrics(form.selected_metrics),
       };
       if (editingId) {
@@ -715,18 +823,23 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
 
   const handleQuickStatusMetricChange = (metric: QuickStatusMetricKey) => {
     const defaults = defaultQuickStatusThresholds(metric);
+    const option = quickStatusMetricOptions.find((item) => item.key === metric);
     setQuickStatusForm((prev) => ({
       ...prev,
       metric_key: metric,
       mount_path: '',
       warning_threshold: defaults.warning,
       critical_threshold: defaults.critical,
+      ping_endpoint: option?.requiresPing ? prev.ping_endpoint : '',
+      ping_interval_seconds: option?.requiresPing ? prev.ping_interval_seconds : 60,
     }));
   };
 
   const handleQuickStatusSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!isAdmin) return;
+
+    const metricMeta = quickStatusMetricOptions.find((option) => option.key === quickStatusForm.metric_key);
 
     if (quickStatusForm.backend_id === '') {
       setQuickStatusStatus('Select a backend.');
@@ -736,16 +849,31 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setQuickStatusStatus('Enter a label.');
       return;
     }
-    if (quickStatusForm.warning_threshold === '' || quickStatusForm.critical_threshold === '') {
-      setQuickStatusStatus('Enter both warning and critical thresholds.');
-      return;
-    }
-    if (Number(quickStatusForm.warning_threshold) >= Number(quickStatusForm.critical_threshold)) {
-      setQuickStatusStatus('Warning threshold must be less than critical threshold.');
-      return;
+    if (metricMeta?.requiresThresholds) {
+      if (quickStatusForm.warning_threshold === '' || quickStatusForm.critical_threshold === '') {
+        setQuickStatusStatus('Enter both warning and critical thresholds.');
+        return;
+      }
+      if (metricMeta.thresholdDirection === 'lower') {
+        if (Number(quickStatusForm.warning_threshold) <= Number(quickStatusForm.critical_threshold)) {
+          setQuickStatusStatus('Warning threshold must be greater than critical threshold.');
+          return;
+        }
+      } else if (Number(quickStatusForm.warning_threshold) >= Number(quickStatusForm.critical_threshold)) {
+        setQuickStatusStatus('Warning threshold must be less than critical threshold.');
+        return;
+      }
     }
     if (quickStatusForm.metric_key === 'mount_used_percent' && !quickStatusForm.mount_path.trim()) {
       setQuickStatusStatus('Enter a mount path for mounted volume tiles.');
+      return;
+    }
+    if (metricMeta?.requiresPing && !quickStatusForm.ping_endpoint.trim()) {
+      setQuickStatusStatus('Enter a ping endpoint.');
+      return;
+    }
+    if (metricMeta?.requiresPing && quickStatusForm.ping_interval_seconds === '') {
+      setQuickStatusStatus('Enter a ping interval.');
       return;
     }
 
@@ -754,8 +882,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       label: quickStatusForm.label.trim(),
       metric_key: quickStatusForm.metric_key,
       mount_path: quickStatusForm.metric_key === 'mount_used_percent' ? quickStatusForm.mount_path.trim() : null,
-      warning_threshold: Number(quickStatusForm.warning_threshold),
-      critical_threshold: Number(quickStatusForm.critical_threshold),
+      warning_threshold: Number(quickStatusForm.warning_threshold || 0),
+      critical_threshold: Number(quickStatusForm.critical_threshold || 0),
+      ping_endpoint: metricMeta?.requiresPing ? quickStatusForm.ping_endpoint.trim() : null,
+      ping_interval_seconds: metricMeta?.requiresPing ? Number(quickStatusForm.ping_interval_seconds || 60) : 60,
       display_order: Number(quickStatusForm.display_order) || 0,
     };
 
@@ -786,6 +916,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       mount_path: item.mount_path ?? '',
       warning_threshold: item.warning_threshold,
       critical_threshold: item.critical_threshold,
+      ping_endpoint: item.ping_endpoint ?? '',
+      ping_interval_seconds: item.ping_interval_seconds ?? 60,
       display_order: item.display_order,
     });
     setQuickStatusStatus(null);
@@ -803,6 +935,65 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       }
     } catch (err) {
       setQuickStatusStatus(extractErrorMessage(err, 'Unable to delete quick status tile'));
+    }
+  };
+
+  const toQuickStatusPayload = (item: QuickStatusItem): Omit<QuickStatusItem, 'id'> => ({
+    backend_id: item.backend_id,
+    label: item.label,
+    metric_key: item.metric_key,
+    mount_path: item.mount_path,
+    warning_threshold: item.warning_threshold,
+    critical_threshold: item.critical_threshold,
+    ping_endpoint: item.ping_endpoint,
+    ping_interval_seconds: item.ping_interval_seconds,
+    display_order: item.display_order,
+  });
+
+  const reorderQuickStatusItems = (
+    items: QuickStatusItem[],
+    sourceId: number,
+    targetId: number
+  ): QuickStatusItem[] => {
+    const sourceIndex = items.findIndex((item) => item.id === sourceId);
+    const targetIndex = items.findIndex((item) => item.id === targetId);
+    if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) {
+      return items;
+    }
+    const next = [...items];
+    const [moved] = next.splice(sourceIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    return next.map((item, idx) => ({ ...item, display_order: idx }));
+  };
+
+  const handleQuickStatusDrop = async (targetId: number) => {
+    if (!isAdmin || quickStatusOrdering) {
+      setQuickStatusDraggingId(null);
+      return;
+    }
+    const sourceId = quickStatusDraggingId;
+    setQuickStatusDraggingId(null);
+    if (sourceId === null || sourceId === targetId) {
+      return;
+    }
+    const previous = quickStatusItems;
+    const reordered = reorderQuickStatusItems(previous, sourceId, targetId);
+    if (reordered === previous) {
+      return;
+    }
+    setQuickStatusItems(reordered);
+    setQuickStatusOrdering(true);
+    setQuickStatusStatus('Updating order…');
+    try {
+      await Promise.all(reordered.map((item) => updateQuickStatusItem(item.id, toQuickStatusPayload(item))));
+      const refreshed = await listQuickStatusItems();
+      setQuickStatusItems(sortQuickStatusItems(refreshed));
+      setQuickStatusStatus('Order updated.');
+    } catch (err) {
+      setQuickStatusItems(previous);
+      setQuickStatusStatus(extractErrorMessage(err, 'Unable to update order'));
+    } finally {
+      setQuickStatusOrdering(false);
     }
   };
 
@@ -867,8 +1058,14 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <input
                   type="number"
                   className="form-control bg-dark text-light border-secondary"
-                  value={form.display_order ?? 0}
-                  onChange={(event) => setForm({ ...form, display_order: Number(event.target.value) })}
+                  value={form.display_order}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    const parsed = next === '' ? '' : Number(next);
+                    if (parsed === '' || Number.isFinite(parsed)) {
+                      setForm({ ...form, display_order: parsed });
+                    }
+                  }}
                 />
               </div>
               <div className="col-md-3 d-flex align-items-end">
@@ -1197,6 +1394,26 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     [users]
   );
 
+  const quickStatusMetricMeta = quickStatusMetricOptions.find(
+    (option) => option.key === quickStatusForm.metric_key
+  );
+
+  const quickStatusThresholdUnit = useMemo(() => {
+    if (quickStatusForm.metric_key === 'last_restart') {
+      return 'hours';
+    }
+    if (quickStatusForm.metric_key === 'ping_delay_ms') {
+      return 'ms';
+    }
+    if (quickStatusForm.metric_key === 'cpu_temperature_c') {
+      return 'C';
+    }
+    if (quickStatusForm.metric_key.endsWith('percent')) {
+      return '%';
+    }
+    return '';
+  }, [quickStatusForm.metric_key]);
+
   const handleTelegramSave = async (event: FormEvent) => {
     event.preventDefault();
     if (!isAdmin || !telegram) return;
@@ -1517,16 +1734,42 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             <div className="card bg-dark border border-secondary">
               <div className="card-header border-secondary text-uppercase fw-semibold">Existing tiles</div>
               <div className="card-body d-flex flex-column gap-3">
+                {isAdmin && quickStatusItems.length > 1 && (
+                  <div className="text-secondary small">Drag tiles to reorder.</div>
+                )}
                 {quickStatusItems.length === 0 ? (
                   <div className="text-secondary small">No quick status tiles configured yet.</div>
                 ) : (
                   quickStatusItems.map((item) => {
                     const backendName =
                       backends.find((backend) => backend.id === item.backend_id)?.name ?? `Backend #${item.backend_id}`;
+                    const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
+                    const thresholdLabel =
+                      meta?.requiresThresholds
+                        ? meta.thresholdDirection === 'lower'
+                          ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
+                          : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
+                        : 'Status OK/Failed';
                     return (
                       <div
-                        className="card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center"
+                        className={`card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center ${
+                          quickStatusDraggingId === item.id ? 'opacity-50' : ''
+                        }`}
                         key={item.id}
+                        draggable={isAdmin && !quickStatusOrdering}
+                        onDragStart={(event) => {
+                          if (!isAdmin || quickStatusOrdering) return;
+                          setQuickStatusDraggingId(item.id);
+                          event.dataTransfer.effectAllowed = 'move';
+                          event.dataTransfer.setData('text/plain', String(item.id));
+                        }}
+                        onDragOver={(event) => {
+                          if (!isAdmin || quickStatusOrdering) return;
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = 'move';
+                        }}
+                        onDragEnd={() => setQuickStatusDraggingId(null)}
+                        onDrop={() => void handleQuickStatusDrop(item.id)}
                       >
                         <div className="flex-grow-1">
                           <div className="fw-semibold">{item.label}</div>
@@ -1534,9 +1777,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             {getQuickStatusMetricLabel(item.metric_key)} · {backendName}
                           </div>
                           <div className="text-secondary small">
-                            Warn {item.warning_threshold} / Critical {item.critical_threshold}
+                            {thresholdLabel}
                             {item.metric_key === 'mount_used_percent' && item.mount_path
                               ? ` · ${item.mount_path}`
+                              : ''}
+                            {meta?.requiresPing
+                              ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
                               : ''}
                           </div>
                         </div>
@@ -1625,6 +1871,44 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         />
                       </div>
                     )}
+                    {quickStatusMetricMeta?.requiresPing && (
+                      <>
+                        <div className="col-12 col-lg-8">
+                          <label className="form-label">Ping target</label>
+                          <input
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.ping_endpoint}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({ ...prev, ping_endpoint: event.target.value }))
+                            }
+                            placeholder="8.8.8.8 or server.local"
+                            required
+                          />
+                          <div className="form-text text-secondary small">
+                            ICMP ping target (host or IP). Requires CAP_NET_RAW or root on the API host.
+                          </div>
+                        </div>
+                        <div className="col-12 col-lg-4">
+                          <label className="form-label">Ping interval (sec)</label>
+                          <input
+                            type="number"
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.ping_interval_seconds}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({
+                                ...prev,
+                                ping_interval_seconds: event.target.value === '' ? '' : Number(event.target.value),
+                              }))
+                            }
+                            min={5}
+                            required
+                          />
+                          <div className="form-text text-secondary small">
+                            Minimum 5 seconds.
+                          </div>
+                        </div>
+                      </>
+                    )}
                     <div className="col-md-6">
                       <label className="form-label">Label</label>
                       <input
@@ -1637,50 +1921,62 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         required
                       />
                     </div>
-                    <div className="col-md-3">
-                      <label className="form-label">Warning threshold</label>
-                      <input
-                        type="number"
-                        className="form-control bg-dark text-light border-secondary"
-                        value={quickStatusForm.warning_threshold}
-                        onChange={(event) =>
-                          setQuickStatusForm((prev) => ({
-                            ...prev,
-                            warning_threshold: event.target.value === '' ? '' : Number(event.target.value),
-                          }))
-                        }
-                        min={0}
-                        required
-                      />
-                    </div>
-                    <div className="col-md-3">
-                      <label className="form-label">Critical threshold</label>
-                      <input
-                        type="number"
-                        className="form-control bg-dark text-light border-secondary"
-                        value={quickStatusForm.critical_threshold}
-                        onChange={(event) =>
-                          setQuickStatusForm((prev) => ({
-                            ...prev,
-                            critical_threshold: event.target.value === '' ? '' : Number(event.target.value),
-                          }))
-                        }
-                        min={0}
-                        required
-                      />
-                    </div>
+                    {quickStatusMetricMeta?.requiresThresholds && (
+                      <>
+                        <div className="col-md-3">
+                          <label className="form-label">
+                            Warning threshold{quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}
+                          </label>
+                          <input
+                            type="number"
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.warning_threshold}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({
+                                ...prev,
+                                warning_threshold: event.target.value === '' ? '' : Number(event.target.value),
+                              }))
+                            }
+                            min={0}
+                            required
+                          />
+                        </div>
+                        <div className="col-md-3">
+                          <label className="form-label">
+                            Critical threshold{quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}
+                          </label>
+                          <input
+                            type="number"
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.critical_threshold}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({
+                                ...prev,
+                                critical_threshold: event.target.value === '' ? '' : Number(event.target.value),
+                              }))
+                            }
+                            min={0}
+                            required
+                          />
+                        </div>
+                      </>
+                    )}
                     <div className="col-md-3">
                       <label className="form-label">Display order</label>
                       <input
                         type="number"
                         className="form-control bg-dark text-light border-secondary"
                         value={quickStatusForm.display_order}
-                        onChange={(event) =>
-                          setQuickStatusForm((prev) => ({
-                            ...prev,
-                            display_order: Number(event.target.value),
-                          }))
-                        }
+                        onChange={(event) => {
+                          const next = event.target.value;
+                          const parsed = next === '' ? '' : Number(next);
+                          if (parsed === '' || Number.isFinite(parsed)) {
+                            setQuickStatusForm((prev) => ({
+                              ...prev,
+                              display_order: parsed,
+                            }));
+                          }
+                        }}
                         min={0}
                       />
                     </div>

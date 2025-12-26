@@ -140,7 +140,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
         </button>
       </div>
       {quickStatusTiles.length > 0 && (
-        <div className="row g-3">
+        <div className="quick-status-grid">
           {quickStatusTiles.map((tile) => {
             const statusClass =
               tile.status === 'critical'
@@ -151,7 +151,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
                     ? 'quick-status--ok'
                     : 'quick-status--unknown';
             return (
-              <div className="col-12 col-sm-6 col-lg-3" key={tile.id}>
+              <div className="quick-status-grid__item" key={tile.id}>
                 <div className={`quick-status-tile ${statusClass}`}>
                   <div className="quick-status-server">{tile.backend_name}</div>
                   <div className="quick-status-value">{tile.display_value}</div>
