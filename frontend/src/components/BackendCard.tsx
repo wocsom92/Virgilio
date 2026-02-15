@@ -366,9 +366,16 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
               </span>
             )}
             <span className="badge bg-secondary text-break">Last seen: {lastSeen}</span>
-            {backend.latest_snapshot?.backend_version && (
-              <span className="badge bg-secondary text-break">Monitor v{backend.latest_snapshot.backend_version}</span>
-            )}
+            {(() => {
+              const monitorVersion =
+                backend.latest_snapshot?.monitor_version ?? backend.latest_snapshot?.backend_version ?? null;
+              if (!monitorVersion) {
+                return null;
+              }
+              return (
+                <span className="badge bg-secondary text-break">Monitor v{monitorVersion}</span>
+              );
+            })()}
             {onRefresh && (
               <button
                 className="btn btn-sm btn-outline-light"
@@ -490,7 +497,7 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
                               }`
                             : 'N/A'}
                         </li>
-                        <li>Monitor version: {snapshot.backend_version ?? 'N/A'}</li>
+                        <li>Monitor version: {snapshot.monitor_version ?? snapshot.backend_version ?? 'N/A'}</li>
                         <li>OS version: {snapshot.os_version ?? 'N/A'}</li>
                         <li>Uptime: {uptime ?? 'N/A'}</li>
                       </ul>

@@ -51,7 +51,7 @@ def _snapshot(
         disk_usage_percent=overrides.get("disk_usage_percent"),
         mounted_usage=overrides.get("mounted_usage"),
         cpu_load=overrides.get("cpu_load"),
-        backend_version=overrides.get("backend_version"),
+        backend_version=overrides.get("monitor_version"),
         os_version=overrides.get("os_version"),
         uptime_seconds=overrides.get("uptime_seconds"),
         warnings=overrides.get("warnings"),

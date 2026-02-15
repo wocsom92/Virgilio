@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchDashboard, fetchQuickStatusTiles, MonitoredBackend, QuickStatusTile, refreshBackend } from '../api/client';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { BackendCard } from './BackendCard';
@@ -124,6 +124,29 @@ export function Dashboard({ canRefresh }: DashboardProps) {
     [setHiddenBackendIds]
   );
 
+  const quickStatusGroups = useMemo(() => {
+    const grouped = new Map<number, QuickStatusTile[]>();
+    for (const tile of quickStatusTiles) {
+      const current = grouped.get(tile.backend_id) ?? [];
+      current.push(tile);
+      grouped.set(tile.backend_id, current);
+    }
+    const orderedBackendIds = backends
+      .map((backend) => backend.id)
+      .filter((backendId) => grouped.has(backendId));
+    const extraBackendIds = Array.from(grouped.keys())
+      .filter((backendId) => !orderedBackendIds.includes(backendId))
+      .sort((a, b) => a - b);
+    return [...orderedBackendIds, ...extraBackendIds].map((backendId) => {
+      const items = grouped.get(backendId) ?? [];
+      return {
+        backendId,
+        backendName: items[0]?.backend_name ?? `Backend #${backendId}`,
+        items,
+      };
+    });
+  }, [backends, quickStatusTiles]);
+
   return (
     <div className="d-flex flex-column gap-4">
       <div className="d-flex justify-content-between align-items-center">
@@ -140,26 +163,37 @@ export function Dashboard({ canRefresh }: DashboardProps) {
         </button>
       </div>
       {quickStatusTiles.length > 0 && (
-        <div className="quick-status-grid">
-          {quickStatusTiles.map((tile) => {
-            const statusClass =
-              tile.status === 'critical'
-                ? 'quick-status--critical'
-                : tile.status === 'warn'
-                  ? 'quick-status--warn'
-                  : tile.status === 'ok'
-                    ? 'quick-status--ok'
-                    : 'quick-status--unknown';
-            return (
-              <div className="quick-status-grid__item" key={tile.id}>
-                <div className={`quick-status-tile ${statusClass}`}>
-                  <div className="quick-status-server">{tile.backend_name}</div>
-                  <div className="quick-status-value">{tile.display_value}</div>
-                  <div className="quick-status-label">{tile.label}</div>
-                </div>
+        <div className="quick-status-sections">
+          {quickStatusGroups.map((group) => (
+            <section className="quick-status-section" key={group.backendId}>
+              <div className="quick-status-section__header">
+                <h3 className="quick-status-section__title">{group.backendName}</h3>
+                <span className="quick-status-section__count">
+                  {group.items.length} {group.items.length === 1 ? 'tile' : 'tiles'}
+                </span>
               </div>
-            );
-          })}
+              <div className="quick-status-grid">
+                {group.items.map((tile) => {
+                  const statusClass =
+                    tile.status === 'critical'
+                      ? 'quick-status--critical'
+                      : tile.status === 'warn'
+                        ? 'quick-status--warn'
+                        : tile.status === 'ok'
+                          ? 'quick-status--ok'
+                          : 'quick-status--unknown';
+                  return (
+                    <div className="quick-status-grid__item" key={tile.id}>
+                      <div className={`quick-status-tile ${statusClass}`}>
+                        <div className="quick-status-value">{tile.display_value}</div>
+                        <div className="quick-status-label">{tile.label}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
         </div>
       )}
       {quickStatusError && <div className="text-secondary small">{quickStatusError}</div>}

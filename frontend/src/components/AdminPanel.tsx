@@ -976,6 +976,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (sourceId === null || sourceId === targetId) {
       return;
     }
+    const sourceItem = quickStatusItems.find((item) => item.id === sourceId);
+    const targetItem = quickStatusItems.find((item) => item.id === targetId);
+    if (!sourceItem || !targetItem) {
+      return;
+    }
+    if (sourceItem.backend_id !== targetItem.backend_id) {
+      setQuickStatusStatus('Reordering is limited to tiles from the same backend.');
+      return;
+    }
     const previous = quickStatusItems;
     const reordered = reorderQuickStatusItems(previous, sourceId, targetId);
     if (reordered === previous) {
@@ -1394,6 +1403,31 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     [users]
   );
 
+  const backendNameById = useMemo(
+    () => new Map(backends.map((backend) => [backend.id, backend.name])),
+    [backends]
+  );
+
+  const quickStatusGroups = useMemo(() => {
+    const grouped = new Map<number, QuickStatusItem[]>();
+    for (const item of quickStatusItems) {
+      const current = grouped.get(item.backend_id) ?? [];
+      current.push(item);
+      grouped.set(item.backend_id, current);
+    }
+    const orderedBackendIds = backends
+      .map((backend) => backend.id)
+      .filter((backendId) => grouped.has(backendId));
+    const extraBackendIds = Array.from(grouped.keys())
+      .filter((backendId) => !backendNameById.has(backendId))
+      .sort((a, b) => a - b);
+    return [...orderedBackendIds, ...extraBackendIds].map((backendId) => ({
+      backendId,
+      backendName: backendNameById.get(backendId) ?? `Backend #${backendId}`,
+      items: grouped.get(backendId) ?? [],
+    }));
+  }, [backends, backendNameById, quickStatusItems]);
+
   const quickStatusMetricMeta = quickStatusMetricOptions.find(
     (option) => option.key === quickStatusForm.metric_key
   );
@@ -1735,78 +1769,84 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               <div className="card-header border-secondary text-uppercase fw-semibold">Existing tiles</div>
               <div className="card-body d-flex flex-column gap-3">
                 {isAdmin && quickStatusItems.length > 1 && (
-                  <div className="text-secondary small">Drag tiles to reorder.</div>
+                  <div className="text-secondary small">Drag tiles to reorder within each backend.</div>
                 )}
                 {quickStatusItems.length === 0 ? (
                   <div className="text-secondary small">No quick status tiles configured yet.</div>
                 ) : (
-                  quickStatusItems.map((item) => {
-                    const backendName =
-                      backends.find((backend) => backend.id === item.backend_id)?.name ?? `Backend #${item.backend_id}`;
-                    const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
-                    const thresholdLabel =
-                      meta?.requiresThresholds
-                        ? meta.thresholdDirection === 'lower'
-                          ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
-                          : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
-                        : 'Status OK/Failed';
-                    return (
-                      <div
-                        className={`card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center ${
-                          quickStatusDraggingId === item.id ? 'opacity-50' : ''
-                        }`}
-                        key={item.id}
-                        draggable={isAdmin && !quickStatusOrdering}
-                        onDragStart={(event) => {
-                          if (!isAdmin || quickStatusOrdering) return;
-                          setQuickStatusDraggingId(item.id);
-                          event.dataTransfer.effectAllowed = 'move';
-                          event.dataTransfer.setData('text/plain', String(item.id));
-                        }}
-                        onDragOver={(event) => {
-                          if (!isAdmin || quickStatusOrdering) return;
-                          event.preventDefault();
-                          event.dataTransfer.dropEffect = 'move';
-                        }}
-                        onDragEnd={() => setQuickStatusDraggingId(null)}
-                        onDrop={() => void handleQuickStatusDrop(item.id)}
-                      >
-                        <div className="flex-grow-1">
-                          <div className="fw-semibold">{item.label}</div>
-                          <div className="text-secondary small">
-                            {getQuickStatusMetricLabel(item.metric_key)} · {backendName}
-                          </div>
-                          <div className="text-secondary small">
-                            {thresholdLabel}
-                            {item.metric_key === 'mount_used_percent' && item.mount_path
-                              ? ` · ${item.mount_path}`
-                              : ''}
-                            {meta?.requiresPing
-                              ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
-                              : ''}
-                          </div>
-                        </div>
-                        <div className="d-flex gap-2">
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-light"
-                            onClick={() => handleQuickStatusEdit(item)}
-                            disabled={!isAdmin}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-danger"
-                            onClick={() => void handleQuickStatusDelete(item)}
-                            disabled={!isAdmin}
-                          >
-                            Delete
-                          </button>
-                        </div>
+                  quickStatusGroups.map((group) => (
+                    <div key={group.backendId} className="rounded-3 border border-secondary p-3 d-flex flex-column gap-3">
+                      <div className="d-flex justify-content-between align-items-center gap-2">
+                        <div className="text-uppercase small fw-semibold text-secondary">{group.backendName}</div>
+                        <span className="badge bg-secondary-subtle text-secondary border border-secondary">
+                          {group.items.length} {group.items.length === 1 ? 'tile' : 'tiles'}
+                        </span>
                       </div>
-                    );
-                  })
+                      {group.items.map((item) => {
+                        const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
+                        const thresholdLabel =
+                          meta?.requiresThresholds
+                            ? meta.thresholdDirection === 'lower'
+                              ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
+                              : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
+                            : 'Status OK/Failed';
+                        return (
+                          <div
+                            className={`card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center ${
+                              quickStatusDraggingId === item.id ? 'opacity-50' : ''
+                            }`}
+                            key={item.id}
+                            draggable={isAdmin && !quickStatusOrdering}
+                            onDragStart={(event) => {
+                              if (!isAdmin || quickStatusOrdering) return;
+                              setQuickStatusDraggingId(item.id);
+                              event.dataTransfer.effectAllowed = 'move';
+                              event.dataTransfer.setData('text/plain', String(item.id));
+                            }}
+                            onDragOver={(event) => {
+                              if (!isAdmin || quickStatusOrdering) return;
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = 'move';
+                            }}
+                            onDragEnd={() => setQuickStatusDraggingId(null)}
+                            onDrop={() => void handleQuickStatusDrop(item.id)}
+                          >
+                            <div className="flex-grow-1">
+                              <div className="fw-semibold">{item.label}</div>
+                              <div className="text-secondary small">{getQuickStatusMetricLabel(item.metric_key)}</div>
+                              <div className="text-secondary small">
+                                {thresholdLabel}
+                                {item.metric_key === 'mount_used_percent' && item.mount_path
+                                  ? ` · ${item.mount_path}`
+                                  : ''}
+                                {meta?.requiresPing
+                                  ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
+                                  : ''}
+                              </div>
+                            </div>
+                            <div className="d-flex gap-2">
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-light"
+                                onClick={() => handleQuickStatusEdit(item)}
+                                disabled={!isAdmin}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-outline-danger"
+                                onClick={() => void handleQuickStatusDelete(item)}
+                                disabled={!isAdmin}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))
                 )}
               </div>
             </div>
@@ -1885,7 +1925,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             required
                           />
                           <div className="form-text text-secondary small">
-                            ICMP ping target (host or IP). Requires CAP_NET_RAW or root on the API host.
+                            ICMP ping target (host or IP). Requires CAP_NET_RAW or root on the monitor host.
                           </div>
                         </div>
                         <div className="col-12 col-lg-4">

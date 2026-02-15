@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class MountedVolume(BaseModel):
@@ -37,7 +37,11 @@ class MetricSnapshotBase(BaseModel):
     cpu_load: CPULoad | None = None
     network_counters: list[NetworkCounter] | None = None
     disk_temperatures: list[DiskTemperature] | None = None
-    backend_version: str | None = None
+    monitor_version: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("monitor_version", "backend_version"),
+        serialization_alias="monitor_version",
+    )
     os_version: str | None = None
     uptime_seconds: int | None = None
     warnings: list[str] | None = None

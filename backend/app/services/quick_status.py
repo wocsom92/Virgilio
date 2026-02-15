@@ -5,8 +5,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 import asyncio
 
-import ping3
-
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -14,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.core.config import settings
 from backend.app.models.monitors import MetricSnapshot, QuickStatusItem
 from backend.app.schemas.quick_status import QuickStatusItemCreate, QuickStatusTileRead
+from backend.app.services.monitor_client import MonitorClientError, fetch_ping
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "mount_used_percent"}
@@ -30,8 +29,6 @@ class PingCheckResult:
 
 _PING_CACHE: dict[int, PingCheckResult] = {}
 _PING_LOCK = asyncio.Lock()
-
-ping3.EXCEPTIONS = True
 
 
 def _extract_mount_used_percent(snapshot: MetricSnapshot, mount_path: str | None) -> float | None:
@@ -141,6 +138,9 @@ def _resolve_status(value: float | None, warning_threshold: float, critical_thre
 async def _check_ping(item: QuickStatusItem) -> PingCheckResult | None:
     if not item.ping_endpoint:
         return None
+    backend = getattr(item, "backend", None)
+    if backend is None:
+        return None
     interval = max(5, int(item.ping_interval_seconds or 60))
     now = datetime.now(tz=timezone.utc)
     async with _PING_LOCK:
@@ -148,17 +148,24 @@ async def _check_ping(item: QuickStatusItem) -> PingCheckResult | None:
         if cached and now - cached.checked_at < timedelta(seconds=interval):
             return cached
     timeout_seconds = max(1, int(settings.monitor_request_timeout_seconds or 1))
-
-    def _run_ping() -> float | None:
-        return ping3.ping(item.ping_endpoint, timeout=timeout_seconds)
-
+    timeout_seconds = min(30, timeout_seconds)
     try:
-        result = await asyncio.to_thread(_run_ping)
-    except Exception:
-        result = None
+        payload = await fetch_ping(
+            backend.base_url,
+            backend.api_token,
+            item.ping_endpoint,
+            timeout_seconds,
+        )
+    except (MonitorClientError, Exception):
+        payload = None
 
-    success = result is not None
-    latency_ms = float(result) * 1000 if result is not None else None
+    if payload is None:
+        success = False
+        latency_ms = None
+    else:
+        success = bool(payload.get("success"))
+        latency = payload.get("latency_ms")
+        latency_ms = float(latency) if isinstance(latency, (int, float)) else None
     result = PingCheckResult(checked_at=now, success=success, latency_ms=latency_ms)
     async with _PING_LOCK:
         _PING_CACHE[item.id] = result

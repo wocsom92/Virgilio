@@ -154,6 +154,7 @@ export interface MetricSnapshot {
   cpu_load?: CpuLoad | null;
   network_counters?: Array<{ interface: string; bytes_sent?: number | null; bytes_recv?: number | null }> | null;
   disk_temperatures?: DiskTemperature[] | null;
+  monitor_version?: string | null;
   backend_version?: string | null;
   os_version?: string | null;
   uptime_seconds?: number | null;

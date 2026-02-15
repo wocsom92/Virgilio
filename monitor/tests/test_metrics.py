@@ -76,7 +76,7 @@ def test_mounted_usage_skips_unreadable_mounts(monkeypatch):
     ]
 
 
-def test_collect_metrics_includes_backend_version(monkeypatch):
+def test_collect_metrics_includes_monitor_version(monkeypatch):
     monkeypatch.setattr(metrics.settings, "version", "9.9.9", raising=False)
     monkeypatch.setattr(metrics, "_resolve_mount_points", lambda: ["/"])
     monkeypatch.setattr(metrics, "_get_disk_usage", lambda mount: SimpleNamespace(total=1024**3, percent=50.0))
@@ -87,5 +87,5 @@ def test_collect_metrics_includes_backend_version(monkeypatch):
 
     payload = metrics.collect_metrics()
 
-    assert payload["backend_version"] == "9.9.9"
+    assert payload["monitor_version"] == "9.9.9"
     assert payload["mounted_usage"] == [{"mount_point": "/", "total_gb": 1.0, "used_percent": 50.0}]

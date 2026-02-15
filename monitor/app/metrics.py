@@ -222,7 +222,7 @@ def collect_metrics() -> dict[str, Any]:
     payload: dict[str, Any] = {
         "reported_at": datetime.now(tz=timezone.utc).isoformat(),
         "hostname": socket.gethostname(),
-        "backend_version": settings.version,
+        "monitor_version": settings.version,
         "cpu_temperature_c": cpu_temp,
         "ram_used_percent": round(virtual_memory.percent, 2),
         "total_ram_gb": round(virtual_memory.total / (1024 ** 3), 2),

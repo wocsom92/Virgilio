@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useState } from 'react';
-import { AuthUser, backendApiBaseUrl, fetchBackendVersion } from '../api/client';
+import { AuthUser, fetchBackendVersion } from '../api/client';
 import { DEFAULT_BACKEND_VERSION, FRONTEND_VERSION } from '../constants/versions';
 
 interface LayoutProps {
@@ -65,7 +65,6 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
                 <span className="badge bg-secondary">Frontend v{FRONTEND_VERSION}</span>
                 <span className="badge bg-secondary">Backend v{backendVersion}</span>
               </div>
-              <span className="small text-secondary text-break">API: {backendApiBaseUrl()}</span>
               <div className="d-flex flex-column flex-lg-row align-items-lg-center gap-2 ms-lg-auto">
                 <div className="btn-group" role="group">
                   <button

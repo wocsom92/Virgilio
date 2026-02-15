@@ -96,3 +96,33 @@ def test_latest_metrics_falls_back_to_collect(monkeypatch, client):
 
     assert response.status_code == 200
     assert response.json()["metrics"]["hostname"] == "fresh"
+
+
+def test_ping_requires_bearer_token(client):
+    test_client, _ = client
+
+    response = test_client.get("/ping", params={"target": "1.1.1.1"})
+
+    assert response.status_code == 401
+
+
+def test_ping_endpoint_returns_payload(monkeypatch, client):
+    test_client, _ = client
+    checked_at = datetime.now(tz=timezone.utc)
+
+    async def fake_check(target: str, timeout_seconds: int):
+        return True, 12.5, checked_at
+
+    monkeypatch.setattr(main.ping, "check_ping", fake_check)
+
+    response = test_client.get(
+        "/ping",
+        headers={"Authorization": "Bearer monitor-token"},
+        params={"target": "1.1.1.1", "timeout_seconds": 2},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["target"] == "1.1.1.1"
+    assert payload["success"] is True
+    assert payload["latency_ms"] == 12.5

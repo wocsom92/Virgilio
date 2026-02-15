@@ -19,7 +19,7 @@ class CPULoad(BaseModel):
 class MetricPayload(BaseModel):
     reported_at: datetime
     hostname: str | None = None
-    backend_version: str | None = None
+    monitor_version: str | None = None
     cpu_temperature_c: float | None = None
     ram_used_percent: float | None = None
     total_ram_gb: float | None = None
@@ -37,3 +37,10 @@ class MetricPayload(BaseModel):
 
 class MetricResponse(BaseModel):
     metrics: MetricPayload
+
+
+class PingResponse(BaseModel):
+    target: str
+    success: bool
+    latency_ms: float | None = None
+    checked_at: datetime

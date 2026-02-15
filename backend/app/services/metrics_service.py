@@ -30,7 +30,7 @@ def build_snapshot_model(backend_id: int, payload: MetricSnapshotCreate) -> Metr
         cpu_load=payload.cpu_load.model_dump() if payload.cpu_load else None,
         network_counters=[counter.model_dump() for counter in payload.network_counters] if payload.network_counters else None,
         disk_temperatures=[temp.model_dump() for temp in payload.disk_temperatures] if payload.disk_temperatures else None,
-        backend_version=payload.backend_version,
+        backend_version=payload.monitor_version,
         os_version=payload.os_version,
         uptime_seconds=payload.uptime_seconds,
         warnings=payload.warnings,
@@ -82,8 +82,8 @@ def _format_snapshot(snapshot: MetricSnapshotRead | None) -> str:
             parts.append(f"{snapshot.cpu_load.fifteen:.2f}")
         if parts:
             lines.append(f"• Load avg: {', '.join(parts)}")
-    if snapshot.backend_version:
-        lines.append(f"• Backend: {_escape_markdown(snapshot.backend_version)}")
+    if snapshot.monitor_version:
+        lines.append(f"• Monitor: {_escape_markdown(snapshot.monitor_version)}")
     if snapshot.os_version:
         lines.append(f"• OS: {_escape_markdown(snapshot.os_version)}")
     if snapshot.uptime_seconds:

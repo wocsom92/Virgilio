@@ -11,7 +11,7 @@ def ensure_schema_compat(connection: Connection) -> None:
     """Lightweight, safe migrations for small schema deltas."""
     inspector = inspect(connection)
 
-    # Add backend_version column if missing (introduced in 2025-02).
+    # Add backend_version column if missing (introduced in 2025-02, stores monitor version).
     if inspector.has_table("metric_snapshots"):
         columns = {col["name"] for col in inspector.get_columns("metric_snapshots")}
         if "backend_version" not in columns:
