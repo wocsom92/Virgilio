@@ -62,7 +62,7 @@ const quickStatusMetricOptions: Array<{
   defaultCritical: number;
   helper: string;
   requiresThresholds: boolean;
-  thresholdDirection: 'higher' | 'lower';
+  thresholdDirection: 'higher' | 'lower' | 'range';
   requiresPing: boolean;
 }> = [
   {
@@ -109,10 +109,10 @@ const quickStatusMetricOptions: Array<{
     key: 'docker_container_count',
     label: 'Running containers (#)',
     defaultWarning: 1,
-    defaultCritical: 0,
-    helper: 'Warn/critical when the host has too few running containers',
+    defaultCritical: 1,
+    helper: 'Target running container range [X..Y]. Critical when outside this interval.',
     requiresThresholds: true,
-    thresholdDirection: 'lower',
+    thresholdDirection: 'range',
     requiresPing: false,
   },
   {
@@ -825,7 +825,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setQuickStatusStatus('Enter both warning and critical thresholds.');
         return;
       }
-      if (metricMeta.thresholdDirection === 'lower') {
+      if (metricMeta.thresholdDirection === 'range') {
+        if (Number(quickStatusForm.warning_threshold) > Number(quickStatusForm.critical_threshold)) {
+          setQuickStatusStatus('Minimum containers must be less than or equal to maximum containers.');
+          return;
+        }
+      } else if (metricMeta.thresholdDirection === 'lower') {
         if (Number(quickStatusForm.warning_threshold) <= Number(quickStatusForm.critical_threshold)) {
           setQuickStatusStatus('Warning threshold must be greater than critical threshold.');
           return;
@@ -1416,6 +1421,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (quickStatusForm.metric_key === 'cpu_temperature_c') {
       return 'C';
     }
+    if (quickStatusForm.metric_key === 'docker_container_count') {
+      return 'count';
+    }
     if (quickStatusForm.metric_key.endsWith('percent')) {
       return '%';
     }
@@ -1741,9 +1749,13 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
                         const thresholdLabel =
                           meta?.requiresThresholds
-                            ? meta.thresholdDirection === 'lower'
-                              ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
-                              : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
+                            ? meta.thresholdDirection === 'range'
+                              ? item.warning_threshold === item.critical_threshold
+                                ? `Target containers: ${item.warning_threshold} (critical outside target)`
+                                : `Target containers: ${item.warning_threshold}-${item.critical_threshold} (critical outside range)`
+                              : meta.thresholdDirection === 'lower'
+                                ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
+                                : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
                             : 'Status OK/Failed';
                         return (
                           <div
@@ -1920,7 +1932,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       <>
                         <div className="col-md-3">
                           <label className="form-label">
-                            Warning threshold{quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}
+                            {quickStatusMetricMeta.thresholdDirection === 'range'
+                              ? `Minimum containers${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
+                              : `Warning threshold${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`}
                           </label>
                           <input
                             type="number"
@@ -1939,7 +1953,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         </div>
                         <div className="col-md-3">
                           <label className="form-label">
-                            Critical threshold{quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}
+                            {quickStatusMetricMeta.thresholdDirection === 'range'
+                              ? `Maximum containers${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
+                              : `Critical threshold${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`}
                           </label>
                           <input
                             type="number"

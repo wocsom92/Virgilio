@@ -16,7 +16,7 @@ from backend.app.services.monitor_client import MonitorClientError, fetch_ping
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "swap_used_percent", "mount_used_percent"}
-_REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "docker_container_count"}
+_REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb"}
 _PING_METRICS = {"ping_result", "ping_delay_ms"}
 _ALERT_STATUSES = {"warn", "critical"}
 
@@ -155,6 +155,12 @@ def _format_uptime_hours(value: float) -> str:
 def _resolve_status(value: float | None, warning_threshold: float, critical_threshold: float, metric_key: str) -> str:
     if value is None:
         return "unknown"
+    if metric_key == "docker_container_count":
+        min_allowed = min(warning_threshold, critical_threshold)
+        max_allowed = max(warning_threshold, critical_threshold)
+        if value < min_allowed or value > max_allowed:
+            return "critical"
+        return "ok"
     if metric_key in _REVERSE_THRESHOLD_METRICS:
         if value <= critical_threshold:
             return "critical"

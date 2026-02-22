@@ -21,7 +21,7 @@ QuickStatusMetricKey = Literal[
 ]
 
 _REQUIRES_PING_ENDPOINT = {"ping_result", "ping_delay_ms"}
-_LOWER_IS_WORSE = {"last_restart", "memory_available_gb", "docker_container_count"}
+_LOWER_IS_WORSE = {"last_restart", "memory_available_gb"}
 
 
 class QuickStatusItemBase(BaseModel):
@@ -45,7 +45,15 @@ class QuickStatusItemBase(BaseModel):
             self.ping_interval_seconds = 60
 
         if self.metric_key != "ping_result":
-            if self.metric_key in _LOWER_IS_WORSE:
+            if self.metric_key == "docker_container_count":
+                if self.warning_threshold > self.critical_threshold:
+                    # Backward compatibility: legacy rows used warning/critical semantics,
+                    # so normalize to [min..max] interval instead of rejecting reads.
+                    self.warning_threshold, self.critical_threshold = (
+                        self.critical_threshold,
+                        self.warning_threshold,
+                    )
+            elif self.metric_key in _LOWER_IS_WORSE:
                 if self.warning_threshold <= self.critical_threshold:
                     raise ValueError("warning_threshold must be greater than critical_threshold")
             else:

@@ -148,6 +148,7 @@ TARGET_ENV_FILE="$(get_target_var ENV_FILE)"
 TARGET_REMOTE_ENV_NAME="$(get_target_var REMOTE_ENV_NAME)"
 TARGET_DOCKER_USE_SUDO="$(get_target_var DOCKER_USE_SUDO)"
 TARGET_PURGE_MODE="$(get_target_var PURGE_MODE)"
+TARGET_SMOKE_CHECK="$(get_target_var SMOKE_CHECK)"
 
 [[ -n "${HOST}" ]] || die "Missing TARGET_${TARGET}_HOST in ${CONFIG_FILE}"
 [[ -n "${USER_NAME}" ]] || die "Missing TARGET_${TARGET}_USER in ${CONFIG_FILE}"
@@ -168,6 +169,7 @@ PASSWORD="${PASSWORD:-${TARGET_PASSWORD:-}}"
 TARGET_REMOTE_ENV_NAME="${TARGET_REMOTE_ENV_NAME:-.env}"
 TARGET_DOCKER_USE_SUDO="${TARGET_DOCKER_USE_SUDO:-false}"
 TARGET_PURGE_MODE="${PURGE_MODE:-${TARGET_PURGE_MODE:-managed}}"
+TARGET_SMOKE_CHECK="${TARGET_SMOKE_CHECK:-true}"
 
 case "${PROFILE}" in
   full|monitor-only) ;;
@@ -187,6 +189,11 @@ esac
 case "${TARGET_PURGE_MODE}" in
   managed|full) ;;
   *) die "Invalid purge mode '${TARGET_PURGE_MODE}'. Use managed or full." ;;
+esac
+
+case "${TARGET_SMOKE_CHECK}" in
+  true|false) ;;
+  *) die "Invalid TARGET_${TARGET}_SMOKE_CHECK value '${TARGET_SMOKE_CHECK}'. Use true or false." ;;
 esac
 
 if [[ "${AUTH_MODE}" == "key" ]]; then
@@ -268,6 +275,7 @@ if [[ "${PROFILE}" == "full" ]]; then
     backend
     frontend
     monitor
+    scripts/post_deploy_check.sh
     docker
     docker-compose.yml
     docker-compose.monitor.yml
@@ -277,6 +285,7 @@ if [[ "${PROFILE}" == "full" ]]; then
 else
   profile_items=(
     monitor
+    scripts/post_deploy_check.sh
     docker
     docker-compose.monitor.yml
     docker-compose.monitor.nginx.yml
@@ -298,6 +307,7 @@ if [[ "${ASSUME_YES}" -ne 1 ]]; then
     echo "Verbose:     enabled"
   fi
   echo "Docker sudo: ${TARGET_DOCKER_USE_SUDO}"
+  echo "Smoke check: ${TARGET_SMOKE_CHECK}"
   if [[ -n "${LOCAL_ENV_FILE}" ]]; then
     echo "Env file:    ${LOCAL_ENV_FILE} -> ${TARGET_REMOTE_ENV_NAME}"
   fi
@@ -382,6 +392,24 @@ else
 fi
 
 log "Building SFTP upload batch..."
+remote_parent_dirs=()
+for item in "${profile_items[@]}"; do
+  local_item="${stage_dir}/${item}"
+  if [[ -d "${local_item}" ]]; then
+    continue
+  fi
+  if [[ "${item}" == */* ]]; then
+    remote_parent_dirs+=("$(dirname "${item}")")
+  fi
+done
+
+if [[ "${#remote_parent_dirs[@]}" -gt 0 ]]; then
+  for dir in "${remote_parent_dirs[@]}"; do
+    log "Ensuring remote directory exists: ${DEPLOY_PATH}/${dir}"
+    run_ssh "mkdir -p \"${DEPLOY_PATH}/${dir}\""
+  done
+fi
+
 {
   for item in "${profile_items[@]}"; do
     local_item="${stage_dir}/${item}"
@@ -428,6 +456,13 @@ if [[ "${PROFILE}" == "full" ]]; then
   run_ssh "cd \"${DEPLOY_PATH}\" && ${docker_prefix} compose up -d --build"
 else
   run_ssh "cd \"${DEPLOY_PATH}\" && ${docker_prefix} compose -f docker-compose.monitor.yml up -d --build monitor"
+fi
+
+if [[ "${TARGET_SMOKE_CHECK}" == "true" ]]; then
+  log "Running post-deploy endpoint smoke checks..."
+  run_ssh "cd \"${DEPLOY_PATH}\" && chmod +x scripts/post_deploy_check.sh && ./scripts/post_deploy_check.sh --profile \"${PROFILE}\" --env-file \"${TARGET_REMOTE_ENV_NAME}\""
+else
+  log "Skipping post-deploy smoke checks (TARGET_${TARGET}_SMOKE_CHECK=false)."
 fi
 
 log "Deploy completed successfully."

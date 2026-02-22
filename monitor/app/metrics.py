@@ -375,7 +375,14 @@ async def reboot_host() -> None:
         def _run():
             return subprocess.run(attempt_args, check=False, capture_output=True, text=True, timeout=10)
 
-        result = await asyncio.to_thread(_run)
+        try:
+            result = await asyncio.to_thread(_run)
+        except FileNotFoundError as exc:
+            errors.append(f"{' '.join(attempt_args)}: {exc}")
+            continue
+        except subprocess.TimeoutExpired:
+            errors.append(f"{' '.join(attempt_args)}: timed out")
+            continue
         if result.returncode in (0, None):
             return
         stderr = (result.stderr or "").strip()
