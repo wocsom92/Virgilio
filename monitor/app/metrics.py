@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import platform
+import re
 import socket
 import time
 from datetime import datetime, timezone
@@ -142,6 +144,81 @@ def _mounted_usage(mount_points: list[str]) -> list[dict[str, Any]]:
     return usage
 
 
+def _count_docker_containers() -> int | None:
+    host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    candidate_roots: list[str] = []
+    if host_target and host_target != "/":
+        candidate_roots.append(os.path.join(host_target, "var/lib/docker/containers"))
+    candidate_roots.append("/var/lib/docker/containers")
+
+    container_name_pattern = re.compile(r"^[a-f0-9]{64}$")
+    for root in candidate_roots:
+        try:
+            entries = os.listdir(root)
+        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+            continue
+        count = 0
+        for entry in entries:
+            if not container_name_pattern.match(entry):
+                continue
+            full_path = os.path.join(root, entry)
+            if os.path.isdir(full_path):
+                count += 1
+        return count
+
+    # Fallback: if direct container directory counting is unavailable on this host,
+    # reuse the running-container discovery path and return its count.
+    running = _list_running_docker_containers()
+    if isinstance(running, list):
+        names = [name for name in running if isinstance(name, str) and name.strip()]
+        return len(names)
+    return None
+
+
+def _list_running_docker_containers() -> list[str] | None:
+    host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    candidate_roots: list[str] = []
+    if host_target and host_target != "/":
+        candidate_roots.append(os.path.join(host_target, "var/lib/docker/containers"))
+    candidate_roots.append("/var/lib/docker/containers")
+
+    container_name_pattern = re.compile(r"^[a-f0-9]{64}$")
+    for root in candidate_roots:
+        try:
+            entries = os.listdir(root)
+        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+            continue
+
+        running: list[str] = []
+        for entry in entries:
+            if not container_name_pattern.match(entry):
+                continue
+            container_dir = os.path.join(root, entry)
+            if not os.path.isdir(container_dir):
+                continue
+            config_path = os.path.join(container_dir, "config.v2.json")
+            try:
+                with open(config_path, "r", encoding="utf-8") as handle:
+                    config = json.load(handle)
+            except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
+                continue
+
+            state = config.get("State") if isinstance(config, dict) else None
+            if not isinstance(state, dict) or not bool(state.get("Running")):
+                continue
+
+            name = config.get("Name")
+            if isinstance(name, str):
+                name = name.strip().lstrip("/")
+            if not name:
+                name = entry[:12]
+            running.append(name)
+
+        running.sort(key=str.lower)
+        return running
+    return None
+
+
 def _candidate_paths_for_mount(mount: str) -> list[str]:
     candidates: list[str] = []
     host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
@@ -189,6 +266,10 @@ def collect_metrics() -> dict[str, Any]:
     boot_time = psutil.boot_time()
     uptime_seconds = int(time.time() - boot_time)
     virtual_memory = psutil.virtual_memory()
+    try:
+        swap = psutil.swap_memory()
+    except Exception:
+        swap = None
     disk = _get_disk_usage("/") or psutil.disk_usage("/")
     load_one, load_five, load_fifteen = (None, None, None)
     try:
@@ -226,6 +307,12 @@ def collect_metrics() -> dict[str, Any]:
         "cpu_temperature_c": cpu_temp,
         "ram_used_percent": round(virtual_memory.percent, 2),
         "total_ram_gb": round(virtual_memory.total / (1024 ** 3), 2),
+        "memory_available_gb": round(virtual_memory.available / (1024 ** 3), 2),
+        "swap_used_percent": round(float(swap.percent), 2) if swap and swap.percent is not None else None,
+        "docker_container_count": _count_docker_containers(),
+        "docker_running_containers": (
+            _list_running_docker_containers() if settings.expose_docker_running_containers else None
+        ),
         "disk_usage_percent": round(disk.percent, 2),
         "mounted_usage": _mounted_usage(mount_points),
         "configured_mounts": mount_points,

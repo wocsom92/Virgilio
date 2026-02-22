@@ -178,6 +178,8 @@ async def fetch_backend_series(
                 reported_at=snapshot.reported_at,
                 cpu_temperature_c=snapshot.cpu_temperature_c,
                 ram_used_percent=snapshot.ram_used_percent,
+                memory_available_gb=snapshot.memory_available_gb,
+                swap_used_percent=snapshot.swap_used_percent,
                 disk_usage_percent=snapshot.disk_usage_percent,
                 cpu_load=snapshot.cpu_load,
                 mounted_usage=snapshot.mounted_usage,

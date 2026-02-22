@@ -25,6 +25,10 @@ def build_snapshot_model(backend_id: int, payload: MetricSnapshotCreate) -> Metr
         cpu_temperature_c=payload.cpu_temperature_c,
         ram_used_percent=payload.ram_used_percent,
         total_ram_gb=payload.total_ram_gb,
+        memory_available_gb=payload.memory_available_gb,
+        swap_used_percent=payload.swap_used_percent,
+        docker_container_count=payload.docker_container_count,
+        docker_running_containers=payload.docker_running_containers,
         disk_usage_percent=payload.disk_usage_percent,
         mounted_usage=[volume.model_dump() for volume in payload.mounted_usage] if payload.mounted_usage else None,
         cpu_load=payload.cpu_load.model_dump() if payload.cpu_load else None,
@@ -65,6 +69,14 @@ def _format_snapshot(snapshot: MetricSnapshotRead | None) -> str:
         lines.append(f"• CPU temp: {snapshot.cpu_temperature_c:.1f}°C")
     if snapshot.ram_used_percent is not None:
         lines.append(f"• RAM: {snapshot.ram_used_percent:.1f}% used")
+    if snapshot.memory_available_gb is not None:
+        lines.append(f"• RAM available: {snapshot.memory_available_gb:.2f} GB")
+    if snapshot.swap_used_percent is not None:
+        lines.append(f"• Swap: {snapshot.swap_used_percent:.1f}% used")
+    if snapshot.docker_container_count is not None:
+        lines.append(f"• Docker containers: {snapshot.docker_container_count}")
+    if snapshot.docker_running_containers:
+        lines.append(f"• Running containers: {', '.join(_escape_markdown(name) for name in snapshot.docker_running_containers)}")
     if snapshot.disk_usage_percent is not None:
         lines.append(f"• Root disk: {snapshot.disk_usage_percent:.1f}% used")
     if snapshot.mounted_usage:

@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MonitoredBackend } from '../api/client';
+import type { MonitoredBackend, QuickStatusTile } from '../api/client';
 import { Dashboard } from './Dashboard';
 import { fetchDashboard, fetchQuickStatusTiles, refreshBackend } from '../api/client';
 
@@ -47,6 +47,20 @@ function makeBackend(overrides: Partial<MonitoredBackend> = {}): MonitoredBacken
   };
 }
 
+function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickStatusTile {
+  return {
+    id: overrides.id ?? 1,
+    backend_id: overrides.backend_id ?? 1,
+    backend_name: overrides.backend_name ?? 'Backend',
+    label: overrides.label ?? 'Disk',
+    metric_key: overrides.metric_key ?? 'disk_usage_percent',
+    value: overrides.value ?? 42,
+    display_value: overrides.display_value ?? '42%',
+    status: overrides.status ?? 'ok',
+    reported_at: overrides.reported_at ?? '2024-01-01T00:00:00Z',
+  };
+}
+
 describe('Dashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -82,14 +96,40 @@ describe('Dashboard', () => {
 
     const hiddenIndicator = screen.getByTestId('backend-hidden-1');
     const toggleButton = screen.getByLabelText('toggle backend 1');
-    await user.click(toggleButton);
+    await act(async () => {
+      await user.click(toggleButton);
+    });
     await waitFor(() => expect(hiddenIndicator).toHaveTextContent('hidden'));
-    await user.click(toggleButton);
+    await act(async () => {
+      await user.click(toggleButton);
+    });
     await waitFor(() => expect(hiddenIndicator).toHaveTextContent('visible'));
 
     const refreshButton = screen.getByLabelText('refresh backend 1');
-    await user.click(refreshButton);
+    await act(async () => {
+      await user.click(refreshButton);
+    });
     await waitFor(() => expect(refreshBackend).toHaveBeenCalledWith(1));
     await waitFor(() => expect(screen.getByTestId('backend-snapshot-1')).toHaveTextContent('2024-01-01T00:00:00Z'));
+  });
+
+  it('keeps quick status sections ordered by backend server order', async () => {
+    vi.mocked(fetchDashboard).mockResolvedValue([
+      makeBackend({ id: 2, name: 'Zulu', display_order: 2 }),
+      makeBackend({ id: 1, name: 'Alpha', display_order: 1 }),
+    ]);
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({ id: 10, backend_id: 2, backend_name: 'Zulu' }),
+      makeQuickStatusTile({ id: 11, backend_id: 1, backend_name: 'Alpha' }),
+    ]);
+
+    const { container } = render(<Dashboard canRefresh={false} />);
+
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll('.quick-status-section__title')).map(
+        (node) => node.textContent
+      );
+      expect(titles).toEqual(['Alpha', 'Zulu']);
+    });
   });
 });

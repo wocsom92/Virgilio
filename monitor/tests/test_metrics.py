@@ -78,14 +78,54 @@ def test_mounted_usage_skips_unreadable_mounts(monkeypatch):
 
 def test_collect_metrics_includes_monitor_version(monkeypatch):
     monkeypatch.setattr(metrics.settings, "version", "9.9.9", raising=False)
+    monkeypatch.setattr(metrics.settings, "expose_docker_running_containers", True, raising=False)
     monkeypatch.setattr(metrics, "_resolve_mount_points", lambda: ["/"])
     monkeypatch.setattr(metrics, "_get_disk_usage", lambda mount: SimpleNamespace(total=1024**3, percent=50.0))
+    monkeypatch.setattr(metrics, "_count_docker_containers", lambda: 7)
+    monkeypatch.setattr(metrics, "_list_running_docker_containers", lambda: ["api", "db"])
     monkeypatch.setattr(metrics, "_get_cpu_temperature", lambda: None)
     monkeypatch.setattr(metrics.os, "getloadavg", lambda: (0.1, 0.2, 0.3))
-    monkeypatch.setattr(metrics.psutil, "virtual_memory", lambda: SimpleNamespace(percent=25.0, total=2 * 1024**3))
+    monkeypatch.setattr(
+        metrics.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(percent=25.0, total=2 * 1024**3, available=1.5 * 1024**3),
+    )
+    monkeypatch.setattr(metrics.psutil, "swap_memory", lambda: SimpleNamespace(percent=12.5))
     monkeypatch.setattr(metrics.psutil, "boot_time", lambda: 0)
 
     payload = metrics.collect_metrics()
 
     assert payload["monitor_version"] == "9.9.9"
+    assert payload["memory_available_gb"] == 1.5
+    assert payload["swap_used_percent"] == 12.5
+    assert payload["docker_container_count"] == 7
+    assert payload["docker_running_containers"] == ["api", "db"]
     assert payload["mounted_usage"] == [{"mount_point": "/", "total_gb": 1.0, "used_percent": 50.0}]
+
+
+def test_collect_metrics_hides_running_container_names_when_disabled(monkeypatch):
+    monkeypatch.setattr(metrics.settings, "expose_docker_running_containers", False, raising=False)
+    monkeypatch.setattr(metrics, "_resolve_mount_points", lambda: ["/"])
+    monkeypatch.setattr(metrics, "_get_disk_usage", lambda mount: SimpleNamespace(total=1024**3, percent=50.0))
+    monkeypatch.setattr(metrics, "_count_docker_containers", lambda: 7)
+    monkeypatch.setattr(metrics, "_list_running_docker_containers", lambda: ["api", "db"])
+    monkeypatch.setattr(
+        metrics.psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(percent=25.0, total=2 * 1024**3, available=1.5 * 1024**3),
+    )
+    monkeypatch.setattr(metrics.psutil, "swap_memory", lambda: SimpleNamespace(percent=12.5))
+    monkeypatch.setattr(metrics.psutil, "boot_time", lambda: 0)
+
+    payload = metrics.collect_metrics()
+
+    assert payload["docker_container_count"] == 7
+    assert payload["docker_running_containers"] is None
+
+
+def test_count_docker_containers_falls_back_to_running_list(monkeypatch):
+    monkeypatch.setattr(metrics.settings, "host_root_target", "/hostfs", raising=False)
+    monkeypatch.setattr(metrics.os, "listdir", lambda _path: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(metrics, "_list_running_docker_containers", lambda: ["api", "db"])
+
+    assert metrics._count_docker_containers() == 2

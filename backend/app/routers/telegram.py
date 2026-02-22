@@ -2,12 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
 from backend.app.core.security import require_admin_user
 from backend.app.db.session import get_session
-from backend.app.schemas.telegram import TelegramSettingsRead, TelegramSettingsUpdate, WarnThresholds
+from backend.app.schemas.telegram import TelegramSettingsRead, TelegramSettingsUpdate
 from backend.app.services.telegram_notifications import (
     resolve_message_context,
     send_stats_message,
@@ -15,7 +14,6 @@ from backend.app.services.telegram_notifications import (
 )
 from backend.app.services.reboot_service import request_reboot
 from backend.app.services.telegram_settings import get_or_create_settings
-from backend.app.services.warnings import recalculate_latest_snapshot_warnings
 from backend.app.services.telegram_service import TelegramError, send_message
 from backend.app.models.monitors import MonitoredBackend
 from backend.app.services.monitor_client import request_monitor_reboot, MonitorClientError
@@ -51,14 +49,7 @@ async def update_settings(
     session.add(settings_model)
     await session.commit()
     await session.refresh(settings_model)
-
-    response = TelegramSettingsRead.model_validate(settings_model)
-
-    if payload.warn_thresholds is not None and settings_model.warn_thresholds:
-        thresholds = WarnThresholds.model_validate(settings_model.warn_thresholds)
-        await recalculate_latest_snapshot_warnings(session, thresholds)
-
-    return response
+    return TelegramSettingsRead.model_validate(settings_model)
 
 
 class TelegramUpdate(BaseModel):

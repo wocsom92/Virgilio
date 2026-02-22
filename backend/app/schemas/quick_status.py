@@ -7,6 +7,9 @@ from pydantic import BaseModel, Field, model_validator
 QuickStatusMetricKey = Literal[
     "disk_usage_percent",
     "ram_used_percent",
+    "memory_available_gb",
+    "swap_used_percent",
+    "docker_container_count",
     "cpu_temperature_c",
     "cpu_load_one",
     "cpu_load_five",
@@ -18,7 +21,7 @@ QuickStatusMetricKey = Literal[
 ]
 
 _REQUIRES_PING_ENDPOINT = {"ping_result", "ping_delay_ms"}
-_LOWER_IS_WORSE = {"last_restart"}
+_LOWER_IS_WORSE = {"last_restart", "memory_available_gb", "docker_container_count"}
 
 
 class QuickStatusItemBase(BaseModel):

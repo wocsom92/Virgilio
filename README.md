@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: 3.0.0
+Current version: 4.0.0
 
 A full-stack monitoring suite built with FastAPI, React, MySQL, and Bootstrap. It consists of:
 
@@ -11,7 +11,7 @@ A full-stack monitoring suite built with FastAPI, React, MySQL, and Bootstrap. I
 ## Features
 
 - Monitor multiple backend servers from a single dashboard.
-- Configurable metrics per backend (CPU temperature, RAM, disks, mounts, load averages, uptime, external IP).
+- Configurable metrics per backend (CPU temperature, RAM, disks, mounts, load averages, uptime, network counters).
 - Token-protected metrics ingestion and refresh workflow.
 - Role-based authentication (admin/viewer) with in-app user management.
 - Telegram bot integration for `/stats` and `/warn` commands, managed from the admin UI.
@@ -28,7 +28,7 @@ A full-stack monitoring suite built with FastAPI, React, MySQL, and Bootstrap. I
 Copy the provided examples and adjust as needed.
 
 ```bash
-cp backend/.env.example backend/.env
+cp backend/env.example backend/.env
 cp monitor/.env.example monitor/.env
 ```
 
@@ -40,6 +40,7 @@ Key values:
 - `SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES`: access token lifetime in minutes (higher means fewer login prompts).
 - `MONITOR_API_TOKEN`: token used by the aggregator when requesting metrics from a Backend Monitor instance.
 - `MONITOR_MOUNTED_POINTS`: JSON array of mount points to include in disk usage reporting (e.g. `["/", "/mnt/storage"]`), or include `"auto"` (e.g. `["auto"]`) to discover all local mounts automatically.
+- `MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS`: set to `true` only if you want the monitor to include running Docker container names in API payloads (defaults to `false`).
 - `MONITOR_HOST_ROOT_SOURCE` and `MONITOR_HOST_ROOT_TARGET`: optional bind parameters (host path → container path) that expose the host filesystem to the monitor. Set `MONITOR_HOST_ROOT_SOURCE=/` and `MONITOR_HOST_ROOT_TARGET=/hostfs` to surface the host’s mount points when using `MONITOR_MOUNTED_POINTS=auto`.
 - `SERVER_MONITOR_ALLOW_HOST_REBOOT` / `MONITOR_ALLOW_HOST_REBOOT`: enable host-level reboot endpoints; requires privileged containers and a valid reboot command (e.g., `/usr/sbin/shutdown -r now`).
 
@@ -55,12 +56,12 @@ docker compose up -d
 Default credentials and runtime settings are defined in `docker-compose.yml`. Update the following before exposing the services:
 
 - `MYSQL_ROOT_PASSWORD`, `SERVER_MONITOR_AUTH_SECRET_KEY`, and `MONITOR_API_TOKEN` for secure secrets.
-- `MONITOR_MOUNTED_POINTS` (JSON array; include `"auto"` to discover mounts) and `MONITOR_ALLOW_EXTERNAL_IP_LOOKUP` if the agent should resolve the public IP.
+- `MONITOR_MOUNTED_POINTS` (JSON array; include `"auto"` to discover mounts) to control which host mount points are reported.
 - `MONITOR_HOST_ROOT_SOURCE` (host path) and `MONITOR_HOST_ROOT_TARGET` (container path) when you need the agent to read the host filesystem; setting them to `/` and `/hostfs` respectively gives the container read-only visibility into all host mounts.
 - Optional: override published ports/API base URL via environment variables. Provide your own `.env` (do not commit secrets) to expose the backend under your chosen host/port and teach the frontend bundle to call that endpoint.
 - `SERVER_MONITOR_CORS_ALLOW_ORIGINS` (JSON array) when the frontend is hosted from a custom domain.
 - `SERVER_MONITOR_DATABASE_URI` if you need to override the DSN for scripts/migrations.
-- `VITE_API_BASE_URL` build arg if the frontend should reach the API via a different hostname (defaults to `http://localhost:8000` for local browser access).
+- `VITE_API_BASE_URL` build arg if the frontend should reach the API via a different hostname (defaults to `http://localhost:28000` for local browser access).
 - If you need host reboot support, run the backend and monitor containers with `privileged: true` (as shown in the compose files) and ensure the reboot command exists on the host (e.g., `/sbin/shutdown -r now`).
 
 The Compose file exposes the services locally on:
@@ -99,6 +100,54 @@ MONITOR_API_TOKEN=your-token \
 docker compose -f docker-compose.monitor.yml up -d monitor
 ```
 
+## Remote deploy over SSH/SFTP
+
+Use the deploy helper to push files to remote hosts (including `raspi5.local`), wipe the remote deploy path, upload selected components via SFTP, then restart Docker containers on the host.
+
+1. Create a targets file:
+
+```bash
+cp scripts/deploy.targets.env.example scripts/deploy.targets.env
+```
+
+2. Edit `scripts/deploy.targets.env` and set:
+
+- `TARGET_<name>_HOST`, `TARGET_<name>_USER`, `TARGET_<name>_DEPLOY_PATH`
+- `TARGET_<name>_AUTH` as `password` or `key`
+- Optional: `TARGET_<name>_ENV_FILE` to upload host-specific env file as `.env`
+- Optional: `TARGET_<name>_PROFILE` as `full` or `monitor-only`
+
+3. Run deploy:
+
+```bash
+# full stack to raspi5 target
+bash scripts/deploy.sh --target raspi5 --profile full
+
+# monitor-only to another target using key auth
+bash scripts/deploy.sh --target labmon --profile monitor-only --auth key
+```
+
+Notes:
+
+- Password auth requires `sshpass` installed locally.
+- The script always removes the remote deploy directory before upload.
+- `full` profile runs `docker compose up -d --build` remotely.
+- `monitor-only` profile runs `docker compose -f docker-compose.monitor.yml up -d --build monitor` remotely.
+
+## Tests
+
+Install dev dependencies once, then run:
+
+```bash
+pip install -r requirements-dev.txt
+npm --prefix frontend install
+```
+
+```bash
+pytest -q backend/tests monitor/tests
+npm --prefix frontend test -- --watch=false
+```
+
 ## Project Structure
 
 ```
@@ -111,7 +160,7 @@ backend/
     services/    # Telegram + monitor clients + formatting helpers
     main.py      # FastAPI app entry point
   requirements.txt
-  .env.example
+  env.example
 monitor/
   app/
     config.py    # Settings for the agent

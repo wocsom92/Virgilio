@@ -20,6 +20,14 @@ def ensure_schema_compat(connection: Connection) -> None:
             connection.execute(text("ALTER TABLE metric_snapshots ADD COLUMN network_counters JSON NULL"))
         if "disk_temperatures" not in columns:
             connection.execute(text("ALTER TABLE metric_snapshots ADD COLUMN disk_temperatures JSON NULL"))
+        if "memory_available_gb" not in columns:
+            connection.execute(text("ALTER TABLE metric_snapshots ADD COLUMN memory_available_gb FLOAT NULL"))
+        if "swap_used_percent" not in columns:
+            connection.execute(text("ALTER TABLE metric_snapshots ADD COLUMN swap_used_percent FLOAT NULL"))
+        if "docker_container_count" not in columns:
+            connection.execute(text("ALTER TABLE metric_snapshots ADD COLUMN docker_container_count INT NULL"))
+        if "docker_running_containers" not in columns:
+            connection.execute(text("ALTER TABLE metric_snapshots ADD COLUMN docker_running_containers JSON NULL"))
 
     # Add ping fields to quick status items if missing (introduced in 2025-03).
     if inspector.has_table("quick_status_items"):

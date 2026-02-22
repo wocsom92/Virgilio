@@ -29,6 +29,8 @@ const RANGE_OPTIONS: Array<{ value: MetricRange; label: string }> = [
 const CHART_COLORS = {
   cpuTemp: '#f97316',
   ram: '#0d6efd',
+  memoryAvailable: '#14b8a6',
+  swap: '#f59e0b',
   disk: '#20c997',
   cpuLoadOne: '#ff6384',
   cpuLoadFive: '#a855f7',
@@ -82,6 +84,7 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
   const [series, setSeries] = useState<MetricSeriesPoint[]>([]);
   const [seriesLoading, setSeriesLoading] = useState(false);
   const [seriesError, setSeriesError] = useState<string | null>(null);
+  const [seriesRefreshTick, setSeriesRefreshTick] = useState(0);
   const [rebootMarkers, setRebootMarkers] = useState<number[]>([]);
   const [rangeOffsets, setRangeOffsets] = useState<Record<MetricRange, number>>({
     hourly: 0,
@@ -98,7 +101,22 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
   const selectedMounts = mountSelection.enabled ? mountSelection.mounts : [];
   const showMountNotice = mountSelection.enabled && selectedMounts.length === 0;
   const uptime = formatUptime(snapshot);
+  const runningContainersCount =
+    snapshot?.docker_container_count ?? snapshot?.docker_running_containers?.length ?? null;
   const currentOffset = rangeOffsets[range] ?? 0;
+
+  useEffect(() => {
+    if (hidden || currentOffset !== 0) {
+      return;
+    }
+
+    const intervalSeconds = Math.max(backend.poll_interval_seconds || 60, 30);
+    const intervalId = window.setInterval(() => {
+      setSeriesRefreshTick((value) => value + 1);
+    }, intervalSeconds * 1000);
+
+    return () => window.clearInterval(intervalId);
+  }, [backend.poll_interval_seconds, currentOffset, hidden]);
 
   useEffect(() => {
     if (hidden) {
@@ -128,8 +146,8 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
             }
             return { ...prev, [range]: data.window_offset };
           });
-          const parsedStart = Date.parse(data.window_start);
-          const parsedEnd = Date.parse(data.window_end);
+          const parsedStart = parseDate(data.window_start)?.getTime() ?? Number.NaN;
+          const parsedEnd = parseDate(data.window_end)?.getTime() ?? Number.NaN;
           setWindowBounds(
             Number.isFinite(parsedStart) && Number.isFinite(parsedEnd)
               ? { start: parsedStart, end: parsedEnd }
@@ -154,7 +172,7 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
     return () => {
       cancelled = true;
     };
-  }, [backend.id, range, currentOffset, hidden]);
+  }, [backend.id, range, currentOffset, hidden, seriesRefreshTick, backend.latest_snapshot?.reported_at]);
 
   const windowLabel = useMemo(() => {
     if (!windowBounds || Number.isNaN(windowBounds.start) || Number.isNaN(windowBounds.end)) {
@@ -210,6 +228,40 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
         suggestedMin: 0,
         suggestedMax: 100,
         emptyMessage: 'Waiting for RAM samples.',
+      });
+    }
+
+    if (metricIsEnabled(selectedMetrics, 'memory_available_gb')) {
+      charts.push({
+        key: 'memory-available',
+        title: 'Memory Available',
+        datasets: [
+          {
+            label: 'GB',
+            color: CHART_COLORS.memoryAvailable,
+            extractor: (point: MetricSeriesPoint) => point.memory_available_gb ?? null,
+          },
+        ],
+        suggestedMin: 0,
+        suggestedMax: undefined,
+        emptyMessage: 'Waiting for memory availability samples.',
+      });
+    }
+
+    if (metricIsEnabled(selectedMetrics, 'swap_used_percent')) {
+      charts.push({
+        key: 'swap-usage',
+        title: 'Swap Usage',
+        datasets: [
+          {
+            label: '% used',
+            color: CHART_COLORS.swap,
+            extractor: (point: MetricSeriesPoint) => point.swap_used_percent ?? null,
+          },
+        ],
+        suggestedMin: 0,
+        suggestedMax: 100,
+        emptyMessage: 'Waiting for swap samples.',
       });
     }
 
@@ -484,6 +536,18 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
                             : 'N/A'}
                         </li>
                         <li>
+                          Memory available:{' '}
+                          {snapshot.memory_available_gb !== undefined && snapshot.memory_available_gb !== null
+                            ? `${snapshot.memory_available_gb.toFixed(2)} GB`
+                            : 'N/A'}
+                        </li>
+                        <li>
+                          Swap used:{' '}
+                          {snapshot.swap_used_percent !== undefined && snapshot.swap_used_percent !== null
+                            ? `${snapshot.swap_used_percent.toFixed(1)}%`
+                            : 'N/A'}
+                        </li>
+                        <li>
                           Disk used:{' '}
                           {snapshot.disk_usage_percent !== undefined && snapshot.disk_usage_percent !== null
                             ? `${snapshot.disk_usage_percent.toFixed(1)}%`
@@ -500,6 +564,18 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
                         <li>Monitor version: {snapshot.monitor_version ?? snapshot.backend_version ?? 'N/A'}</li>
                         <li>OS version: {snapshot.os_version ?? 'N/A'}</li>
                         <li>Uptime: {uptime ?? 'N/A'}</li>
+                        <li>
+                          Running containers count:{' '}
+                          {runningContainersCount !== null && runningContainersCount !== undefined
+                            ? runningContainersCount
+                            : 'N/A'}
+                        </li>
+                        <li>
+                          Running containers list:{' '}
+                          {snapshot.docker_running_containers && snapshot.docker_running_containers.length > 0
+                            ? snapshot.docker_running_containers.join(', ')
+                            : 'N/A'}
+                        </li>
                       </ul>
                     </div>
                   </div>

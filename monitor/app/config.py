@@ -31,10 +31,11 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Backend Monitor"
-    version: str = "3.0.2"
+    version: str = "4.0.0"
     debug: bool = False
 
     api_token: str = "monitor-token"
+    expose_docker_running_containers: bool = False
     allow_host_reboot: bool = False
     reboot_command: str = "/sbin/shutdown -r now"
     mounted_points: List[str] = Field(default_factory=lambda: ["auto"])

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import delete
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,9 +14,11 @@ from backend.app.schemas.metrics import MetricSnapshotCreate
 from backend.app.services.metrics_service import build_snapshot_model
 from backend.app.db.schema_compat import ensure_schema_compat_async
 from backend.app.services.monitor_client import MonitorClientError, fetch_metrics
-from backend.app.services.telegram_notifications import try_send_warning_notification
-from backend.app.services.telegram_settings import get_warn_thresholds
-from backend.app.services.warnings import detect_warnings
+from backend.app.services.quick_status import (
+    detect_quick_status_transitions_for_snapshot,
+    list_quick_status_items_for_backend,
+)
+from backend.app.services.telegram_notifications import try_send_quick_status_transition_notification
 from backend.app.services.system_settings import metric_retention_timedelta
 
 
@@ -43,15 +46,15 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
 
     payload = MetricSnapshotCreate.model_validate(metrics_payload)
 
-    warn_thresholds = await get_warn_thresholds(session)
-    if warn_thresholds is not None:
-        warnings = detect_warnings(payload, warn_thresholds)
-        payload.warnings = warnings or None
+    previous_snapshot = await session.scalar(
+        select(MetricSnapshot)
+        .where(MetricSnapshot.backend_id == backend.id)
+        .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
+        .limit(1)
+    )
+    quick_status_items = await list_quick_status_items_for_backend(session, backend.id)
 
     snapshot = build_snapshot_model(backend.id, payload)
-
-    previous_warning_active = bool(backend.last_warning)
-    current_warning_active = bool(payload.warnings)
 
     backend.last_seen_at = datetime.now(tz=timezone.utc)
     backend.last_warning = "; ".join(payload.warnings) if payload.warnings else None
@@ -59,18 +62,26 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
     retention_window = await metric_retention_timedelta(session)
     cutoff = datetime.now(tz=timezone.utc) - retention_window
     await session.execute(
-        delete(MetricSnapshot).where(
+        delete(MetricSnapshot)
+        .where(
             MetricSnapshot.backend_id == backend.id,
             MetricSnapshot.reported_at < cutoff,
         )
+        .execution_options(synchronize_session=False)
     )
     session.add(snapshot)
     session.add(backend)
     await session.commit()
     await session.refresh(snapshot)
 
-    if current_warning_active and not previous_warning_active:
-        await try_send_warning_notification(session)
+    transitions = detect_quick_status_transitions_for_snapshot(
+        quick_status_items,
+        previous_snapshot,
+        snapshot,
+        backend.name,
+    )
+    if transitions:
+        await try_send_quick_status_transition_notification(session, transitions)
 
     return snapshot
 

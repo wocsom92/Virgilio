@@ -131,20 +131,27 @@ export function Dashboard({ canRefresh }: DashboardProps) {
       current.push(tile);
       grouped.set(tile.backend_id, current);
     }
-    const orderedBackendIds = backends
-      .map((backend) => backend.id)
-      .filter((backendId) => grouped.has(backendId));
-    const extraBackendIds = Array.from(grouped.keys())
-      .filter((backendId) => !orderedBackendIds.includes(backendId))
-      .sort((a, b) => a - b);
-    return [...orderedBackendIds, ...extraBackendIds].map((backendId) => {
-      const items = grouped.get(backendId) ?? [];
+    const backendMeta = new Map(backends.map((backend) => [backend.id, backend] as const));
+    const groups = Array.from(grouped.entries()).map(([backendId, items]) => {
+      const backend = backendMeta.get(backendId);
       return {
         backendId,
-        backendName: items[0]?.backend_name ?? `Backend #${backendId}`,
+        backendName: backend?.name ?? items[0]?.backend_name ?? `Backend #${backendId}`,
+        displayOrder: backend?.display_order ?? Number.MAX_SAFE_INTEGER,
         items,
       };
     });
+    groups.sort((a, b) => {
+      if (a.displayOrder !== b.displayOrder) {
+        return a.displayOrder - b.displayOrder;
+      }
+      const byName = a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
+      if (byName !== 0) {
+        return byName;
+      }
+      return a.backendId - b.backendId;
+    });
+    return groups.map(({ displayOrder: _displayOrder, ...group }) => group);
   }, [backends, quickStatusTiles]);
 
   return (

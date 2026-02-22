@@ -11,6 +11,10 @@ class MetricSnapshotCreate(BaseModel):
     cpu_temperature_c: float | None = None
     ram_used_percent: float | None = None
     total_ram_gb: float | None = None
+    memory_available_gb: float | None = None
+    swap_used_percent: float | None = None
+    docker_container_count: int | None = None
+    docker_running_containers: list[str] | None = None
     disk_usage_percent: float | None = None
     mounted_usage: list[MountedVolume] | None = None
     cpu_load: CPULoad | None = None
@@ -35,6 +39,8 @@ class MetricSeriesPoint(BaseModel):
     reported_at: datetime
     cpu_temperature_c: float | None = None
     ram_used_percent: float | None = None
+    memory_available_gb: float | None = None
+    swap_used_percent: float | None = None
     disk_usage_percent: float | None = None
     cpu_load: CPULoad | None = None
     mounted_usage: list[MountedVolume] | None = None

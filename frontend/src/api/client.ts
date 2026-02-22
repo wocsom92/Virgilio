@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : '/api');
 
 let accessToken: string | null = null;
 
@@ -123,6 +123,8 @@ export interface MetricSeriesPoint {
   reported_at: string;
   cpu_temperature_c?: number | null;
   ram_used_percent?: number | null;
+  memory_available_gb?: number | null;
+  swap_used_percent?: number | null;
   disk_usage_percent?: number | null;
   cpu_load?: CpuLoad | null;
   mounted_usage?: MountedVolume[] | null;
@@ -149,6 +151,10 @@ export interface MetricSnapshot {
   cpu_temperature_c?: number | null;
   ram_used_percent?: number | null;
   total_ram_gb?: number | null;
+  memory_available_gb?: number | null;
+  swap_used_percent?: number | null;
+  docker_container_count?: number | null;
+  docker_running_containers?: string[] | null;
   disk_usage_percent?: number | null;
   mounted_usage?: MountedVolume[] | null;
   cpu_load?: CpuLoad | null;
@@ -180,7 +186,6 @@ export interface TelegramSettings {
   id: number;
   bot_token?: string | null;
   default_chat_id?: string | null;
-  warn_thresholds?: WarningThresholds | null;
   is_active: boolean;
 }
 
@@ -195,6 +200,9 @@ export interface AuthSessionSettings {
 export type QuickStatusMetricKey =
   | 'disk_usage_percent'
   | 'ram_used_percent'
+  | 'memory_available_gb'
+  | 'swap_used_percent'
+  | 'docker_container_count'
   | 'cpu_temperature_c'
   | 'cpu_load_one'
   | 'cpu_load_five'
@@ -227,13 +235,6 @@ export interface QuickStatusTile {
   display_value: string;
   status: 'ok' | 'warn' | 'critical' | 'unknown';
   reported_at?: string | null;
-}
-
-export interface WarningThresholds {
-  cpu_temperature_c?: number | null;
-  ram_used_percent?: number | null;
-  disk_usage_percent?: number | null;
-  mounted_usage_percent?: number | null;
 }
 
 export interface RebootResponse {

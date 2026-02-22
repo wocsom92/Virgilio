@@ -5,7 +5,6 @@ import {
   MountMetricSelection,
   MonitoredBackend,
   SelectedMetrics,
-  WarningThresholds,
   TelegramSettings,
   AuthUser,
   AuthRole,
@@ -48,6 +47,8 @@ const AUTH_SESSION_MINUTES_MAX = 60 * 24 * 30;
 const metricOptions = [
   { key: 'cpu_temperature_c', label: 'CPU temperature' },
   { key: 'ram_used_percent', label: 'RAM usage' },
+  { key: 'memory_available_gb', label: 'Memory available' },
+  { key: 'swap_used_percent', label: 'Swap usage' },
   { key: 'disk_usage_percent', label: 'Disk usage' },
   { key: MOUNTED_USAGE_KEY, label: 'Mounted volumes' },
   { key: 'cpu_load', label: 'CPU load' },
@@ -82,6 +83,36 @@ const quickStatusMetricOptions: Array<{
     helper: 'Percent used',
     requiresThresholds: true,
     thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'memory_available_gb',
+    label: 'Memory available (GB)',
+    defaultWarning: 2,
+    defaultCritical: 1,
+    helper: 'Available RAM in GB (warn/critical when below thresholds)',
+    requiresThresholds: true,
+    thresholdDirection: 'lower',
+    requiresPing: false,
+  },
+  {
+    key: 'swap_used_percent',
+    label: 'Swap usage (%)',
+    defaultWarning: 50,
+    defaultCritical: 80,
+    helper: 'Percent used',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'docker_container_count',
+    label: 'Running containers (#)',
+    defaultWarning: 1,
+    defaultCritical: 0,
+    helper: 'Warn/critical when the host has too few running containers',
+    requiresThresholds: true,
+    thresholdDirection: 'lower',
     requiresPing: false,
   },
   {
@@ -294,18 +325,6 @@ const sanitizeSelectedMetrics = (selected: SelectedMetrics): SelectedMetrics => 
   return sanitized;
 };
 
-const WARN_THRESHOLD_DEFAULTS: WarningThresholds = {
-  cpu_temperature_c: 80,
-  ram_used_percent: 90,
-  disk_usage_percent: 90,
-  mounted_usage_percent: 90,
-};
-
-const normalizeWarnThresholds = (raw: WarningThresholds | null | undefined): WarningThresholds => ({
-  ...WARN_THRESHOLD_DEFAULTS,
-  ...(raw ?? {}),
-});
-
 const formatBytes = (bytes: number | null | undefined): string => {
   if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return 'N/A';
   if (bytes < 1024) return `${bytes} B`;
@@ -324,74 +343,16 @@ const createEmptyTelegramSettings = (): TelegramSettings => ({
   bot_token: '',
   default_chat_id: '',
   is_active: false,
-  warn_thresholds: normalizeWarnThresholds(null),
 });
 
-const normalizeTelegramSettings = (settings: TelegramSettings): TelegramSettings => ({
-  ...settings,
-  warn_thresholds: normalizeWarnThresholds(settings.warn_thresholds),
-});
+const normalizeTelegramSettings = (settings: TelegramSettings): TelegramSettings => settings;
 
 const ensureTelegramState = (state: TelegramSettings | null): TelegramSettings => {
   if (!state) {
     return createEmptyTelegramSettings();
   }
-  if (!state.warn_thresholds) {
-    return { ...state, warn_thresholds: normalizeWarnThresholds(null) };
-  }
   return state;
 };
-
-const sanitizeWarnThresholdsForSave = (
-  thresholds: WarningThresholds | null | undefined
-): WarningThresholds => normalizeWarnThresholds(thresholds);
-
-const warnThresholdFields: Array<{
-  key: keyof WarningThresholds;
-  label: string;
-  helper: string;
-  min: number;
-  max: number;
-  step: number;
-  suffix?: string;
-}> = [
-  {
-    key: 'cpu_temperature_c',
-    label: 'CPU temperature (°C)',
-    helper: 'Default 80°C',
-    min: 0,
-    max: 150,
-    step: 0.5,
-    suffix: '°C',
-  },
-  {
-    key: 'ram_used_percent',
-    label: 'RAM usage (%)',
-    helper: 'Default 90% of installed RAM',
-    min: 0,
-    max: 100,
-    step: 1,
-    suffix: '%',
-  },
-  {
-    key: 'disk_usage_percent',
-    label: 'Root disk usage (%)',
-    helper: 'Default 90% of / usage',
-    min: 0,
-    max: 100,
-    step: 1,
-    suffix: '%',
-  },
-  {
-    key: 'mounted_usage_percent',
-    label: 'Mounted volume usage (%)',
-    helper: 'Default 90% across mounted volumes',
-    min: 0,
-    max: 100,
-    step: 1,
-    suffix: '%',
-  },
-];
 
 type BackendFormState = Omit<BackendCreatePayload, 'display_order'> & {
   display_order: number | '';
@@ -416,6 +377,9 @@ const defaultQuickStatusThresholds = (metric: QuickStatusMetricKey) => {
     ? { warning: match.defaultWarning, critical: match.defaultCritical }
     : { warning: 80, critical: 90 };
 };
+
+const defaultQuickStatusLabel = (metric: QuickStatusMetricKey): string =>
+  quickStatusMetricOptions.find((option) => option.key === metric)?.label ?? metric;
 
 const sortBackends = (items: MonitoredBackend[]): MonitoredBackend[] =>
   [...items].sort((a, b) => {
@@ -445,11 +409,12 @@ const createInitialForm = (): BackendFormState => ({
 });
 
 const createQuickStatusForm = (): QuickStatusFormState => {
-  const defaults = defaultQuickStatusThresholds('disk_usage_percent');
+  const metricKey: QuickStatusMetricKey = 'disk_usage_percent';
+  const defaults = defaultQuickStatusThresholds(metricKey);
   return {
     backend_id: '',
-    label: '',
-    metric_key: 'disk_usage_percent',
+    label: defaultQuickStatusLabel(metricKey),
+    metric_key: metricKey,
     mount_path: '',
     warning_threshold: defaults.warning,
     critical_threshold: defaults.critical,
@@ -824,15 +789,21 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const handleQuickStatusMetricChange = (metric: QuickStatusMetricKey) => {
     const defaults = defaultQuickStatusThresholds(metric);
     const option = quickStatusMetricOptions.find((item) => item.key === metric);
-    setQuickStatusForm((prev) => ({
-      ...prev,
-      metric_key: metric,
-      mount_path: '',
-      warning_threshold: defaults.warning,
-      critical_threshold: defaults.critical,
-      ping_endpoint: option?.requiresPing ? prev.ping_endpoint : '',
-      ping_interval_seconds: option?.requiresPing ? prev.ping_interval_seconds : 60,
-    }));
+    setQuickStatusForm((prev) => {
+      const previousDefaultLabel = defaultQuickStatusLabel(prev.metric_key);
+      const nextDefaultLabel = defaultQuickStatusLabel(metric);
+      const shouldAutoFillLabel = !prev.label.trim() || prev.label === previousDefaultLabel;
+      return {
+        ...prev,
+        label: shouldAutoFillLabel ? nextDefaultLabel : prev.label,
+        metric_key: metric,
+        mount_path: '',
+        warning_threshold: defaults.warning,
+        critical_threshold: defaults.critical,
+        ping_endpoint: option?.requiresPing ? prev.ping_endpoint : '',
+        ping_interval_seconds: option?.requiresPing ? prev.ping_interval_seconds : 60,
+      };
+    });
   };
 
   const handleQuickStatusSubmit = async (event: FormEvent) => {
@@ -1436,6 +1407,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (quickStatusForm.metric_key === 'last_restart') {
       return 'hours';
     }
+    if (quickStatusForm.metric_key === 'memory_available_gb') {
+      return 'GB';
+    }
     if (quickStatusForm.metric_key === 'ping_delay_ms') {
       return 'ms';
     }
@@ -1457,7 +1431,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         bot_token: telegram.bot_token,
         default_chat_id: telegram.default_chat_id,
         is_active: telegram.is_active,
-        warn_thresholds: sanitizeWarnThresholdsForSave(telegram.warn_thresholds),
       });
       setTelegram(normalizeTelegramSettings(updated));
       setTelegramStatus('Telegram settings saved.');
@@ -1560,24 +1533,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     } catch (err) {
       setUserStatus(extractErrorMessage(err, 'Unable to remove user'));
     }
-  };
-
-  const handleThresholdChange = (key: keyof WarningThresholds, rawValue: string) => {
-    const numericValue = rawValue === '' ? null : Number(rawValue);
-    if (rawValue !== '' && Number.isNaN(numericValue)) {
-      return;
-    }
-    setTelegram((prev) => {
-      const base = ensureTelegramState(prev);
-      const thresholds = base.warn_thresholds ?? normalizeWarnThresholds(null);
-      return {
-        ...base,
-        warn_thresholds: {
-          ...thresholds,
-          [key]: numericValue,
-        },
-      };
-    });
   };
 
   const activeBackendId = extractBackendIdFromSection(activeSection);
@@ -1978,6 +1933,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                               }))
                             }
                             min={0}
+                            step="any"
                             required
                           />
                         </div>
@@ -1996,6 +1952,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                               }))
                             }
                             min={0}
+                            step="any"
                             required
                           />
                         </div>
@@ -2095,30 +2052,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         Enable Telegram notifications
                       </label>
                     </div>
-                    <div>
-                      <label className="form-label fw-semibold">Warning thresholds</label>
-                      <div className="row g-3">
-                        {warnThresholdFields.map((field) => (
-                          <div className="col-sm-6" key={field.key}>
-                            <label className="form-label text-uppercase small text-secondary">
-                              {field.label}
-                            </label>
-                            <input
-                              type="number"
-                              min={field.min}
-                              max={field.max}
-                              step={field.step}
-                              className="form-control bg-dark text-light border-secondary"
-                              value={telegram?.warn_thresholds?.[field.key] ?? ''}
-                              onChange={(event) => handleThresholdChange(field.key, event.target.value)}
-                            />
-                            <div className="form-text text-secondary small">{field.helper}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="form-text text-secondary small">
-                        Used for dashboard warnings and Telegram alerts. Leave blank to keep defaults.
-                      </div>
+                    <div className="form-text text-secondary small">
+                      Warning and error rules are configured in <strong>Quick status tiles</strong>. Telegram alerts
+                      are sent automatically when a tile changes to warning or error.
                     </div>
                     <div className="d-flex gap-2">
                       <button className="btn btn-light text-dark" type="submit">
