@@ -9,7 +9,7 @@ WORKDIR /app
 COPY monitor/requirements.txt /tmp/requirements.txt
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+    && apt-get install -y --no-install-recommends build-essential util-linux login \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \

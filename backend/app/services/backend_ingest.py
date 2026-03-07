@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import delete
-from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,11 +13,11 @@ from backend.app.schemas.metrics import MetricSnapshotCreate
 from backend.app.services.metrics_service import build_snapshot_model
 from backend.app.db.schema_compat import ensure_schema_compat_async
 from backend.app.services.monitor_client import MonitorClientError, fetch_metrics
-from backend.app.services.quick_status import (
-    detect_quick_status_transitions_for_snapshot,
-    list_quick_status_items_for_backend,
+from backend.app.services.quick_status import list_quick_status_items_for_backend
+from backend.app.services.telegram_notifications import (
+    dispatch_due_quick_status_notifications,
+    queue_quick_status_notifications,
 )
-from backend.app.services.telegram_notifications import try_send_quick_status_transition_notification
 from backend.app.services.system_settings import metric_retention_timedelta
 
 
@@ -46,12 +45,6 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
 
     payload = MetricSnapshotCreate.model_validate(metrics_payload)
 
-    previous_snapshot = await session.scalar(
-        select(MetricSnapshot)
-        .where(MetricSnapshot.backend_id == backend.id)
-        .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
-        .limit(1)
-    )
     quick_status_items = await list_quick_status_items_for_backend(session, backend.id)
 
     snapshot = build_snapshot_model(backend.id, payload)
@@ -74,14 +67,8 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
     await session.commit()
     await session.refresh(snapshot)
 
-    transitions = detect_quick_status_transitions_for_snapshot(
-        quick_status_items,
-        previous_snapshot,
-        snapshot,
-        backend.name,
-    )
-    if transitions:
-        await try_send_quick_status_transition_notification(session, transitions)
+    await queue_quick_status_notifications(session, quick_status_items)
+    await dispatch_due_quick_status_notifications(session)
 
     return snapshot
 

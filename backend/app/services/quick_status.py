@@ -11,13 +11,18 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import settings
 from backend.app.models.monitors import MetricSnapshot, QuickStatusItem
-from backend.app.schemas.quick_status import QuickStatusItemCreate, QuickStatusTileRead
+from backend.app.schemas.quick_status import (
+    QuickStatusItemCreate,
+    QuickStatusTileRead,
+    is_supported_quick_status_metric,
+)
 from backend.app.services.monitor_client import MonitorClientError, fetch_ping
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "swap_used_percent", "mount_used_percent"}
-_REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb"}
+_REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "ssh_last_unsuccessful_attempt"}
 _PING_METRICS = {"ping_result", "ping_delay_ms"}
+_INFO_ONLY_METRICS = {"swap_used_percent"}
 _ALERT_STATUSES = {"warn", "critical"}
 
 
@@ -38,6 +43,13 @@ class QuickStatusTransition:
     previous_status: str
     current_status: str
     display_value: str
+
+
+@dataclass(slots=True)
+class QuickStatusEvaluation:
+    value: float | None
+    display_value: str
+    status: str
 
 
 _PING_CACHE: dict[int, PingCheckResult] = {}
@@ -97,6 +109,12 @@ def _extract_running_container_count(snapshot: MetricSnapshot) -> float | None:
     return float(len(names))
 
 
+def _extract_raw_payload_value(snapshot: MetricSnapshot, key: str) -> float | None:
+    payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    raw = payload.get(key)
+    return float(raw) if isinstance(raw, (int, float)) else None
+
+
 def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | None) -> float | None:
     if metric_key == "disk_usage_percent":
         return float(snapshot.disk_usage_percent) if snapshot.disk_usage_percent is not None else None
@@ -120,6 +138,13 @@ def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | N
         return _extract_mount_used_percent(snapshot, mount_path)
     if metric_key == "last_restart":
         return _extract_uptime_hours(snapshot)
+    if metric_key == "ssh_last_successful_login":
+        return _extract_raw_payload_value(snapshot, "ssh_last_successful_login_seconds")
+    if metric_key == "ssh_last_unsuccessful_attempt":
+        seconds = _extract_raw_payload_value(snapshot, "ssh_last_unsuccessful_attempt_seconds")
+        return (seconds / 3600) if seconds is not None else None
+    if metric_key == "ssh_status":
+        return _extract_raw_payload_value(snapshot, "ssh_status_level")
     return None
 
 
@@ -138,6 +163,15 @@ def _format_value(metric_key: str, value: float | None) -> str:
         return _format_uptime_hours(value)
     if metric_key == "ping_delay_ms":
         return f"{value:.0f}ms"
+    if metric_key in {"ssh_last_successful_login", "ssh_last_unsuccessful_attempt"}:
+        return _format_elapsed_seconds(value if metric_key == "ssh_last_successful_login" else value * 3600)
+    if metric_key == "ssh_status":
+        level = int(round(value))
+        if level <= 0:
+            return "OK"
+        if level == 1:
+            return "WARN"
+        return "CRIT"
     return f"{value:.2f}"
 
 
@@ -152,14 +186,32 @@ def _format_uptime_hours(value: float) -> str:
     return f"{minutes}m"
 
 
+def _format_elapsed_seconds(value: float) -> str:
+    total = max(0, int(round(value)))
+    days, rem = divmod(total, 86_400)
+    hours, rem = divmod(rem, 3_600)
+    minutes, seconds = divmod(rem, 60)
+    return f"{days:02d}:{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
 def _resolve_status(value: float | None, warning_threshold: float, critical_threshold: float, metric_key: str) -> str:
     if value is None:
         return "unknown"
+    if metric_key in _INFO_ONLY_METRICS:
+        return "info"
     if metric_key == "docker_container_count":
         min_allowed = min(warning_threshold, critical_threshold)
         max_allowed = max(warning_threshold, critical_threshold)
         if value < min_allowed or value > max_allowed:
             return "critical"
+        return "ok"
+    if metric_key == "ssh_last_successful_login":
+        return "ok"
+    if metric_key == "ssh_status":
+        if value >= 2:
+            return "critical"
+        if value >= 1:
+            return "warn"
         return "ok"
     if metric_key in _REVERSE_THRESHOLD_METRICS:
         if value <= critical_threshold:
@@ -172,6 +224,17 @@ def _resolve_status(value: float | None, warning_threshold: float, critical_thre
     if value >= warning_threshold:
         return "warn"
     return "ok"
+
+
+def evaluate_quick_status_item(item: QuickStatusItem, snapshot: MetricSnapshot | None) -> QuickStatusEvaluation:
+    if snapshot is None:
+        return QuickStatusEvaluation(value=None, display_value="—", status="unknown")
+    value = _metric_value(snapshot, item.metric_key, item.mount_path)
+    return QuickStatusEvaluation(
+        value=value,
+        display_value=_format_value(item.metric_key, value),
+        status=_resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key),
+    )
 
 
 async def _check_ping(item: QuickStatusItem) -> PingCheckResult | None:
@@ -217,7 +280,7 @@ async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem
         .options(selectinload(QuickStatusItem.backend))
         .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
     )
-    return list(result.scalars())
+    return [item for item in result.scalars() if is_supported_quick_status_metric(getattr(item, "metric_key", None))]
 
 
 async def list_quick_status_items_for_backend(session: AsyncSession, backend_id: int) -> list[QuickStatusItem]:
@@ -226,14 +289,14 @@ async def list_quick_status_items_for_backend(session: AsyncSession, backend_id:
         .where(QuickStatusItem.backend_id == backend_id)
         .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
     )
-    return list(result.scalars())
+    return [item for item in result.scalars() if is_supported_quick_status_metric(getattr(item, "metric_key", None))]
 
 
 async def build_quick_status_tiles(
     session: AsyncSession,
     items: Iterable[QuickStatusItem],
 ) -> list[QuickStatusTileRead]:
-    items_list = list(items)
+    items_list = [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))]
     if not items_list:
         return []
 
@@ -309,6 +372,8 @@ def detect_quick_status_transitions_for_snapshot(
 ) -> list[QuickStatusTransition]:
     transitions: list[QuickStatusTransition] = []
     for item in items:
+        if not is_supported_quick_status_metric(getattr(item, "metric_key", None)):
+            continue
         if item.metric_key in _PING_METRICS:
             continue
         previous_value = _metric_value(previous_snapshot, item.metric_key, item.mount_path) if previous_snapshot else None

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import glob
+import gzip
 import json
 import logging
 import os
@@ -8,11 +10,12 @@ import platform
 import re
 import socket
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import subprocess
 import shlex
 import shutil
+from pathlib import Path
 
 import psutil
 
@@ -24,6 +27,29 @@ RAM_WARN_PERCENT = 90.0
 DISK_WARN_PERCENT = 90.0
 
 logger = logging.getLogger(__name__)
+
+_SSH_LOG_TIMESTAMP_RE = re.compile(r"^(?P<stamp>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+")
+_LAST_OUTPUT_TIMESTAMP_RE = re.compile(r"([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})")
+_SSH_SUCCESS_MARKERS = (
+    "Accepted password",
+    "Accepted publickey",
+    "Accepted keyboard-interactive",
+)
+_SSH_FAILURE_MARKERS = (
+    "Failed password",
+    "Failed publickey",
+    "Invalid user",
+    "authentication failure",
+    "maximum authentication attempts exceeded",
+)
+_SSH_ROOT_PASSWORD_DISABLED_VALUES = {
+    "no",
+    "prohibit-password",
+    "without-password",
+    "forced-commands-only",
+}
+_SSH_FALSE_VALUES = {"0", "false", "no", "off"}
+_SSH_TRUE_VALUES = {"1", "true", "yes", "on"}
 
 
 def _get_cpu_temperature() -> float | None:
@@ -55,6 +81,248 @@ def _normalize_mount_path(path: str) -> str:
     if cleaned != "/":
         cleaned = cleaned.rstrip("/")
     return cleaned or "/"
+
+
+def _host_candidate_paths(path: str) -> list[str]:
+    normalized_path = _normalize_mount_path(path) if path.startswith("/") else path.strip()
+    candidates: list[str] = []
+    host_root = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    if host_root and host_root != "/":
+        stripped = normalized_path.lstrip("/")
+        host_path = os.path.join(host_root, stripped) if stripped else host_root
+        candidates.append(host_path)
+    candidates.append(normalized_path)
+    # Preserve order and deduplicate
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        token = _normalize_mount_path(candidate) if candidate.startswith("/") else candidate
+        if token not in seen:
+            seen.add(token)
+            deduped.append(token)
+    return deduped
+
+
+def _read_text_tail(path: str, max_bytes: int = 512_000) -> str:
+    if path.endswith(".gz"):
+        with gzip.open(path, "rt", encoding="utf-8", errors="ignore") as handle:
+            return handle.read()
+    with open(path, "rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - max_bytes))
+        return handle.read().decode("utf-8", errors="ignore")
+
+
+def _candidate_ssh_log_files() -> list[str]:
+    patterns = (
+        "/var/log/auth.log",
+        "/var/log/auth.log.*",
+        "/var/log/secure",
+        "/var/log/secure*",
+        "/var/log/messages",
+        "/var/log/messages*",
+    )
+    found: list[str] = []
+    for pattern in patterns:
+        for candidate_pattern in _host_candidate_paths(pattern):
+            matches = glob.glob(candidate_pattern)
+            if matches:
+                found.extend(matches)
+    # Deduplicate and keep newest logs first
+    unique = sorted(set(found), key=lambda path: os.path.getmtime(path) if os.path.exists(path) else 0, reverse=True)
+    return unique[:20]
+
+
+def _parse_syslog_timestamp(line: str, now: datetime) -> datetime | None:
+    match = _SSH_LOG_TIMESTAMP_RE.match(line)
+    if not match:
+        return None
+    stamp = match.group("stamp")
+    try:
+        parsed = datetime.strptime(f"{now.year} {stamp}", "%Y %b %d %H:%M:%S")
+    except ValueError:
+        return None
+    if parsed > now + timedelta(days=1):
+        parsed = parsed.replace(year=parsed.year - 1)
+    return parsed
+
+
+def _extract_ssh_login_ages() -> tuple[int | None, int | None]:
+    now = datetime.now()
+    latest_success: datetime | None = None
+    latest_failure: datetime | None = None
+    for path in _candidate_ssh_log_files():
+        try:
+            payload = _read_text_tail(path)
+        except (OSError, gzip.BadGzipFile):
+            continue
+        for line in payload.splitlines():
+            if "sshd" not in line:
+                continue
+            stamp = _parse_syslog_timestamp(line, now)
+            if stamp is None:
+                continue
+            if any(marker in line for marker in _SSH_SUCCESS_MARKERS):
+                if latest_success is None or stamp > latest_success:
+                    latest_success = stamp
+            if any(marker in line for marker in _SSH_FAILURE_MARKERS):
+                if latest_failure is None or stamp > latest_failure:
+                    latest_failure = stamp
+    success_age = int((now - latest_success).total_seconds()) if latest_success else None
+    failure_age = int((now - latest_failure).total_seconds()) if latest_failure else None
+    if success_age is None:
+        success_age = _extract_login_age_from_last_command("last", "/var/log/wtmp")
+    if failure_age is None:
+        failure_age = _extract_login_age_from_last_command("lastb", "/var/log/btmp")
+    if success_age is not None:
+        success_age = max(0, success_age)
+    if failure_age is not None:
+        failure_age = max(0, failure_age)
+    return success_age, failure_age
+
+
+def _extract_login_age_from_last_command(command: str, host_log_path: str) -> int | None:
+    binary = shutil.which(command)
+    if not binary:
+        return None
+    now = datetime.now()
+    for candidate in _host_candidate_paths(host_log_path):
+        try:
+            result = subprocess.run(
+                [binary, "-F", "-w", "-f", candidate, "-n", "20"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode not in (0, 1):
+            continue
+        output = (result.stdout or "").strip()
+        if not output:
+            continue
+        for line in output.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("wtmp begins", "btmp begins")):
+                continue
+            if stripped.startswith(("reboot", "shutdown", "runlevel")):
+                continue
+            match = _LAST_OUTPUT_TIMESTAMP_RE.search(stripped)
+            if not match:
+                continue
+            try:
+                stamp = datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
+            except ValueError:
+                continue
+            return max(0, int((now - stamp).total_seconds()))
+    return None
+
+
+def _coerce_bool(value: str | None, *, default: bool) -> bool:
+    if value is None:
+        return default
+    token = value.strip().lower()
+    if token in _SSH_TRUE_VALUES:
+        return True
+    if token in _SSH_FALSE_VALUES:
+        return False
+    return default
+
+
+def _resolve_ssh_include_patterns(raw_value: str, from_file: str) -> list[str]:
+    patterns: list[str] = []
+    base_dir = os.path.dirname(from_file)
+    for token in raw_value.split():
+        cleaned = token.strip().strip('"').strip("'")
+        if not cleaned:
+            continue
+        if cleaned.startswith("/"):
+            patterns.extend(_host_candidate_paths(cleaned))
+        else:
+            patterns.append(os.path.join(base_dir, cleaned))
+    return patterns
+
+
+def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str]:
+    pubkey_value: str | None = None
+    permit_root_value: str | None = None
+    password_auth_value: str | None = None
+    kbd_interactive_value: str | None = None
+    seen: set[str] = set()
+
+    def parse_file(path: str) -> None:
+        nonlocal pubkey_value, permit_root_value, password_auth_value, kbd_interactive_value
+        resolved = str(Path(path).resolve())
+        if resolved in seen:
+            return
+        seen.add(resolved)
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as handle:
+                lines = handle.readlines()
+        except OSError:
+            return
+        for raw in lines:
+            line = raw.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                continue
+            key, value = parts[0].lower(), parts[1].strip()
+            if key == "include":
+                for pattern in _resolve_ssh_include_patterns(value, path):
+                    for child in sorted(glob.glob(pattern)):
+                        parse_file(child)
+                continue
+            if key == "pubkeyauthentication":
+                pubkey_value = value
+            elif key == "permitrootlogin":
+                permit_root_value = value
+            elif key == "passwordauthentication":
+                password_auth_value = value
+            elif key in {"kbdinteractiveauthentication", "challengeresponseauthentication"}:
+                kbd_interactive_value = value
+
+    for candidate in _host_candidate_paths("/etc/ssh/sshd_config"):
+        parse_file(candidate)
+
+    pubkey_enabled = _coerce_bool(pubkey_value, default=True)
+    password_auth_enabled = _coerce_bool(password_auth_value, default=True)
+    kbd_interactive_enabled = _coerce_bool(kbd_interactive_value, default=False)
+    permit_root_token = permit_root_value.strip().lower() if permit_root_value else "prohibit-password"
+    return pubkey_enabled, not password_auth_enabled, not kbd_interactive_enabled, permit_root_token
+
+
+def _collect_ssh_snapshot() -> dict[str, Any]:
+    success_age_seconds, failure_age_seconds = _extract_ssh_login_ages()
+    pubkey_enabled, password_auth_disabled, kbd_interactive_disabled, permit_root_token = _read_sshd_effective_settings()
+    strict_root_policy = permit_root_token == "prohibit-password"
+    root_password_disabled = permit_root_token in _SSH_ROOT_PASSWORD_DISABLED_VALUES
+    if not pubkey_enabled and not root_password_disabled:
+        status_level = 2
+    elif (
+        not pubkey_enabled
+        or not strict_root_policy
+        or not password_auth_disabled
+        or not kbd_interactive_disabled
+    ):
+        status_level = 1
+    else:
+        status_level = 0
+    status_text = "ok" if status_level == 0 else "warn" if status_level == 1 else "critical"
+    return {
+        "ssh_last_successful_login_seconds": success_age_seconds,
+        "ssh_last_unsuccessful_attempt_seconds": failure_age_seconds,
+        "ssh_pubkey_auth_enabled": pubkey_enabled,
+        "ssh_root_password_login_disabled": root_password_disabled,
+        "ssh_password_auth_disabled": password_auth_disabled,
+        "ssh_kbd_interactive_auth_disabled": kbd_interactive_disabled,
+        "ssh_permit_root_login_mode": permit_root_token,
+        "ssh_status_level": status_level,
+        "ssh_status": status_text,
+    }
 
 
 def _configured_mount_points() -> tuple[list[str], bool]:
@@ -322,6 +590,7 @@ def collect_metrics() -> dict[str, Any]:
         "os_version": platform.platform(),
         "uptime_seconds": uptime_seconds,
     }
+    payload.update(_collect_ssh_snapshot())
     warnings = _detect_warnings(payload)
     if warnings:
         payload["warnings"] = warnings

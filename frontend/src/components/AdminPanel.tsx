@@ -100,8 +100,8 @@ const quickStatusMetricOptions: Array<{
     label: 'Swap usage (%)',
     defaultWarning: 50,
     defaultCritical: 80,
-    helper: 'Percent used',
-    requiresThresholds: true,
+    helper: 'Percent used. Informational only; this tile does not generate warning or error states.',
+    requiresThresholds: false,
     thresholdDirection: 'higher',
     requiresPing: false,
   },
@@ -194,6 +194,36 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: true,
+  },
+  {
+    key: 'ssh_last_successful_login',
+    label: 'SSH last successful login',
+    defaultWarning: 0,
+    defaultCritical: 0,
+    helper: 'Elapsed time since last successful SSH login (DD:HH:MM:SS), always green',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'ssh_last_unsuccessful_attempt',
+    label: 'SSH last failed attempt',
+    defaultWarning: 168,
+    defaultCritical: 24,
+    helper: 'Elapsed hours since last failed SSH login (warn under 7d, critical under 24h)',
+    requiresThresholds: true,
+    thresholdDirection: 'lower',
+    requiresPing: false,
+  },
+  {
+    key: 'ssh_status',
+    label: 'SSH status',
+    defaultWarning: 0,
+    defaultCritical: 0,
+    helper: 'Green: key auth enabled + root password login disabled; warn/critical otherwise',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
+    requiresPing: false,
   },
 ];
 
@@ -342,6 +372,7 @@ const createEmptyTelegramSettings = (): TelegramSettings => ({
   id: 0,
   bot_token: '',
   default_chat_id: '',
+  notification_cooldown_minutes: 15,
   is_active: false,
 });
 
@@ -1438,6 +1469,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       const updated = await updateTelegramSettings({
         bot_token: telegram.bot_token,
         default_chat_id: telegram.default_chat_id,
+        notification_cooldown_minutes: telegram.notification_cooldown_minutes,
         is_active: telegram.is_active,
       });
       setTelegram(normalizeTelegramSettings(updated));
@@ -2068,9 +2100,34 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         Enable Telegram notifications
                       </label>
                     </div>
+                    <div>
+                      <label className="form-label">Notification cooldown (minutes)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10080}
+                        className="form-control bg-dark text-light border-secondary"
+                        value={telegram?.notification_cooldown_minutes ?? 15}
+                        onChange={(event) =>
+                          setTelegram((prev) => {
+                            const base = ensureTelegramState(prev);
+                            return {
+                              ...base,
+                              notification_cooldown_minutes: Math.max(0, Number(event.target.value || 0)),
+                            };
+                          })
+                        }
+                        required
+                      />
+                      <div className="form-text text-secondary small">
+                        Automatic quick-status Telegram notifications are batched so they are not sent more often
+                        than this interval. Recovery messages use the same cooldown.
+                      </div>
+                    </div>
                     <div className="form-text text-secondary small">
                       Warning and error rules are configured in <strong>Quick status tiles</strong>. Telegram alerts
-                      are sent automatically when a tile changes to warning or error.
+                      are sent automatically when a tile changes to warning or error, and a follow-up notification is
+                      sent when that state clears.
                     </div>
                     <div className="d-flex gap-2">
                       <button className="btn btn-light text-dark" type="submit">

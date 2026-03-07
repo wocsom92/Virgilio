@@ -41,6 +41,26 @@ def ensure_schema_compat(connection: Connection) -> None:
                     f"ADD COLUMN ping_interval_seconds INT NOT NULL DEFAULT 60"
                 )
             )
+        if "last_notified_status" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN last_notified_status VARCHAR(16) NULL"))
+        if "pending_notification_status" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN pending_notification_status VARCHAR(16) NULL"))
+        if "pending_notification_due_at" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN pending_notification_due_at DATETIME NULL"))
+
+    if inspector.has_table("telegram_settings"):
+        columns = {col["name"] for col in inspector.get_columns("telegram_settings")}
+        if "notification_cooldown_minutes" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE telegram_settings "
+                    "ADD COLUMN notification_cooldown_minutes INT NOT NULL DEFAULT 15"
+                )
+            )
+        if "quick_status_last_notification_at" not in columns:
+            connection.execute(
+                text("ALTER TABLE telegram_settings ADD COLUMN quick_status_last_notification_at DATETIME NULL")
+            )
 
     # Create reboot_events table if missing (introduced in 2025-02).
     if not inspector.has_table("reboot_events"):

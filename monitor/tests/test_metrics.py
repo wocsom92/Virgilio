@@ -129,3 +129,72 @@ def test_count_docker_containers_falls_back_to_running_list(monkeypatch):
     monkeypatch.setattr(metrics, "_list_running_docker_containers", lambda: ["api", "db"])
 
     assert metrics._count_docker_containers() == 2
+
+
+def test_collect_ssh_snapshot_levels(monkeypatch):
+    monkeypatch.setattr(metrics, "_extract_ssh_login_ages", lambda: (3600, 7200))
+    monkeypatch.setattr(metrics, "_read_sshd_effective_settings", lambda: (True, True, True, "prohibit-password"))
+    snapshot = metrics._collect_ssh_snapshot()
+    assert snapshot["ssh_status_level"] == 0
+    assert snapshot["ssh_status"] == "ok"
+
+    monkeypatch.setattr(metrics, "_read_sshd_effective_settings", lambda: (False, True, True, "prohibit-password"))
+    snapshot = metrics._collect_ssh_snapshot()
+    assert snapshot["ssh_status_level"] == 1
+    assert snapshot["ssh_status"] == "warn"
+
+    monkeypatch.setattr(metrics, "_read_sshd_effective_settings", lambda: (False, True, True, "yes"))
+    snapshot = metrics._collect_ssh_snapshot()
+    assert snapshot["ssh_status_level"] == 2
+    assert snapshot["ssh_status"] == "critical"
+
+    monkeypatch.setattr(metrics, "_read_sshd_effective_settings", lambda: (True, False, True, "prohibit-password"))
+    snapshot = metrics._collect_ssh_snapshot()
+    assert snapshot["ssh_status_level"] == 1
+    assert snapshot["ssh_status"] == "warn"
+
+    monkeypatch.setattr(metrics, "_read_sshd_effective_settings", lambda: (True, True, False, "prohibit-password"))
+    snapshot = metrics._collect_ssh_snapshot()
+    assert snapshot["ssh_status_level"] == 1
+    assert snapshot["ssh_status"] == "warn"
+
+    monkeypatch.setattr(metrics, "_read_sshd_effective_settings", lambda: (True, True, True, "without-password"))
+    snapshot = metrics._collect_ssh_snapshot()
+    assert snapshot["ssh_status_level"] == 1
+    assert snapshot["ssh_status"] == "warn"
+
+
+def test_read_sshd_effective_settings_parses_include(tmp_path, monkeypatch):
+    host_root = tmp_path / "hostfs"
+    ssh_dir = host_root / "etc" / "ssh" / "sshd_config.d"
+    ssh_dir.mkdir(parents=True)
+    (host_root / "etc" / "ssh" / "sshd_config").write_text(
+        "PubkeyAuthentication no\nPasswordAuthentication yes\nInclude /etc/ssh/sshd_config.d/*.conf\n",
+        encoding="utf-8",
+    )
+    (ssh_dir / "hardening.conf").write_text(
+        "PubkeyAuthentication yes\nPermitRootLogin yes\nKbdInteractiveAuthentication no\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(metrics.settings, "host_root_target", str(host_root), raising=False)
+
+    pubkey_enabled, password_auth_disabled, kbd_interactive_disabled, permit_root_token = metrics._read_sshd_effective_settings()
+
+    assert pubkey_enabled is True
+    assert password_auth_disabled is False
+    assert kbd_interactive_disabled is True
+    assert permit_root_token == "yes"
+
+
+def test_extract_ssh_login_ages_uses_last_fallback(monkeypatch):
+    monkeypatch.setattr(metrics, "_candidate_ssh_log_files", lambda: [])
+    monkeypatch.setattr(
+        metrics,
+        "_extract_login_age_from_last_command",
+        lambda command, _path: 123 if command == "last" else 456,
+    )
+
+    success_age, failure_age = metrics._extract_ssh_login_ages()
+
+    assert success_age == 123
+    assert failure_age == 456

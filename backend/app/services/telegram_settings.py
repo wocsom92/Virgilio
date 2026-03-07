@@ -15,6 +15,7 @@ async def get_or_create_settings(session: AsyncSession) -> TelegramSettingsModel
         instance = TelegramSettingsModel(
             bot_token=settings.telegram_bot_token,
             default_chat_id=settings.telegram_default_chat_id,
+            notification_cooldown_minutes=15,
             is_active=bool(settings.telegram_bot_token and settings.telegram_default_chat_id),
         )
         session.add(instance)

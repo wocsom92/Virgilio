@@ -186,6 +186,7 @@ export interface TelegramSettings {
   id: number;
   bot_token?: string | null;
   default_chat_id?: string | null;
+  notification_cooldown_minutes: number;
   is_active: boolean;
 }
 
@@ -210,7 +211,10 @@ export type QuickStatusMetricKey =
   | 'mount_used_percent'
   | 'last_restart'
   | 'ping_result'
-  | 'ping_delay_ms';
+  | 'ping_delay_ms'
+  | 'ssh_last_successful_login'
+  | 'ssh_last_unsuccessful_attempt'
+  | 'ssh_status';
 
 export interface QuickStatusItem {
   id: number;
@@ -233,7 +237,7 @@ export interface QuickStatusTile {
   metric_key: QuickStatusMetricKey;
   value?: number | null;
   display_value: string;
-  status: 'ok' | 'warn' | 'critical' | 'unknown';
+  status: 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
   reported_at?: string | null;
 }
 

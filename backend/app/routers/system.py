@@ -10,7 +10,7 @@ from backend.app.db.session import get_session
 from backend.app.services.reboot_service import request_reboot
 from backend.app.schemas.system import AuthSessionSettings, RetentionSettings
 from backend.app.models.monitors import MonitoredBackend, QuickStatusItem
-from backend.app.schemas.quick_status import QuickStatusItemCreate, QuickStatusItemRead
+from backend.app.schemas.quick_status import QuickStatusItemCreate, QuickStatusItemRead, is_supported_quick_status_metric
 from backend.app.services.quick_status import create_quick_status_item, update_quick_status_item
 from backend.app.services.system_settings import (
     get_auth_session_minutes,
@@ -98,7 +98,12 @@ async def list_quick_status_items(session: AsyncSession = Depends(get_session)) 
     result = await session.execute(
         select(QuickStatusItem).order_by(QuickStatusItem.display_order, QuickStatusItem.id)
     )
-    return [QuickStatusItemRead.model_validate(item) for item in result.scalars()]
+    items = []
+    for item in result.scalars():
+        if not is_supported_quick_status_metric(getattr(item, "metric_key", None)):
+            continue
+        items.append(QuickStatusItemRead.model_validate(item))
+    return items
 
 
 @router.post("/quick-status", response_model=QuickStatusItemRead, status_code=status.HTTP_201_CREATED)

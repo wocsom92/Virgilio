@@ -31,6 +31,12 @@ class WarnThresholds(BaseModel):
 class TelegramSettingsBase(BaseModel):
     bot_token: str | None = Field(None, description="Bot token provided by @BotFather")
     default_chat_id: str | None = Field(None, description="Chat id for default notifications")
+    notification_cooldown_minutes: int = Field(
+        default=15,
+        ge=0,
+        le=10_080,
+        description="Minimum number of minutes between automatic quick-status notifications",
+    )
     warn_thresholds: WarnThresholds | None = Field(
         default=None,
         description="Warning-level thresholds that control when alerts are emitted",

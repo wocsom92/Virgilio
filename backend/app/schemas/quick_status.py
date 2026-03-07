@@ -18,10 +18,39 @@ QuickStatusMetricKey = Literal[
     "last_restart",
     "ping_result",
     "ping_delay_ms",
+    "ssh_last_successful_login",
+    "ssh_last_unsuccessful_attempt",
+    "ssh_status",
 ]
 
+SUPPORTED_QUICK_STATUS_METRIC_KEYS: set[str] = {
+    "disk_usage_percent",
+    "ram_used_percent",
+    "memory_available_gb",
+    "swap_used_percent",
+    "docker_container_count",
+    "cpu_temperature_c",
+    "cpu_load_one",
+    "cpu_load_five",
+    "cpu_load_fifteen",
+    "mount_used_percent",
+    "last_restart",
+    "ping_result",
+    "ping_delay_ms",
+    "ssh_last_successful_login",
+    "ssh_last_unsuccessful_attempt",
+    "ssh_status",
+}
+
 _REQUIRES_PING_ENDPOINT = {"ping_result", "ping_delay_ms"}
-_LOWER_IS_WORSE = {"last_restart", "memory_available_gb"}
+_LOWER_IS_WORSE = {"last_restart", "memory_available_gb", "ssh_last_unsuccessful_attempt"}
+_NO_THRESHOLD_METRICS = {"ping_result", "ssh_last_successful_login", "ssh_status", "swap_used_percent"}
+
+
+def is_supported_quick_status_metric(metric_key: str | None) -> bool:
+    if not metric_key:
+        return False
+    return metric_key in SUPPORTED_QUICK_STATUS_METRIC_KEYS
 
 
 class QuickStatusItemBase(BaseModel):
@@ -44,7 +73,7 @@ class QuickStatusItemBase(BaseModel):
             self.ping_endpoint = None
             self.ping_interval_seconds = 60
 
-        if self.metric_key != "ping_result":
+        if self.metric_key not in _NO_THRESHOLD_METRICS:
             if self.metric_key == "docker_container_count":
                 if self.warning_threshold > self.critical_threshold:
                     # Backward compatibility: legacy rows used warning/critical semantics,
@@ -90,5 +119,5 @@ class QuickStatusTileRead(BaseModel):
     metric_key: QuickStatusMetricKey
     value: float | None
     display_value: str
-    status: Literal["ok", "warn", "critical", "unknown"]
+    status: Literal["ok", "info", "warn", "critical", "unknown"]
     reported_at: datetime | None = None

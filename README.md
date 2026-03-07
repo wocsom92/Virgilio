@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `4.0.1`
+Current version: `4.1.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -25,6 +25,10 @@ It has three runtime parts:
 - Time-range charts (`hourly`, `daily`, `weekly`) with previous/next window navigation.
 - Reboot markers on charts (detected from uptime resets).
 - Quick status tiles with thresholds and statuses (`ok`, `warn`, `critical`, `unknown`).
+- SSH quick status support:
+  - Last successful SSH login (elapsed `DD:HH:MM:SS`, always `ok`)
+  - Last failed SSH attempt (elapsed age with configurable warn/critical thresholds)
+  - SSH posture (`PubkeyAuthentication` and `PermitRootLogin`) mapped to `ok`/`warn`/`critical`
 - Role-based auth (`admin`, `viewer`) with bootstrap flow for first admin user.
 - Admin controls for retention days and auth session duration.
 - Telegram bot support (`/stats`, `/warn`, reboot actions).
@@ -71,6 +75,7 @@ Notes:
 - In production frontend builds, if `VITE_API_BASE_URL` is not set, frontend uses same-origin `/api` (proxied by frontend Nginx to `backend:8000`).
 - `docker-compose.yml` currently passes `VITE_API_BASE_URL` build arg with default `http://localhost:28000`. Set it explicitly for your target domain/port, or set it to `/api` for same-origin routing.
 - In development, frontend defaults to `http://localhost:8000`.
+- SSH quick status checks require host filesystem bind mount (set `MONITOR_HOST_ROOT_SOURCE=/` and keep `MONITOR_HOST_ROOT_TARGET=/hostfs`).
 
 ### Monitor-only (`docker-compose.monitor.yml`)
 

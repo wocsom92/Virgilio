@@ -63,6 +63,8 @@ class TelegramSettings(TimestampMixin, Base):
     bot_token: Mapped[str | None] = mapped_column(String(120), nullable=True)
     default_chat_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     warn_thresholds: Mapped[dict | None] = mapped_column(JSON)
+    notification_cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
+    quick_status_last_notification_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
@@ -97,5 +99,8 @@ class QuickStatusItem(TimestampMixin, Base):
     ping_endpoint: Mapped[str | None] = mapped_column(String(255))
     ping_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_notified_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pending_notification_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pending_notification_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     backend: Mapped[MonitoredBackend] = relationship("MonitoredBackend")

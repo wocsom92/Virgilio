@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.app.models.monitors import MonitoredBackend
 from backend.app.services.backend_ingest import safe_ingest_backend_metrics
+from backend.app.services.telegram_notifications import dispatch_due_quick_status_notifications
 
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,9 @@ class BackendPoller:
                 self._next_run[backend_id] = datetime.now(tz=timezone.utc) + timedelta(seconds=delay)
             else:
                 self._next_run[backend_id] = next_due
+
+        async with self._session_factory() as session:
+            await dispatch_due_quick_status_notifications(session)
 
     async def _load_schedules(self) -> list[BackendSchedule]:
         async with self._session_factory() as session:

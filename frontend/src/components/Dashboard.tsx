@@ -186,9 +186,11 @@ export function Dashboard({ canRefresh }: DashboardProps) {
                       ? 'quick-status--critical'
                       : tile.status === 'warn'
                         ? 'quick-status--warn'
-                        : tile.status === 'ok'
-                          ? 'quick-status--ok'
-                          : 'quick-status--unknown';
+                        : tile.status === 'info'
+                          ? 'quick-status--info'
+                          : tile.status === 'ok'
+                            ? 'quick-status--ok'
+                            : 'quick-status--unknown';
                   return (
                     <div className="quick-status-grid__item" key={tile.id}>
                       <div className={`quick-status-tile ${statusClass}`}>
