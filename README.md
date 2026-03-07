@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `4.1.0`
+Current version: `4.2.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -24,11 +24,16 @@ It has three runtime parts:
   - Network throughput (derived from interface counters)
 - Time-range charts (`hourly`, `daily`, `weekly`) with previous/next window navigation.
 - Reboot markers on charts (detected from uptime resets).
-- Quick status tiles with thresholds and statuses (`ok`, `warn`, `critical`, `unknown`).
+- Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
+- Quick status tile types include:
+  - Mounted volume usage (%)
+  - Mounted volume free space (`MB` / `GB` / `TB`)
+  - SSH login age and SSH posture
 - SSH quick status support:
-  - Last successful SSH login (elapsed `DD:HH:MM:SS`, always `ok`)
+  - Last successful SSH login (compact elapsed time such as `5d 23h`, always `ok`)
   - Last failed SSH attempt (elapsed age with configurable warn/critical thresholds)
   - SSH posture (`PubkeyAuthentication` and `PermitRootLogin`) mapped to `ok`/`warn`/`critical`
+- Admin quick status management supports search, per-server collapse, and per-server pagination.
 - Role-based auth (`admin`, `viewer`) with bootstrap flow for first admin user.
 - Admin controls for retention days and auth session duration.
 - Telegram bot support (`/stats`, `/warn`, reboot actions).

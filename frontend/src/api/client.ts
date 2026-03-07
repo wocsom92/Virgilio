@@ -209,6 +209,7 @@ export type QuickStatusMetricKey =
   | 'cpu_load_five'
   | 'cpu_load_fifteen'
   | 'mount_used_percent'
+  | 'mount_available_gb'
   | 'last_restart'
   | 'ping_result'
   | 'ping_delay_ms'
@@ -232,6 +233,7 @@ export interface QuickStatusItem {
 export interface QuickStatusTile {
   id: number;
   backend_id: number;
+  backend_display_order: number;
   backend_name: string;
   label: string;
   metric_key: QuickStatusMetricKey;

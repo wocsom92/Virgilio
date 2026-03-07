@@ -194,8 +194,8 @@ body {
 }
 
 .quick-status--info {
-  background: linear-gradient(135deg, rgba(29, 78, 137, 0.55), rgba(13, 40, 74, 0.7));
-  border-color: rgba(93, 173, 255, 0.4);
+  background: linear-gradient(135deg, rgba(24, 125, 80, 0.5), rgba(14, 64, 46, 0.6));
+  border-color: rgba(38, 194, 129, 0.45);
 }
 
 .quick-status--warn {

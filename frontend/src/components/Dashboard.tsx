@@ -137,7 +137,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
       return {
         backendId,
         backendName: backend?.name ?? items[0]?.backend_name ?? `Backend #${backendId}`,
-        displayOrder: backend?.display_order ?? Number.MAX_SAFE_INTEGER,
+        displayOrder: backend?.display_order ?? items[0]?.backend_display_order ?? Number.MAX_SAFE_INTEGER,
         items,
       };
     });

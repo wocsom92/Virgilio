@@ -51,6 +51,7 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
   return {
     id: overrides.id ?? 1,
     backend_id: overrides.backend_id ?? 1,
+    backend_display_order: overrides.backend_display_order ?? 1,
     backend_name: overrides.backend_name ?? 'Backend',
     label: overrides.label ?? 'Disk',
     metric_key: overrides.metric_key ?? 'disk_usage_percent',
@@ -121,6 +122,23 @@ describe('Dashboard', () => {
     vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
       makeQuickStatusTile({ id: 10, backend_id: 2, backend_name: 'Zulu' }),
       makeQuickStatusTile({ id: 11, backend_id: 1, backend_name: 'Alpha' }),
+    ]);
+
+    const { container } = render(<Dashboard canRefresh={false} />);
+
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll('.quick-status-section__title')).map(
+        (node) => node.textContent
+      );
+      expect(titles).toEqual(['Alpha', 'Zulu']);
+    });
+  });
+
+  it('keeps quick status sections ordered by tile backend order when dashboard data is unavailable', async () => {
+    vi.mocked(fetchDashboard).mockRejectedValue(new Error('dashboard unavailable'));
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({ id: 10, backend_id: 2, backend_display_order: 2, backend_name: 'Zulu' }),
+      makeQuickStatusTile({ id: 11, backend_id: 1, backend_display_order: 1, backend_name: 'Alpha' }),
     ]);
 
     const { container } = render(<Dashboard canRefresh={false} />);

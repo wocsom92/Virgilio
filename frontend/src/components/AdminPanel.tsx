@@ -43,6 +43,7 @@ interface AdminPanelProps {
 const MOUNTED_USAGE_KEY = 'mounted_usage' as const;
 const AUTH_SESSION_MINUTES_MIN = 15;
 const AUTH_SESSION_MINUTES_MAX = 60 * 24 * 30;
+const QUICK_STATUS_PAGE_SIZE = 5;
 
 const metricOptions = [
   { key: 'cpu_temperature_c', label: 'CPU temperature' },
@@ -163,6 +164,16 @@ const quickStatusMetricOptions: Array<{
     helper: 'Percent used',
     requiresThresholds: true,
     thresholdDirection: 'higher',
+    requiresPing: false,
+  },
+  {
+    key: 'mount_available_gb',
+    label: 'Mounted volume free space',
+    defaultWarning: 5,
+    defaultCritical: 1,
+    helper: 'Free space left on a mounted volume. Displays MB, GB, or TB; thresholds are configured in GB.',
+    requiresThresholds: true,
+    thresholdDirection: 'lower',
     requiresPing: false,
   },
   {
@@ -498,6 +509,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [quickStatusStatus, setQuickStatusStatus] = useState<string | null>(null);
   const [quickStatusDraggingId, setQuickStatusDraggingId] = useState<number | null>(null);
   const [quickStatusOrdering, setQuickStatusOrdering] = useState(false);
+  const [quickStatusSearch, setQuickStatusSearch] = useState('');
+  const [quickStatusCollapsedByBackend, setQuickStatusCollapsedByBackend] = useState<Record<number, boolean>>({});
+  const [quickStatusPageByBackend, setQuickStatusPageByBackend] = useState<Record<number, number>>({});
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [userStatus, setUserStatus] = useState<string | null>(null);
   const [userForm, setUserForm] = useState<{ username: string; password: string; role: AuthRole }>({
@@ -871,7 +885,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         return;
       }
     }
-    if (quickStatusForm.metric_key === 'mount_used_percent' && !quickStatusForm.mount_path.trim()) {
+    if (
+      (quickStatusForm.metric_key === 'mount_used_percent' || quickStatusForm.metric_key === 'mount_available_gb') &&
+      !quickStatusForm.mount_path.trim()
+    ) {
       setQuickStatusStatus('Enter a mount path for mounted volume tiles.');
       return;
     }
@@ -888,7 +905,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       backend_id: Number(quickStatusForm.backend_id),
       label: quickStatusForm.label.trim(),
       metric_key: quickStatusForm.metric_key,
-      mount_path: quickStatusForm.metric_key === 'mount_used_percent' ? quickStatusForm.mount_path.trim() : null,
+      mount_path:
+        quickStatusForm.metric_key === 'mount_used_percent' || quickStatusForm.metric_key === 'mount_available_gb'
+          ? quickStatusForm.mount_path.trim()
+          : null,
       warning_threshold: Number(quickStatusForm.warning_threshold || 0),
       critical_threshold: Number(quickStatusForm.critical_threshold || 0),
       ping_endpoint: metricMeta?.requiresPing ? quickStatusForm.ping_endpoint.trim() : null,
@@ -1416,6 +1436,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   );
 
   const quickStatusGroups = useMemo(() => {
+    const search = quickStatusSearch.trim().toLocaleLowerCase();
     const grouped = new Map<number, QuickStatusItem[]>();
     for (const item of quickStatusItems) {
       const current = grouped.get(item.backend_id) ?? [];
@@ -1428,12 +1449,46 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     const extraBackendIds = Array.from(grouped.keys())
       .filter((backendId) => !backendNameById.has(backendId))
       .sort((a, b) => a - b);
-    return [...orderedBackendIds, ...extraBackendIds].map((backendId) => ({
-      backendId,
-      backendName: backendNameById.get(backendId) ?? `Backend #${backendId}`,
-      items: grouped.get(backendId) ?? [],
-    }));
-  }, [backends, backendNameById, quickStatusItems]);
+    return [...orderedBackendIds, ...extraBackendIds]
+      .map((backendId) => {
+        const backendName = backendNameById.get(backendId) ?? `Backend #${backendId}`;
+        const allItems = grouped.get(backendId) ?? [];
+        const matchesBackend = search.length > 0 && backendName.toLocaleLowerCase().includes(search);
+        const filteredItems =
+          search.length === 0 || matchesBackend
+            ? allItems
+            : allItems.filter((item) => {
+                const metricLabel =
+                  quickStatusMetricOptions.find((option) => option.key === item.metric_key)?.label.toLocaleLowerCase() ??
+                  item.metric_key.toLocaleLowerCase();
+                const haystack = [
+                  item.label,
+                  metricLabel,
+                  item.mount_path ?? '',
+                  item.ping_endpoint ?? '',
+                ]
+                  .join(' ')
+                  .toLocaleLowerCase();
+                return haystack.includes(search);
+              });
+        if (filteredItems.length === 0) {
+          return null;
+        }
+        const totalPages = Math.max(1, Math.ceil(filteredItems.length / QUICK_STATUS_PAGE_SIZE));
+        const currentPage = Math.min(quickStatusPageByBackend[backendId] ?? 1, totalPages);
+        const start = (currentPage - 1) * QUICK_STATUS_PAGE_SIZE;
+        return {
+          backendId,
+          backendName,
+          allItemsCount: allItems.length,
+          filteredItemsCount: filteredItems.length,
+          currentPage,
+          totalPages,
+          items: filteredItems.slice(start, start + QUICK_STATUS_PAGE_SIZE),
+        };
+      })
+      .filter((group): group is NonNullable<typeof group> => group !== null);
+  }, [backends, backendNameById, quickStatusItems, quickStatusPageByBackend, quickStatusSearch]);
 
   const quickStatusMetricMeta = quickStatusMetricOptions.find(
     (option) => option.key === quickStatusForm.metric_key
@@ -1443,7 +1498,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (quickStatusForm.metric_key === 'last_restart') {
       return 'hours';
     }
-    if (quickStatusForm.metric_key === 'memory_available_gb') {
+    if (quickStatusForm.metric_key === 'memory_available_gb' || quickStatusForm.metric_key === 'mount_available_gb') {
       return 'GB';
     }
     if (quickStatusForm.metric_key === 'ping_delay_ms') {
@@ -1763,21 +1818,54 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             <div className="card bg-dark border border-secondary">
               <div className="card-header border-secondary text-uppercase fw-semibold">Existing tiles</div>
               <div className="card-body d-flex flex-column gap-3">
+                <div className="d-flex flex-column flex-lg-row gap-2 justify-content-between align-items-lg-center">
+                  <div className="text-secondary small">
+                    Search tiles by server, label, metric, mount path, or ping target.
+                  </div>
+                  <input
+                    className="form-control bg-dark text-light border-secondary"
+                    style={{ maxWidth: '360px' }}
+                    value={quickStatusSearch}
+                    onChange={(event) => {
+                      setQuickStatusSearch(event.target.value);
+                      setQuickStatusPageByBackend({});
+                    }}
+                    placeholder="Search quick status tiles"
+                  />
+                </div>
                 {isAdmin && quickStatusItems.length > 1 && (
                   <div className="text-secondary small">Drag tiles to reorder within each backend.</div>
                 )}
                 {quickStatusItems.length === 0 ? (
                   <div className="text-secondary small">No quick status tiles configured yet.</div>
+                ) : quickStatusGroups.length === 0 ? (
+                  <div className="text-secondary small">No quick status tiles match the current search.</div>
                 ) : (
                   quickStatusGroups.map((group) => (
                     <div key={group.backendId} className="rounded-3 border border-secondary p-3 d-flex flex-column gap-3">
-                      <div className="d-flex justify-content-between align-items-center gap-2">
-                        <div className="text-uppercase small fw-semibold text-secondary">{group.backendName}</div>
-                        <span className="badge bg-secondary-subtle text-secondary border border-secondary">
-                          {group.items.length} {group.items.length === 1 ? 'tile' : 'tiles'}
+                      <button
+                        type="button"
+                        className="btn btn-outline-light d-flex justify-content-between align-items-center gap-2 text-start"
+                        onClick={() =>
+                          setQuickStatusCollapsedByBackend((prev) => ({
+                            ...prev,
+                            [group.backendId]: !(prev[group.backendId] ?? true),
+                          }))
+                        }
+                      >
+                        <span className="text-uppercase small fw-semibold">{group.backendName}</span>
+                        <span className="d-flex align-items-center gap-2">
+                          <span className="badge bg-secondary-subtle text-secondary border border-secondary">
+                            {group.filteredItemsCount}
+                            {group.filteredItemsCount !== group.allItemsCount ? ` / ${group.allItemsCount}` : ''}{' '}
+                            {group.filteredItemsCount === 1 ? 'tile' : 'tiles'}
+                          </span>
+                          <span>{quickStatusSearch.trim() ? 'Hide' : (quickStatusCollapsedByBackend[group.backendId] ?? true) ? 'Expand' : 'Collapse'}</span>
                         </span>
-                      </div>
-                      {group.items.map((item) => {
+                      </button>
+                      {(quickStatusSearch.trim() || !(quickStatusCollapsedByBackend[group.backendId] ?? true)) && (
+                        <>
+                          {group.items.map((item) => {
                         const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
                         const thresholdLabel =
                           meta?.requiresThresholds
@@ -1789,61 +1877,99 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                 ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
                                 : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
                             : 'Status OK/Failed';
-                        return (
-                          <div
-                            className={`card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center ${
-                              quickStatusDraggingId === item.id ? 'opacity-50' : ''
-                            }`}
-                            key={item.id}
-                            draggable={isAdmin && !quickStatusOrdering}
-                            onDragStart={(event) => {
-                              if (!isAdmin || quickStatusOrdering) return;
-                              setQuickStatusDraggingId(item.id);
-                              event.dataTransfer.effectAllowed = 'move';
-                              event.dataTransfer.setData('text/plain', String(item.id));
-                            }}
-                            onDragOver={(event) => {
-                              if (!isAdmin || quickStatusOrdering) return;
-                              event.preventDefault();
-                              event.dataTransfer.dropEffect = 'move';
-                            }}
-                            onDragEnd={() => setQuickStatusDraggingId(null)}
-                            onDrop={() => void handleQuickStatusDrop(item.id)}
-                          >
-                            <div className="flex-grow-1">
-                              <div className="fw-semibold">{item.label}</div>
-                              <div className="text-secondary small">{getQuickStatusMetricLabel(item.metric_key)}</div>
+                            return (
+                              <div
+                                className={`card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center ${
+                                  quickStatusDraggingId === item.id ? 'opacity-50' : ''
+                                }`}
+                                key={item.id}
+                                draggable={isAdmin && !quickStatusOrdering}
+                                onDragStart={(event) => {
+                                  if (!isAdmin || quickStatusOrdering) return;
+                                  setQuickStatusDraggingId(item.id);
+                                  event.dataTransfer.effectAllowed = 'move';
+                                  event.dataTransfer.setData('text/plain', String(item.id));
+                                }}
+                                onDragOver={(event) => {
+                                  if (!isAdmin || quickStatusOrdering) return;
+                                  event.preventDefault();
+                                  event.dataTransfer.dropEffect = 'move';
+                                }}
+                                onDragEnd={() => setQuickStatusDraggingId(null)}
+                                onDrop={() => void handleQuickStatusDrop(item.id)}
+                              >
+                                <div className="flex-grow-1">
+                                  <div className="fw-semibold">{item.label}</div>
+                                  <div className="text-secondary small">{getQuickStatusMetricLabel(item.metric_key)}</div>
+                                  <div className="text-secondary small">
+                                    {thresholdLabel}
+                                    {(item.metric_key === 'mount_used_percent' || item.metric_key === 'mount_available_gb') &&
+                                    item.mount_path
+                                      ? ` · ${item.mount_path}`
+                                      : ''}
+                                    {meta?.requiresPing
+                                      ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
+                                      : ''}
+                                  </div>
+                                </div>
+                                <div className="d-flex gap-2">
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-outline-light"
+                                    onClick={() => handleQuickStatusEdit(item)}
+                                    disabled={!isAdmin}
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-sm btn-outline-danger"
+                                    onClick={() => void handleQuickStatusDelete(item)}
+                                    disabled={!isAdmin}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                          {group.totalPages > 1 && (
+                            <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap">
                               <div className="text-secondary small">
-                                {thresholdLabel}
-                                {item.metric_key === 'mount_used_percent' && item.mount_path
-                                  ? ` · ${item.mount_path}`
-                                  : ''}
-                                {meta?.requiresPing
-                                  ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
-                                  : ''}
+                                Page {group.currentPage} of {group.totalPages}
+                              </div>
+                              <div className="d-flex gap-2">
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-outline-light"
+                                  onClick={() =>
+                                    setQuickStatusPageByBackend((prev) => ({
+                                      ...prev,
+                                      [group.backendId]: Math.max(1, group.currentPage - 1),
+                                    }))
+                                  }
+                                  disabled={group.currentPage <= 1}
+                                >
+                                  Previous
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-outline-light"
+                                  onClick={() =>
+                                    setQuickStatusPageByBackend((prev) => ({
+                                      ...prev,
+                                      [group.backendId]: Math.min(group.totalPages, group.currentPage + 1),
+                                    }))
+                                  }
+                                  disabled={group.currentPage >= group.totalPages}
+                                >
+                                  Next
+                                </button>
                               </div>
                             </div>
-                            <div className="d-flex gap-2">
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-outline-light"
-                                onClick={() => handleQuickStatusEdit(item)}
-                                disabled={!isAdmin}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                className="btn btn-sm btn-outline-danger"
-                                onClick={() => void handleQuickStatusDelete(item)}
-                                disabled={!isAdmin}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                          )}
+                        </>
+                      )}
                     </div>
                   ))
                 )}
@@ -1896,7 +2022,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         {quickStatusMetricOptions.find((option) => option.key === quickStatusForm.metric_key)?.helper}
                       </div>
                     </div>
-                    {quickStatusForm.metric_key === 'mount_used_percent' && (
+                    {(quickStatusForm.metric_key === 'mount_used_percent' ||
+                      quickStatusForm.metric_key === 'mount_available_gb') && (
                       <div className="col-12">
                         <label className="form-label">Mount path</label>
                         <input

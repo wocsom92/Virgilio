@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 _SSH_LOG_TIMESTAMP_RE = re.compile(r"^(?P<stamp>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+")
 _LAST_OUTPUT_TIMESTAMP_RE = re.compile(r"([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})")
+_JOURNAL_SHORT_UNIX_RE = re.compile(r"^(?P<stamp>\d+(?:\.\d+)?)\s+")
 _SSH_SUCCESS_MARKERS = (
     "Accepted password",
     "Accepted publickey",
@@ -103,6 +104,37 @@ def _host_candidate_paths(path: str) -> list[str]:
     return deduped
 
 
+def _host_root() -> str | None:
+    host_root = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    if not host_root or host_root == "/":
+        return None
+    return host_root
+
+
+def _candidate_host_command_invocations(command: str, args: list[str], *, include_chroot: bool = True) -> list[list[str]]:
+    candidates: list[list[str]] = []
+    local_binary = shutil.which(command)
+    if local_binary:
+        candidates.append([local_binary, *args])
+
+    host_root = _host_root()
+    chroot_bin = shutil.which("chroot")
+    if include_chroot and host_root and chroot_bin:
+        for base in (f"/usr/bin/{command}", f"/bin/{command}", f"/usr/sbin/{command}", f"/sbin/{command}"):
+            host_binary = os.path.join(host_root, base.lstrip("/"))
+            if os.path.exists(host_binary):
+                candidates.append([chroot_bin, host_root, base, *args])
+
+    seen: set[str] = set()
+    deduped: list[list[str]] = []
+    for candidate in candidates:
+        key = " ".join(candidate)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(candidate)
+    return deduped
+
+
 def _read_text_tail(path: str, max_bytes: int = 512_000) -> str:
     if path.endswith(".gz"):
         with gzip.open(path, "rt", encoding="utf-8", errors="ignore") as handle:
@@ -169,6 +201,12 @@ def _extract_ssh_login_ages() -> tuple[int | None, int | None]:
             if any(marker in line for marker in _SSH_FAILURE_MARKERS):
                 if latest_failure is None or stamp > latest_failure:
                     latest_failure = stamp
+    if latest_success is None or latest_failure is None:
+        journal_success, journal_failure = _extract_ssh_login_ages_from_journal()
+        if latest_success is None:
+            latest_success = journal_success
+        if latest_failure is None:
+            latest_failure = journal_failure
     success_age = int((now - latest_success).total_seconds()) if latest_success else None
     failure_age = int((now - latest_failure).total_seconds()) if latest_failure else None
     if success_age is None:
@@ -182,41 +220,191 @@ def _extract_ssh_login_ages() -> tuple[int | None, int | None]:
     return success_age, failure_age
 
 
-def _extract_login_age_from_last_command(command: str, host_log_path: str) -> int | None:
-    binary = shutil.which(command)
-    if not binary:
+def _journal_directories() -> list[str]:
+    paths: list[str] = []
+    for raw in ("/var/log/journal", "/run/log/journal"):
+        for candidate in _host_candidate_paths(raw):
+            if os.path.isdir(candidate):
+                paths.append(candidate)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        if path not in seen:
+            seen.add(path)
+            deduped.append(path)
+    return deduped
+
+
+def _journal_root() -> str | None:
+    host_root = _host_root()
+    if host_root is None:
         return None
+    for raw in ("/var/log/journal", "/run/log/journal"):
+        for candidate in _host_candidate_paths(raw):
+            if os.path.isdir(candidate):
+                return host_root
+    return None
+
+
+def _parse_journal_short_unix_timestamp(line: str) -> datetime | None:
+    match = _JOURNAL_SHORT_UNIX_RE.match(line.strip())
+    if not match:
+        return None
+    try:
+        return datetime.fromtimestamp(float(match.group("stamp")))
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _extract_ssh_login_ages_from_journal() -> tuple[datetime | None, datetime | None]:
+    journal_root = _journal_root()
+    directories = _journal_directories() if journal_root is None else []
+    if journal_root is None and not directories:
+        return None, None
+
+    def _run_journal(args: list[str]) -> str:
+        base_args = ["--no-pager", "-n", "200", "-o", "short-unix"]
+        if journal_root is not None:
+            for command in _candidate_host_command_invocations("journalctl", [*base_args, *args]):
+                try:
+                    result = subprocess.run(
+                        command,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=8,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+            for command in _candidate_host_command_invocations(
+                "journalctl",
+                [f"--root={journal_root}", *base_args, *args],
+                include_chroot=False,
+            ):
+                try:
+                    result = subprocess.run(
+                        command,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=8,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+            return ""
+
+        for directory in directories:
+            for command in _candidate_host_command_invocations(
+                "journalctl",
+                ["--directory", directory, *base_args, *args],
+                include_chroot=False,
+            ):
+                try:
+                    result = subprocess.run(
+                        command,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=8,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if result.returncode == 0 and result.stdout:
+                    return result.stdout
+        return ""
+
+    latest_success: datetime | None = None
+    latest_failure: datetime | None = None
+    output = _run_journal(["-u", "ssh"])
+    if not output:
+        output = _run_journal(["_COMM=sshd"])
+    for line in output.splitlines():
+        if "sshd" not in line:
+            continue
+        stamp = _parse_journal_short_unix_timestamp(line)
+        if stamp is None:
+            continue
+        if any(marker in line for marker in _SSH_SUCCESS_MARKERS):
+            if latest_success is None or stamp > latest_success:
+                latest_success = stamp
+        if any(marker in line for marker in _SSH_FAILURE_MARKERS):
+            if latest_failure is None or stamp > latest_failure:
+                latest_failure = stamp
+    return latest_success, latest_failure
+
+
+def _extract_login_age_from_last_command(command: str, host_log_path: str) -> int | None:
     now = datetime.now()
     for candidate in _host_candidate_paths(host_log_path):
-        try:
-            result = subprocess.run(
-                [binary, "-F", "-w", "-f", candidate, "-n", "20"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            continue
-        if result.returncode not in (0, 1):
-            continue
-        output = (result.stdout or "").strip()
-        if not output:
-            continue
-        for line in output.splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith(("wtmp begins", "btmp begins")):
-                continue
-            if stripped.startswith(("reboot", "shutdown", "runlevel")):
-                continue
-            match = _LAST_OUTPUT_TIMESTAMP_RE.search(stripped)
-            if not match:
-                continue
+        for invocation in _candidate_host_command_invocations(
+            command,
+            ["-F", "-w", "-f", candidate, "-n", "20"],
+            include_chroot=False,
+        ):
             try:
-                stamp = datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
-            except ValueError:
+                result = subprocess.run(
+                    invocation,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+            except (OSError, subprocess.TimeoutExpired):
                 continue
-            return max(0, int((now - stamp).total_seconds()))
+            if result.returncode not in (0, 1):
+                continue
+            output = (result.stdout or "").strip()
+            if not output:
+                continue
+            for line in output.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith(("wtmp begins", "btmp begins")):
+                    continue
+                if stripped.startswith(("reboot", "shutdown", "runlevel")):
+                    continue
+                match = _LAST_OUTPUT_TIMESTAMP_RE.search(stripped)
+                if not match:
+                    continue
+                try:
+                    stamp = datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
+                except ValueError:
+                    continue
+                return max(0, int((now - stamp).total_seconds()))
+    if _host_root():
+        for invocation in _candidate_host_command_invocations(command, ["-F", "-w", "-f", host_log_path, "-n", "20"]):
+            try:
+                result = subprocess.run(
+                    invocation,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if result.returncode not in (0, 1):
+                continue
+            output = (result.stdout or "").strip()
+            if not output:
+                continue
+            for line in output.splitlines():
+                stripped = line.strip()
+                if not stripped or stripped.startswith(("wtmp begins", "btmp begins")):
+                    continue
+                if stripped.startswith(("reboot", "shutdown", "runlevel")):
+                    continue
+                match = _LAST_OUTPUT_TIMESTAMP_RE.search(stripped)
+                if not match:
+                    continue
+                try:
+                    stamp = datetime.strptime(match.group(1), "%a %b %d %H:%M:%S %Y")
+                except ValueError:
+                    continue
+                return max(0, int((now - stamp).total_seconds()))
     return None
 
 
@@ -582,6 +770,8 @@ def collect_metrics() -> dict[str, Any]:
             _list_running_docker_containers() if settings.expose_docker_running_containers else None
         ),
         "disk_usage_percent": round(disk.percent, 2),
+        "disk_total_gb": round(disk.total / (1024 ** 3), 2),
+        "disk_available_gb": round(disk.free / (1024 ** 3), 2),
         "mounted_usage": _mounted_usage(mount_points),
         "configured_mounts": mount_points,
         "cpu_load": {"one": load_one, "five": load_five, "fifteen": load_fifteen},

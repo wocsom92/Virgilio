@@ -188,6 +188,7 @@ def test_read_sshd_effective_settings_parses_include(tmp_path, monkeypatch):
 
 def test_extract_ssh_login_ages_uses_last_fallback(monkeypatch):
     monkeypatch.setattr(metrics, "_candidate_ssh_log_files", lambda: [])
+    monkeypatch.setattr(metrics, "_extract_ssh_login_ages_from_journal", lambda: (None, None))
     monkeypatch.setattr(
         metrics,
         "_extract_login_age_from_last_command",
@@ -198,3 +199,29 @@ def test_extract_ssh_login_ages_uses_last_fallback(monkeypatch):
 
     assert success_age == 123
     assert failure_age == 456
+
+
+def test_extract_ssh_login_ages_uses_journal_fallback(monkeypatch):
+    fixed_now = metrics.datetime(2026, 3, 7, 14, 40, 0)
+
+    class FixedDateTime(metrics.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(metrics, "datetime", FixedDateTime)
+    monkeypatch.setattr(metrics, "_candidate_ssh_log_files", lambda: [])
+    monkeypatch.setattr(
+        metrics,
+        "_extract_ssh_login_ages_from_journal",
+        lambda: (
+            FixedDateTime(2026, 3, 7, 14, 39, 30),
+            FixedDateTime(2026, 3, 7, 14, 35, 0),
+        ),
+    )
+    monkeypatch.setattr(metrics, "_extract_login_age_from_last_command", lambda _command, _path: None)
+
+    success_age, failure_age = metrics._extract_ssh_login_ages()
+
+    assert success_age == 30
+    assert failure_age == 300

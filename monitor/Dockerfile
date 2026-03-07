@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS runtime
+FROM python:3.11-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -9,11 +9,19 @@ WORKDIR /app
 COPY monitor/requirements.txt /tmp/requirements.txt
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential util-linux login \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends build-essential \
+    && pip install --no-cache-dir --prefix=/install -r /tmp/requirements.txt \
+    && rm -rf /var/lib/apt/lists/* /tmp/requirements.txt
 
-RUN pip install --no-cache-dir -r /tmp/requirements.txt \
-    && rm -rf /tmp/requirements.txt
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
 
 COPY monitor/app /app/monitor/app
 

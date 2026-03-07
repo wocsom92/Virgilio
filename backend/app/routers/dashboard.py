@@ -56,8 +56,15 @@ async def fetch_quick_status_tiles(
 ) -> list[QuickStatusTileRead]:
     result = await session.execute(
         select(QuickStatusItem)
+        .join(MonitoredBackend, QuickStatusItem.backend_id == MonitoredBackend.id)
         .options(selectinload(QuickStatusItem.backend))
-        .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
+        .order_by(
+            MonitoredBackend.display_order,
+            MonitoredBackend.name,
+            MonitoredBackend.id,
+            QuickStatusItem.display_order,
+            QuickStatusItem.id,
+        )
     )
     items = list(result.scalars())
     return await build_quick_status_tiles(session, items)

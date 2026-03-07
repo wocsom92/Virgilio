@@ -15,6 +15,7 @@ QuickStatusMetricKey = Literal[
     "cpu_load_five",
     "cpu_load_fifteen",
     "mount_used_percent",
+    "mount_available_gb",
     "last_restart",
     "ping_result",
     "ping_delay_ms",
@@ -34,6 +35,7 @@ SUPPORTED_QUICK_STATUS_METRIC_KEYS: set[str] = {
     "cpu_load_five",
     "cpu_load_fifteen",
     "mount_used_percent",
+    "mount_available_gb",
     "last_restart",
     "ping_result",
     "ping_delay_ms",
@@ -43,7 +45,7 @@ SUPPORTED_QUICK_STATUS_METRIC_KEYS: set[str] = {
 }
 
 _REQUIRES_PING_ENDPOINT = {"ping_result", "ping_delay_ms"}
-_LOWER_IS_WORSE = {"last_restart", "memory_available_gb", "ssh_last_unsuccessful_attempt"}
+_LOWER_IS_WORSE = {"last_restart", "memory_available_gb", "mount_available_gb", "ssh_last_unsuccessful_attempt"}
 _NO_THRESHOLD_METRICS = {"ping_result", "ssh_last_successful_login", "ssh_status", "swap_used_percent"}
 
 
@@ -89,9 +91,9 @@ class QuickStatusItemBase(BaseModel):
                 if self.warning_threshold >= self.critical_threshold:
                     raise ValueError("warning_threshold must be less than critical_threshold")
 
-        if self.metric_key == "mount_used_percent" and not (self.mount_path or "").strip():
-            raise ValueError("mount_path is required for mounted usage tiles")
-        if self.metric_key != "mount_used_percent":
+        if self.metric_key in {"mount_used_percent", "mount_available_gb"} and not (self.mount_path or "").strip():
+            raise ValueError("mount_path is required for mounted volume tiles")
+        if self.metric_key not in {"mount_used_percent", "mount_available_gb"}:
             self.mount_path = None
         return self
 
@@ -114,6 +116,7 @@ class QuickStatusItemRead(QuickStatusItemBase):
 class QuickStatusTileRead(BaseModel):
     id: int
     backend_id: int
+    backend_display_order: int
     backend_name: str
     label: str
     metric_key: QuickStatusMetricKey

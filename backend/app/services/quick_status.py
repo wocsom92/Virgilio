@@ -20,7 +20,7 @@ from backend.app.services.monitor_client import MonitorClientError, fetch_ping
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "swap_used_percent", "mount_used_percent"}
-_REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "ssh_last_unsuccessful_attempt"}
+_REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "mount_available_gb", "ssh_last_unsuccessful_attempt"}
 _PING_METRICS = {"ping_result", "ping_delay_ms"}
 _INFO_ONLY_METRICS = {"swap_used_percent"}
 _ALERT_STATUSES = {"warn", "critical"}
@@ -56,6 +56,19 @@ _PING_CACHE: dict[int, PingCheckResult] = {}
 _PING_LOCK = asyncio.Lock()
 
 
+def _quick_status_item_sort_key(item: QuickStatusItem) -> tuple[int, str, int, int, int]:
+    backend = getattr(item, "backend", None)
+    backend_order = backend.display_order if backend is not None else 0
+    backend_name = backend.name if backend is not None else ""
+    return (
+        backend_order,
+        backend_name.casefold(),
+        item.backend_id,
+        item.display_order,
+        item.id,
+    )
+
+
 def _extract_mount_used_percent(snapshot: MetricSnapshot, mount_path: str | None) -> float | None:
     if not mount_path:
         return None
@@ -66,6 +79,26 @@ def _extract_mount_used_percent(snapshot: MetricSnapshot, mount_path: str | None
         if isinstance(entry, dict) and entry.get("mount_point") == mount_path:
             value = entry.get("used_percent")
             return float(value) if isinstance(value, (int, float)) else None
+    return None
+
+
+def _extract_mount_available_gb(snapshot: MetricSnapshot, mount_path: str | None) -> float | None:
+    if not mount_path:
+        return None
+    mounts = snapshot.mounted_usage or []
+    if not isinstance(mounts, list):
+        mounts = []
+    for entry in mounts:
+        if not isinstance(entry, dict) or entry.get("mount_point") != mount_path:
+            continue
+        total_gb = entry.get("total_gb")
+        used_percent = entry.get("used_percent")
+        if not isinstance(total_gb, (int, float)) or not isinstance(used_percent, (int, float)):
+            return None
+        free_gb = float(total_gb) * max(0.0, min(100.0, 100.0 - float(used_percent))) / 100.0
+        return free_gb
+    if mount_path == "/":
+        return _extract_raw_payload_value(snapshot, "disk_available_gb")
     return None
 
 
@@ -136,6 +169,8 @@ def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | N
         return _extract_cpu_load_fifteen(snapshot)
     if metric_key == "mount_used_percent":
         return _extract_mount_used_percent(snapshot, mount_path)
+    if metric_key == "mount_available_gb":
+        return _extract_mount_available_gb(snapshot, mount_path)
     if metric_key == "last_restart":
         return _extract_uptime_hours(snapshot)
     if metric_key == "ssh_last_successful_login":
@@ -155,8 +190,12 @@ def _format_value(metric_key: str, value: float | None) -> str:
         return f"{value:.0f}%"
     if metric_key == "cpu_temperature_c":
         return f"{value:.1f}C"
-    if metric_key == "memory_available_gb":
-        return f"{value:.2f}GB"
+    if metric_key in {"memory_available_gb", "mount_available_gb"}:
+        if value >= 1024:
+            return f"{value / 1024:.2f}TB"
+        if value >= 1:
+            return f"{value:.2f}GB"
+        return f"{value * 1024:.0f}MB"
     if metric_key == "docker_container_count":
         return f"{int(round(value))}"
     if metric_key == "last_restart":
@@ -164,7 +203,8 @@ def _format_value(metric_key: str, value: float | None) -> str:
     if metric_key == "ping_delay_ms":
         return f"{value:.0f}ms"
     if metric_key in {"ssh_last_successful_login", "ssh_last_unsuccessful_attempt"}:
-        return _format_elapsed_seconds(value if metric_key == "ssh_last_successful_login" else value * 3600)
+        hours = value / 3600 if metric_key == "ssh_last_successful_login" else value
+        return _format_uptime_hours(hours)
     if metric_key == "ssh_status":
         level = int(round(value))
         if level <= 0:
@@ -296,7 +336,10 @@ async def build_quick_status_tiles(
     session: AsyncSession,
     items: Iterable[QuickStatusItem],
 ) -> list[QuickStatusTileRead]:
-    items_list = [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))]
+    items_list = sorted(
+        [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))],
+        key=_quick_status_item_sort_key,
+    )
     if not items_list:
         return []
 
@@ -352,6 +395,7 @@ async def build_quick_status_tiles(
             QuickStatusTileRead(
                 id=item.id,
                 backend_id=item.backend_id,
+                backend_display_order=backend.display_order if backend else 0,
                 backend_name=backend.name if backend else "Unknown",
                 label=item.label,
                 metric_key=item.metric_key,
