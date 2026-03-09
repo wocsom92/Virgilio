@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchDashboard, fetchQuickStatusTiles, MonitoredBackend, QuickStatusTile, refreshBackend } from '../api/client';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { BackendCard } from './BackendCard';
+import { QuickStatusTileCard } from './QuickStatusTileCard';
 
 interface DashboardProps {
   canRefresh: boolean;
@@ -13,6 +14,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
   const [error, setError] = useState<string | null>(null);
   const [quickStatusTiles, setQuickStatusTiles] = useState<QuickStatusTile[]>([]);
   const [quickStatusError, setQuickStatusError] = useState<string | null>(null);
+  const [selectedQuickStatusTileId, setSelectedQuickStatusTileId] = useState<number | null>(null);
   const isQuickStatusFetchingRef = useRef(false);
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
   const [hiddenBackendIds, setHiddenBackendIds] = useLocalStorage<number[]>('dashboard-hidden-backends', []);
@@ -181,26 +183,49 @@ export function Dashboard({ canRefresh }: DashboardProps) {
               </div>
               <div className="quick-status-grid">
                 {group.items.map((tile) => {
-                  const statusClass =
-                    tile.status === 'critical'
-                      ? 'quick-status--critical'
-                      : tile.status === 'warn'
-                        ? 'quick-status--warn'
-                        : tile.status === 'info'
-                          ? 'quick-status--info'
-                          : tile.status === 'ok'
-                            ? 'quick-status--ok'
-                            : 'quick-status--unknown';
                   return (
                     <div className="quick-status-grid__item" key={tile.id}>
-                      <div className={`quick-status-tile ${statusClass}`}>
-                        <div className="quick-status-value">{tile.display_value}</div>
-                        <div className="quick-status-label">{tile.label}</div>
-                      </div>
+                      <QuickStatusTileCard
+                        tile={tile}
+                        onClick={
+                          tile.details && tile.details.length > 0
+                            ? () =>
+                                setSelectedQuickStatusTileId((current) => (current === tile.id ? null : tile.id))
+                            : undefined
+                        }
+                      />
                     </div>
                   );
                 })}
               </div>
+              {(() => {
+                const selectedTile = group.items.find((tile) => tile.id === selectedQuickStatusTileId);
+                if (!selectedTile?.details?.length) {
+                  return null;
+                }
+                return (
+                  <div className="quick-status-detail card-panel rounded-4 p-3 mt-3">
+                    <div className="d-flex justify-content-between align-items-center gap-2 mb-2">
+                      <div>
+                        <div className="text-uppercase card-panel__heading fw-semibold">{selectedTile.label}</div>
+                        <div className="small text-secondary">{selectedTile.backend_name}</div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-outline-light"
+                        onClick={() => setSelectedQuickStatusTileId(null)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                    <ul className="mb-0 small quick-status-detail__list">
+                      {selectedTile.details.map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  </div>
+                );
+              })()}
             </section>
           ))}
         </div>

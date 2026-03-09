@@ -189,13 +189,9 @@ def _format_value(metric_key: str, value: float | None) -> str:
     if metric_key in _PERCENT_METRICS:
         return f"{value:.0f}%"
     if metric_key == "cpu_temperature_c":
-        return f"{value:.1f}C"
+        return f"{value:.1f} °C"
     if metric_key in {"memory_available_gb", "mount_available_gb"}:
-        if value >= 1024:
-            return f"{value / 1024:.2f}TB"
-        if value >= 1:
-            return f"{value:.2f}GB"
-        return f"{value * 1024:.0f}MB"
+        return _format_binary_size_from_gib(value)
     if metric_key == "docker_container_count":
         return f"{int(round(value))}"
     if metric_key == "last_restart":
@@ -213,6 +209,55 @@ def _format_value(metric_key: str, value: float | None) -> str:
             return "WARN"
         return "CRIT"
     return f"{value:.2f}"
+
+
+def _format_binary_size_from_gib(value_gib: float) -> str:
+    if value_gib >= 1024:
+        return f"{round(value_gib / 1024):.0f} TiB"
+    if value_gib >= 1:
+        return f"{round(value_gib):.0f} GiB"
+    value_mib = value_gib * 1024
+    if value_mib >= 1:
+        return f"{round(value_mib):.0f} MiB"
+    return f"{round(value_mib * 1024):.0f} KiB"
+
+
+def _build_detail_lines(item: QuickStatusItem, snapshot: MetricSnapshot | None) -> list[str] | None:
+    if snapshot is None or item.metric_key != "ssh_status":
+        return None
+    payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    pubkey_enabled = payload.get("ssh_pubkey_auth_enabled")
+    root_password_disabled = payload.get("ssh_root_password_login_disabled")
+    password_auth_disabled = payload.get("ssh_password_auth_disabled")
+    kbd_interactive_disabled = payload.get("ssh_kbd_interactive_auth_disabled")
+    permit_root_mode = payload.get("ssh_permit_root_login_mode")
+
+    def _flag(value: object, ok_text: str, fix_text: str) -> str:
+        if value is True:
+            return ok_text
+        return fix_text
+
+    lines = [
+        _flag(pubkey_enabled, "Public key authentication is enabled.", "Set `PubkeyAuthentication yes`."),
+        _flag(
+            password_auth_disabled,
+            "Password authentication is disabled.",
+            "Set `PasswordAuthentication no`.",
+        ),
+        _flag(
+            kbd_interactive_disabled,
+            "Keyboard-interactive authentication is disabled.",
+            "Set `KbdInteractiveAuthentication no` (or `ChallengeResponseAuthentication no`).",
+        ),
+        _flag(
+            root_password_disabled,
+            "Root password login is blocked.",
+            "Set `PermitRootLogin prohibit-password` or `PermitRootLogin no`.",
+        ),
+    ]
+    if isinstance(permit_root_mode, str) and permit_root_mode:
+        lines.append(f"Current `PermitRootLogin`: `{permit_root_mode}`.")
+    return lines
 
 
 def _format_uptime_hours(value: float) -> str:
@@ -403,6 +448,7 @@ async def build_quick_status_tiles(
                 display_value=display_value,
                 status=status,
                 reported_at=reported_at,
+                details=_build_detail_lines(item, snapshot),
             )
         )
     return tiles

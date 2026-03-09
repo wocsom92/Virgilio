@@ -31,6 +31,12 @@ class WarnThresholds(BaseModel):
 class TelegramSettingsBase(BaseModel):
     bot_token: str | None = Field(None, description="Bot token provided by @BotFather")
     default_chat_id: str | None = Field(None, description="Chat id for default notifications")
+    notification_batch_window_seconds: int = Field(
+        default=60,
+        ge=0,
+        le=3600,
+        description="How long to wait before sending a new automatic quick-status alert so related issues can batch together",
+    )
     notification_cooldown_minutes: int = Field(
         default=15,
         ge=0,

@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `4.2.0`
+Current version: `4.3.1`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -16,7 +16,7 @@ It has three runtime parts:
 - Per-backend metric selection, including:
   - CPU temperature
   - RAM used %
-  - Memory available (GB)
+  - Memory available (GiB)
   - Swap used %
   - Disk used %
   - Mount usage (selected mount points)
@@ -27,16 +27,17 @@ It has three runtime parts:
 - Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
 - Quick status tile types include:
   - Mounted volume usage (%)
-  - Mounted volume free space (`MB` / `GB` / `TB`)
+  - Mounted volume free space (`MiB` / `GiB` / `TiB`)
   - SSH login age and SSH posture
 - SSH quick status support:
   - Last successful SSH login (compact elapsed time such as `5d 23h`, always `ok`)
   - Last failed SSH attempt (elapsed age with configurable warn/critical thresholds)
   - SSH posture (`PubkeyAuthentication` and `PermitRootLogin`) mapped to `ok`/`warn`/`critical`
-- Admin quick status management supports search, per-server collapse, and per-server pagination.
+- Admin quick status management supports search, a separate Overview-style preview section, and a paginated management list.
+- Quick status preview reordering is server-scoped and includes touch-friendly arrow controls for iPhone Safari.
 - Role-based auth (`admin`, `viewer`) with bootstrap flow for first admin user.
 - Admin controls for retention days and auth session duration.
-- Telegram bot support (`/stats`, `/warn`, reboot actions).
+- Telegram bot support (`/stats`, `/warn`, reboot actions) with consistent warning output across `/stats` and `/warn`.
 - Optional host reboot support (requires explicit enablement + container privileges).
 
 ## Prerequisites

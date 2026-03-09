@@ -10,6 +10,7 @@ import type {
 } from '../api/client';
 import { fetchMetricSeries } from '../api/client';
 import { MetricsChart } from './MetricsChart';
+import { formatBinarySizeFromGiB, formatTemperature } from '../utils/formatting';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
 
 interface BackendCardProps {
@@ -237,7 +238,7 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
         title: 'Memory Available',
         datasets: [
           {
-            label: 'GB',
+            label: 'GiB',
             color: CHART_COLORS.memoryAvailable,
             extractor: (point: MetricSeriesPoint) => point.memory_available_gb ?? null,
           },
@@ -526,7 +527,7 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
                         <li>
                           CPU temp:{' '}
                           {snapshot.cpu_temperature_c !== undefined && snapshot.cpu_temperature_c !== null
-                            ? `${snapshot.cpu_temperature_c.toFixed(1)} °C`
+                            ? formatTemperature(snapshot.cpu_temperature_c)
                             : 'N/A'}
                         </li>
                         <li>
@@ -538,7 +539,7 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
                         <li>
                           Memory available:{' '}
                           {snapshot.memory_available_gb !== undefined && snapshot.memory_available_gb !== null
-                            ? `${snapshot.memory_available_gb.toFixed(2)} GB`
+                            ? formatBinarySizeFromGiB(snapshot.memory_available_gb)
                             : 'N/A'}
                         </li>
                         <li>

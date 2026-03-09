@@ -60,17 +60,30 @@ def _format_duration(seconds: int | None) -> str:
     return " ".join(parts)
 
 
+def _format_binary_size_from_gib(value_gib: float | None) -> str:
+    if value_gib is None:
+        return "unknown"
+    if value_gib >= 1024:
+        return f"{round(value_gib / 1024):.0f} TiB"
+    if value_gib >= 1:
+        return f"{round(value_gib):.0f} GiB"
+    value_mib = value_gib * 1024
+    if value_mib >= 1:
+        return f"{round(value_mib):.0f} MiB"
+    return f"{round(value_mib * 1024):.0f} KiB"
+
+
 def _format_snapshot(snapshot: MetricSnapshotRead | None) -> str:
     if snapshot is None:
         return "_No recent data_"
 
     lines: list[str] = []
     if snapshot.cpu_temperature_c is not None:
-        lines.append(f"• CPU temp: {snapshot.cpu_temperature_c:.1f}°C")
+        lines.append(f"• CPU temp: {snapshot.cpu_temperature_c:.1f} °C")
     if snapshot.ram_used_percent is not None:
         lines.append(f"• RAM: {snapshot.ram_used_percent:.1f}% used")
     if snapshot.memory_available_gb is not None:
-        lines.append(f"• RAM available: {snapshot.memory_available_gb:.2f} GB")
+        lines.append(f"• RAM available: {_format_binary_size_from_gib(snapshot.memory_available_gb)}")
     if snapshot.swap_used_percent is not None:
         lines.append(f"• Swap: {snapshot.swap_used_percent:.1f}% used")
     if snapshot.docker_container_count is not None:
@@ -102,11 +115,6 @@ def _format_snapshot(snapshot: MetricSnapshotRead | None) -> str:
         lines.append(f"• Uptime: {_format_duration(snapshot.uptime_seconds)}")
     timestamp = snapshot.reported_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines.append(f"_Reported at {timestamp}_")
-    if snapshot.warnings:
-        lines.append("")
-        lines.append("*Warnings:*")
-        for warning in snapshot.warnings:
-            lines.append(f"⚠️ {_escape_markdown(warning)}")
     return "\n".join(lines)
 
 

@@ -156,24 +156,59 @@ async def _load_quick_status_tiles(session: AsyncSession) -> list[QuickStatusTil
 
 def _build_warn_message_from_tiles(tiles: Sequence[QuickStatusTileRead]) -> str:
     lines: list[str] = ["*Server Monitor Warnings*"]
-    alert_tiles = [tile for tile in tiles if tile.status in {"warn", "critical"}]
-    if not alert_tiles:
+    grouped = _group_alert_tiles_by_backend(tiles)
+    if not grouped:
         lines.append("\nAll systems nominal ✅")
         return "\n".join(lines)
-
-    grouped: dict[str, list[QuickStatusTileRead]] = {}
-    for tile in alert_tiles:
-        grouped.setdefault(tile.backend_name, []).append(tile)
 
     for backend_name in sorted(grouped):
         lines.append(f"\n*{_escape_markdown(backend_name)}*")
         for tile in grouped[backend_name]:
-            icon = "🚨" if tile.status == "critical" else "⚠️"
-            lines.append(
-                f"{icon} {_escape_markdown(tile.label)} "
-                f"({_escape_markdown(_status_label(tile.status))}) "
-                f"at {_escape_markdown(tile.display_value)}"
-            )
+            lines.append(_format_alert_tile_line(tile))
+    return "\n".join(lines)
+
+
+def _group_alert_tiles_by_backend(tiles: Sequence[QuickStatusTileRead]) -> dict[str, list[QuickStatusTileRead]]:
+    grouped: dict[str, list[QuickStatusTileRead]] = {}
+    for tile in tiles:
+        if tile.status not in _ALERT_STATUSES:
+            continue
+        grouped.setdefault(tile.backend_name, []).append(tile)
+    return grouped
+
+
+def _format_alert_tile_line(tile: QuickStatusTileRead) -> str:
+    icon = "🚨" if tile.status == "critical" else "⚠️"
+    return (
+        f"{icon} {_escape_markdown(tile.label)} "
+        f"({_escape_markdown(_status_label(tile.status))}) "
+        f"at {_escape_markdown(tile.display_value)}"
+    )
+
+
+def _build_stats_message_with_alerts(
+    backends: Sequence[BackendWithLatestSnapshot],
+    tiles: Sequence[QuickStatusTileRead],
+) -> str:
+    base = build_stats_message(backends)
+    grouped = _group_alert_tiles_by_backend(tiles)
+    if not grouped:
+        return base
+
+    lines = base.split("\n")
+    for backend in backends:
+        backend_lines: list[str] = []
+        for tile in grouped.get(backend.name, []):
+            backend_lines.append(_format_alert_tile_line(tile))
+        if not backend_lines:
+            continue
+        marker = f"\n*{_escape_markdown(backend.name)}*"
+        try:
+            index = lines.index(marker)
+        except ValueError:
+            continue
+        insert_at = index + 2 if index + 1 < len(lines) else len(lines)
+        lines[insert_at:insert_at] = ["", "*Warnings / Errors:*", *backend_lines]
     return "\n".join(lines)
 
 
@@ -207,7 +242,8 @@ async def queue_quick_status_notifications(
         return
     settings_model = await get_or_create_settings(session)
     now = datetime.now(tz=timezone.utc)
-    due_at = max(now, _cooldown_deadline(settings_model, now))
+    batch_window_seconds = max(0, int(settings_model.notification_batch_window_seconds or 0))
+    due_at = now + timedelta(seconds=batch_window_seconds)
 
     # Use the latest persisted snapshots to evaluate the current tile state after ingest.
     tiles = await build_quick_status_tiles(session, items)
@@ -229,13 +265,13 @@ async def queue_quick_status_notifications(
                 session.add(item)
                 changed = True
             continue
-        if (
-            item.pending_notification_status == current_status
-            and item.pending_notification_due_at is not None
-        ):
+        if item.pending_notification_status == current_status and item.pending_notification_due_at is not None:
             continue
-        item.pending_notification_status = current_status
-        item.pending_notification_due_at = due_at
+        if item.pending_notification_due_at is not None:
+            item.pending_notification_status = current_status
+        else:
+            item.pending_notification_status = current_status
+            item.pending_notification_due_at = due_at
         session.add(item)
         changed = True
 
@@ -253,19 +289,28 @@ async def dispatch_due_quick_status_notifications(
     if now < _cooldown_deadline(settings_model, now):
         return None
 
+    due_result = await session.execute(
+        select(QuickStatusItem.id)
+        .where(
+            QuickStatusItem.pending_notification_status.is_not(None),
+            QuickStatusItem.pending_notification_due_at.is_not(None),
+            QuickStatusItem.pending_notification_due_at <= now,
+        )
+        .limit(1)
+    )
+    if due_result.scalar_one_or_none() is None:
+        return None
+
     result = await session.execute(
         select(QuickStatusItem)
         .options(selectinload(QuickStatusItem.backend))
         .where(
             QuickStatusItem.pending_notification_status.is_not(None),
             QuickStatusItem.pending_notification_due_at.is_not(None),
-            QuickStatusItem.pending_notification_due_at <= now,
         )
         .order_by(QuickStatusItem.pending_notification_due_at, QuickStatusItem.display_order, QuickStatusItem.id)
     )
     items = list(result.scalars())
-    if not items:
-        return None
 
     tiles = await build_quick_status_tiles(session, items)
     tiles_by_id = {tile.id: tile for tile in tiles}
@@ -371,13 +416,24 @@ async def send_stats_message(
     backend_id: int | None = None,
     backend_name: str | None = None,
 ) -> str:
-    return await send_compiled_message(
-        session,
-        build_stats_message,
-        chat_id=chat_id,
-        backend_id=backend_id,
-        backend_name=backend_name,
-    )
+    settings_model, target_chat = await resolve_message_context(session, chat_id, strict=True)
+    backends = await fetch_backends_with_latest(session, backend_id=backend_id, backend_name=backend_name)
+    if backend_id is not None or backend_name:
+        if not backends:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
+        backends = backends[:1]
+    tiles = await _load_quick_status_tiles(session)
+    if backend_id is not None:
+        tiles = [tile for tile in tiles if tile.backend_id == backend_id]
+    elif backend_name:
+        target_name = backends[0].name if backends else backend_name
+        tiles = [tile for tile in tiles if tile.backend_name == target_name]
+    text = _build_stats_message_with_alerts(backends, tiles)
+    try:
+        await send_message(settings_model.bot_token, target_chat, text)
+    except TelegramError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return text
 
 
 async def send_warn_message(session: AsyncSession, chat_id: str | None = None) -> str:

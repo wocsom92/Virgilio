@@ -186,6 +186,7 @@ export interface TelegramSettings {
   id: number;
   bot_token?: string | null;
   default_chat_id?: string | null;
+  notification_batch_window_seconds: number;
   notification_cooldown_minutes: number;
   is_active: boolean;
 }
@@ -241,6 +242,7 @@ export interface QuickStatusTile {
   display_value: string;
   status: 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
   reported_at?: string | null;
+  details?: string[] | null;
 }
 
 export interface RebootResponse {

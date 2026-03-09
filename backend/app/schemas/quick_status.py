@@ -124,3 +124,4 @@ class QuickStatusTileRead(BaseModel):
     display_value: str
     status: Literal["ok", "info", "warn", "critical", "unknown"]
     reported_at: datetime | None = None
+    details: list[str] | None = None

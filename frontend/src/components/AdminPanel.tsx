@@ -10,7 +10,9 @@ import {
   AuthRole,
   QuickStatusItem,
   QuickStatusMetricKey,
+  QuickStatusTile,
   fetchDatabaseSize,
+  fetchQuickStatusTiles,
   createQuickStatusItem,
   createBackend,
   createUser,
@@ -34,6 +36,8 @@ import {
   requestReboot,
   rebootBackendHost,
 } from '../api/client';
+import { QuickStatusTileCard } from './QuickStatusTileCard';
+import { formatBinaryBytes } from '../utils/formatting';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
 
 interface AdminPanelProps {
@@ -44,7 +48,6 @@ const MOUNTED_USAGE_KEY = 'mounted_usage' as const;
 const AUTH_SESSION_MINUTES_MIN = 15;
 const AUTH_SESSION_MINUTES_MAX = 60 * 24 * 30;
 const QUICK_STATUS_PAGE_SIZE = 5;
-
 const metricOptions = [
   { key: 'cpu_temperature_c', label: 'CPU temperature' },
   { key: 'ram_used_percent', label: 'RAM usage' },
@@ -88,10 +91,10 @@ const quickStatusMetricOptions: Array<{
   },
   {
     key: 'memory_available_gb',
-    label: 'Memory available (GB)',
+    label: 'Memory available (GiB)',
     defaultWarning: 2,
     defaultCritical: 1,
-    helper: 'Available RAM in GB (warn/critical when below thresholds)',
+    helper: 'Available RAM in GiB (warn/critical when below thresholds)',
     requiresThresholds: true,
     thresholdDirection: 'lower',
     requiresPing: false,
@@ -118,10 +121,10 @@ const quickStatusMetricOptions: Array<{
   },
   {
     key: 'cpu_temperature_c',
-    label: 'CPU temperature (C)',
+    label: 'CPU temperature (°C)',
     defaultWarning: 75,
     defaultCritical: 85,
-    helper: 'Celsius',
+    helper: 'Degrees Celsius',
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
@@ -171,7 +174,7 @@ const quickStatusMetricOptions: Array<{
     label: 'Mounted volume free space',
     defaultWarning: 5,
     defaultCritical: 1,
-    helper: 'Free space left on a mounted volume. Displays MB, GB, or TB; thresholds are configured in GB.',
+    helper: 'Free space left on a mounted volume. Displays KiB, MiB, GiB, or TiB; thresholds are configured in GiB.',
     requiresThresholds: true,
     thresholdDirection: 'lower',
     requiresPing: false,
@@ -366,23 +369,11 @@ const sanitizeSelectedMetrics = (selected: SelectedMetrics): SelectedMetrics => 
   return sanitized;
 };
 
-const formatBytes = (bytes: number | null | undefined): string => {
-  if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return 'N/A';
-  if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB', 'TB'];
-  let value = bytes / 1024;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(2)} ${units[unitIndex]}`;
-};
-
 const createEmptyTelegramSettings = (): TelegramSettings => ({
   id: 0,
   bot_token: '',
   default_chat_id: '',
+  notification_batch_window_seconds: 60,
   notification_cooldown_minutes: 15,
   is_active: false,
 });
@@ -504,11 +495,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [activeSection, setActiveSection] = useState<SectionId>(ADMIN_SECTIONS[0].id);
   const [showNewForm, setShowNewForm] = useState(false);
   const [quickStatusItems, setQuickStatusItems] = useState<QuickStatusItem[]>([]);
+  const [quickStatusTiles, setQuickStatusTiles] = useState<QuickStatusTile[]>([]);
   const [quickStatusForm, setQuickStatusForm] = useState<QuickStatusFormState>(() => createQuickStatusForm());
   const [quickStatusEditingId, setQuickStatusEditingId] = useState<number | null>(null);
   const [quickStatusStatus, setQuickStatusStatus] = useState<string | null>(null);
   const [quickStatusDraggingId, setQuickStatusDraggingId] = useState<number | null>(null);
+  const [quickStatusDetailId, setQuickStatusDetailId] = useState<number | null>(null);
   const [quickStatusOrdering, setQuickStatusOrdering] = useState(false);
+  const [quickStatusOrderingBackendId, setQuickStatusOrderingBackendId] = useState<number | null>(null);
+  const [quickStatusSelectedMoveId, setQuickStatusSelectedMoveId] = useState<number | null>(null);
   const [quickStatusSearch, setQuickStatusSearch] = useState('');
   const [quickStatusCollapsedByBackend, setQuickStatusCollapsedByBackend] = useState<Record<number, boolean>>({});
   const [quickStatusPageByBackend, setQuickStatusPageByBackend] = useState<Record<number, number>>({});
@@ -604,14 +599,17 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   useEffect(() => {
     if (!isAdmin) {
       setQuickStatusItems([]);
+      setQuickStatusTiles([]);
       return;
     }
     void (async () => {
       try {
-        const items = await listQuickStatusItems();
+        const [items, tiles] = await Promise.all([listQuickStatusItems(), fetchQuickStatusTiles()]);
         setQuickStatusItems(sortQuickStatusItems(items));
+        setQuickStatusTiles(tiles);
       } catch (err) {
         setQuickStatusItems([]);
+        setQuickStatusTiles([]);
         setQuickStatusStatus(err instanceof Error ? err.message : 'Unable to load quick status tiles');
       }
     })();
@@ -928,6 +926,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setQuickStatusItems((prev) => sortQuickStatusItems([...prev, created]));
         setQuickStatusStatus('Quick status tile added.');
       }
+      setQuickStatusTiles(await fetchQuickStatusTiles());
       resetQuickStatusForm({ keepStatus: true });
     } catch (err) {
       setQuickStatusStatus(extractErrorMessage(err, 'Unable to save quick status tile'));
@@ -956,6 +955,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     try {
       await deleteQuickStatusItem(item.id);
       setQuickStatusItems((prev) => prev.filter((entry) => entry.id !== item.id));
+      setQuickStatusTiles((prev) => prev.filter((entry) => entry.id !== item.id));
       setQuickStatusStatus(`Removed ${item.label}.`);
       if (quickStatusEditingId === item.id) {
         resetQuickStatusForm();
@@ -987,18 +987,26 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) {
       return items;
     }
-    const next = [...items];
-    const [moved] = next.splice(sourceIndex, 1);
-    next.splice(targetIndex, 0, moved);
-    return next.map((item, idx) => ({ ...item, display_order: idx }));
+    const sourceItem = items[sourceIndex];
+    const backendItems = items.filter((item) => item.backend_id === sourceItem.backend_id);
+    const backendSourceIndex = backendItems.findIndex((item) => item.id === sourceId);
+    const backendTargetIndex = backendItems.findIndex((item) => item.id === targetId);
+    if (backendSourceIndex === -1 || backendTargetIndex === -1 || backendSourceIndex === backendTargetIndex) {
+      return items;
+    }
+    const reorderedBackendItems = [...backendItems];
+    const [moved] = reorderedBackendItems.splice(backendSourceIndex, 1);
+    reorderedBackendItems.splice(backendTargetIndex, 0, moved);
+    const reindexedBackendItems = reorderedBackendItems.map((item, idx) => ({ ...item, display_order: idx }));
+    const byId = new Map(reindexedBackendItems.map((item) => [item.id, item]));
+    return items.map((item) => byId.get(item.id) ?? item);
   };
 
-  const handleQuickStatusDrop = async (targetId: number) => {
+  const persistQuickStatusOrder = async (backendId: number, sourceId: number, targetId: number) => {
     if (!isAdmin || quickStatusOrdering) {
       setQuickStatusDraggingId(null);
       return;
     }
-    const sourceId = quickStatusDraggingId;
     setQuickStatusDraggingId(null);
     if (sourceId === null || sourceId === targetId) {
       return;
@@ -1012,6 +1020,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setQuickStatusStatus('Reordering is limited to tiles from the same backend.');
       return;
     }
+    if (sourceItem.backend_id !== backendId || targetItem.backend_id !== backendId) {
+      setQuickStatusStatus('Finish reordering the active server section first.');
+      return;
+    }
     const previous = quickStatusItems;
     const reordered = reorderQuickStatusItems(previous, sourceId, targetId);
     if (reordered === previous) {
@@ -1021,9 +1033,14 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     setQuickStatusOrdering(true);
     setQuickStatusStatus('Updating order…');
     try {
-      await Promise.all(reordered.map((item) => updateQuickStatusItem(item.id, toQuickStatusPayload(item))));
-      const refreshed = await listQuickStatusItems();
+      await Promise.all(
+        reordered
+          .filter((item) => item.backend_id === backendId)
+          .map((item) => updateQuickStatusItem(item.id, toQuickStatusPayload(item)))
+      );
+      const [refreshed, tiles] = await Promise.all([listQuickStatusItems(), fetchQuickStatusTiles()]);
       setQuickStatusItems(sortQuickStatusItems(refreshed));
+      setQuickStatusTiles(tiles);
       setQuickStatusStatus('Order updated.');
     } catch (err) {
       setQuickStatusItems(previous);
@@ -1031,6 +1048,43 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     } finally {
       setQuickStatusOrdering(false);
     }
+  };
+
+  const handleQuickStatusDrop = async (backendId: number, targetId: number) => {
+    await persistQuickStatusOrder(backendId, quickStatusDraggingId, targetId);
+  };
+
+  const handleQuickStatusTileTap = async (backendId: number, item: QuickStatusItem, tile: QuickStatusTile) => {
+    if (quickStatusOrderingBackendId === backendId) {
+      if (quickStatusSelectedMoveId === null) {
+        setQuickStatusSelectedMoveId(item.id);
+        return;
+      }
+      if (quickStatusSelectedMoveId === item.id) {
+        setQuickStatusSelectedMoveId(null);
+        return;
+      }
+      const sourceId = quickStatusSelectedMoveId;
+      setQuickStatusSelectedMoveId(null);
+      await persistQuickStatusOrder(backendId, sourceId, item.id);
+      return;
+    }
+    if (tile.details && tile.details.length > 0) {
+      setQuickStatusDetailId((current) => (current === item.id ? null : item.id));
+    }
+  };
+
+  const handleQuickStatusShift = async (
+    backendId: number,
+    items: Array<{ item: QuickStatusItem; tile: QuickStatusTile }>,
+    index: number,
+    direction: 'earlier' | 'later'
+  ) => {
+    const targetIndex = direction === 'earlier' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= items.length) {
+      return;
+    }
+    await persistQuickStatusOrder(backendId, items[index].item.id, items[targetIndex].item.id);
   };
 
   const renderBackendSection = ({
@@ -1435,7 +1489,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     [backends]
   );
 
-  const quickStatusGroups = useMemo(() => {
+  const quickStatusPreviewGroups = useMemo(() => {
     const search = quickStatusSearch.trim().toLocaleLowerCase();
     const grouped = new Map<number, QuickStatusItem[]>();
     for (const item of quickStatusItems) {
@@ -1474,6 +1528,68 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         if (filteredItems.length === 0) {
           return null;
         }
+        const tileById = new Map(quickStatusTiles.map((tile) => [tile.id, tile]));
+        return {
+          backendId,
+          backendName,
+          allItemsCount: allItems.length,
+          filteredItemsCount: filteredItems.length,
+          items: filteredItems.map((item) => ({
+            item,
+            tile:
+              tileById.get(item.id) ??
+              ({
+                id: item.id,
+                backend_id: item.backend_id,
+                backend_display_order: 0,
+                backend_name: backendName,
+                label: item.label,
+                metric_key: item.metric_key,
+                value: null,
+                display_value: '—',
+                status: 'unknown',
+                details: null,
+              } satisfies QuickStatusTile),
+          })),
+        };
+      })
+      .filter((group): group is NonNullable<typeof group> => group !== null);
+  }, [backends, backendNameById, quickStatusItems, quickStatusSearch, quickStatusTiles]);
+
+  const quickStatusListGroups = useMemo(() => {
+    const search = quickStatusSearch.trim().toLocaleLowerCase();
+    const grouped = new Map<number, QuickStatusItem[]>();
+    for (const item of quickStatusItems) {
+      const current = grouped.get(item.backend_id) ?? [];
+      current.push(item);
+      grouped.set(item.backend_id, current);
+    }
+    const orderedBackendIds = backends
+      .map((backend) => backend.id)
+      .filter((backendId) => grouped.has(backendId));
+    const extraBackendIds = Array.from(grouped.keys())
+      .filter((backendId) => !backendNameById.has(backendId))
+      .sort((a, b) => a - b);
+    return [...orderedBackendIds, ...extraBackendIds]
+      .map((backendId) => {
+        const backendName = backendNameById.get(backendId) ?? `Backend #${backendId}`;
+        const allItems = grouped.get(backendId) ?? [];
+        const matchesBackend = search.length > 0 && backendName.toLocaleLowerCase().includes(search);
+        const filteredItems =
+          search.length === 0 || matchesBackend
+            ? allItems
+            : allItems.filter((item) => {
+                const metricLabel =
+                  quickStatusMetricOptions.find((option) => option.key === item.metric_key)?.label.toLocaleLowerCase() ??
+                  item.metric_key.toLocaleLowerCase();
+                const haystack = [item.label, metricLabel, item.mount_path ?? '', item.ping_endpoint ?? '']
+                  .join(' ')
+                  .toLocaleLowerCase();
+                return haystack.includes(search);
+              });
+        if (filteredItems.length === 0) {
+          return null;
+        }
         const totalPages = Math.max(1, Math.ceil(filteredItems.length / QUICK_STATUS_PAGE_SIZE));
         const currentPage = Math.min(quickStatusPageByBackend[backendId] ?? 1, totalPages);
         const start = (currentPage - 1) * QUICK_STATUS_PAGE_SIZE;
@@ -1499,13 +1615,13 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       return 'hours';
     }
     if (quickStatusForm.metric_key === 'memory_available_gb' || quickStatusForm.metric_key === 'mount_available_gb') {
-      return 'GB';
+      return 'GiB';
     }
     if (quickStatusForm.metric_key === 'ping_delay_ms') {
       return 'ms';
     }
     if (quickStatusForm.metric_key === 'cpu_temperature_c') {
-      return 'C';
+      return '°C';
     }
     if (quickStatusForm.metric_key === 'docker_container_count') {
       return 'count';
@@ -1524,6 +1640,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       const updated = await updateTelegramSettings({
         bot_token: telegram.bot_token,
         default_chat_id: telegram.default_chat_id,
+        notification_batch_window_seconds: telegram.notification_batch_window_seconds,
         notification_cooldown_minutes: telegram.notification_cooldown_minutes,
         is_active: telegram.is_active,
       });
@@ -1816,7 +1933,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
             </div>
             <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Existing tiles</div>
+              <div className="card-header border-secondary text-uppercase fw-semibold">Overview Preview</div>
               <div className="card-body d-flex flex-column gap-3">
                 <div className="d-flex flex-column flex-lg-row gap-2 justify-content-between align-items-lg-center">
                   <div className="text-secondary small">
@@ -1834,15 +1951,135 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   />
                 </div>
                 {isAdmin && quickStatusItems.length > 1 && (
-                  <div className="text-secondary small">Drag tiles to reorder within each backend.</div>
+                  <div className="text-secondary small">
+                    Use the server-level edit button to reorder tiles. Desktop supports drag and drop; on iPhone or
+                    other touch devices, tap one tile and then tap its destination.
+                  </div>
                 )}
                 {quickStatusItems.length === 0 ? (
                   <div className="text-secondary small">No quick status tiles configured yet.</div>
-                ) : quickStatusGroups.length === 0 ? (
+                ) : quickStatusPreviewGroups.length === 0 ? (
                   <div className="text-secondary small">No quick status tiles match the current search.</div>
                 ) : (
-                  quickStatusGroups.map((group) => (
-                    <div key={group.backendId} className="rounded-3 border border-secondary p-3 d-flex flex-column gap-3">
+                  quickStatusPreviewGroups.map((group) => (
+                    <section className="quick-status-section" key={group.backendId}>
+                      <div className="quick-status-section__header">
+                        <h3 className="quick-status-section__title">{group.backendName}</h3>
+                        <div className="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+                          <span className="quick-status-section__count">
+                            {group.filteredItemsCount}
+                            {group.filteredItemsCount !== group.allItemsCount ? ` / ${group.allItemsCount}` : ''}{' '}
+                            {group.filteredItemsCount === 1 ? 'tile' : 'tiles'}
+                          </span>
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${
+                                quickStatusOrderingBackendId === group.backendId ? 'btn-light text-dark' : 'btn-outline-light'
+                              }`}
+                              onClick={() => {
+                                setQuickStatusOrderingBackendId((current) =>
+                                  current === group.backendId ? null : group.backendId
+                                );
+                                setQuickStatusSelectedMoveId(null);
+                                setQuickStatusDraggingId(null);
+                              }}
+                              disabled={quickStatusOrdering && quickStatusOrderingBackendId !== group.backendId}
+                            >
+                              {quickStatusOrderingBackendId === group.backendId ? 'Done' : 'Edit order'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      {quickStatusOrderingBackendId === group.backendId && (
+                        <div className="text-secondary small">
+                          {quickStatusSelectedMoveId === null
+                            ? 'Reorder mode: drag a tile or tap one tile and then tap where it should move.'
+                            : 'Tile selected. Tap the destination tile to move it there.'}
+                        </div>
+                      )}
+                      <div className="quick-status-grid">
+                        {group.items.map(({ item, tile }, index) => (
+                          <div className="quick-status-grid__item" key={item.id}>
+                            <QuickStatusTileCard
+                              tile={tile}
+                              dragging={quickStatusDraggingId === item.id || quickStatusSelectedMoveId === item.id}
+                              draggable={isAdmin && !quickStatusOrdering && quickStatusOrderingBackendId === group.backendId}
+                              onDragStart={(event) => {
+                                if (!isAdmin || quickStatusOrdering || quickStatusOrderingBackendId !== group.backendId) return;
+                                setQuickStatusDraggingId(item.id);
+                                event.dataTransfer.effectAllowed = 'move';
+                                event.dataTransfer.setData('text/plain', String(item.id));
+                              }}
+                              onDragOver={(event) => {
+                                if (!isAdmin || quickStatusOrdering || quickStatusOrderingBackendId !== group.backendId) return;
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = 'move';
+                              }}
+                              onDragEnd={() => setQuickStatusDraggingId(null)}
+                              onDrop={() => void handleQuickStatusDrop(group.backendId, item.id)}
+                              onClick={() => void handleQuickStatusTileTap(group.backendId, item, tile)}
+                            />
+                            {quickStatusOrderingBackendId === group.backendId && (
+                              <div className="quick-status-tile-controls">
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-outline-light"
+                                  onClick={() =>
+                                    void handleQuickStatusShift(group.backendId, group.items, index, 'earlier')
+                                  }
+                                  disabled={quickStatusOrdering || index === 0}
+                                >
+                                  ←
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-sm btn-outline-light"
+                                  onClick={() =>
+                                    void handleQuickStatusShift(group.backendId, group.items, index, 'later')
+                                  }
+                                  disabled={quickStatusOrdering || index === group.items.length - 1}
+                                >
+                                  →
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {(() => {
+                        const selectedPreviewTile = group.items.find(({ item }) => item.id === quickStatusDetailId)?.tile;
+                        if (!selectedPreviewTile?.details?.length || quickStatusOrderingBackendId === group.backendId) {
+                          return null;
+                        }
+                        return (
+                          <div className="quick-status-detail card-panel rounded-4 p-3">
+                            <div className="text-uppercase card-panel__heading fw-semibold mb-2">
+                              Tile details
+                            </div>
+                            <ul className="mb-0 small quick-status-detail__list">
+                              {selectedPreviewTile.details.map((line) => (
+                                <li key={line}>{line}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        );
+                      })()}
+                    </section>
+                  ))
+                )}
+              </div>
+            </div>
+            <div className="card bg-dark border border-secondary">
+              <div className="card-header border-secondary text-uppercase fw-semibold">Existing Tiles</div>
+              <div className="card-body d-flex flex-column gap-3">
+                {quickStatusItems.length === 0 ? (
+                  <div className="text-secondary small">No quick status tiles configured yet.</div>
+                ) : quickStatusListGroups.length === 0 ? (
+                  <div className="text-secondary small">No quick status tiles match the current search.</div>
+                ) : (
+                  quickStatusListGroups.map((group) => (
+                    <div key={`list-${group.backendId}`} className="rounded-3 border border-secondary p-3 d-flex flex-column gap-3">
                       <button
                         type="button"
                         className="btn btn-outline-light d-flex justify-content-between align-items-center gap-2 text-start"
@@ -1860,45 +2097,32 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             {group.filteredItemsCount !== group.allItemsCount ? ` / ${group.allItemsCount}` : ''}{' '}
                             {group.filteredItemsCount === 1 ? 'tile' : 'tiles'}
                           </span>
-                          <span>{quickStatusSearch.trim() ? 'Hide' : (quickStatusCollapsedByBackend[group.backendId] ?? true) ? 'Expand' : 'Collapse'}</span>
+                          <span>
+                            {quickStatusSearch.trim()
+                              ? 'Hide'
+                              : (quickStatusCollapsedByBackend[group.backendId] ?? true)
+                                ? 'Expand'
+                                : 'Collapse'}
+                          </span>
                         </span>
                       </button>
                       {(quickStatusSearch.trim() || !(quickStatusCollapsedByBackend[group.backendId] ?? true)) && (
                         <>
                           {group.items.map((item) => {
-                        const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
-                        const thresholdLabel =
-                          meta?.requiresThresholds
-                            ? meta.thresholdDirection === 'range'
-                              ? item.warning_threshold === item.critical_threshold
-                                ? `Target containers: ${item.warning_threshold} (critical outside target)`
-                                : `Target containers: ${item.warning_threshold}-${item.critical_threshold} (critical outside range)`
-                              : meta.thresholdDirection === 'lower'
-                                ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
-                                : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
-                            : 'Status OK/Failed';
+                            const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
+                            const thresholdLabel =
+                              meta?.requiresThresholds
+                                ? meta.thresholdDirection === 'range'
+                                  ? item.warning_threshold === item.critical_threshold
+                                    ? `Target containers: ${item.warning_threshold} (critical outside target)`
+                                    : `Target containers: ${item.warning_threshold}-${item.critical_threshold} (critical outside range)`
+                                  : meta.thresholdDirection === 'lower'
+                                    ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
+                                    : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
+                                : 'Status OK/Failed';
                             return (
-                              <div
-                                className={`card-panel rounded-3 p-3 d-flex flex-column flex-lg-row gap-3 align-items-start align-items-lg-center ${
-                                  quickStatusDraggingId === item.id ? 'opacity-50' : ''
-                                }`}
-                                key={item.id}
-                                draggable={isAdmin && !quickStatusOrdering}
-                                onDragStart={(event) => {
-                                  if (!isAdmin || quickStatusOrdering) return;
-                                  setQuickStatusDraggingId(item.id);
-                                  event.dataTransfer.effectAllowed = 'move';
-                                  event.dataTransfer.setData('text/plain', String(item.id));
-                                }}
-                                onDragOver={(event) => {
-                                  if (!isAdmin || quickStatusOrdering) return;
-                                  event.preventDefault();
-                                  event.dataTransfer.dropEffect = 'move';
-                                }}
-                                onDragEnd={() => setQuickStatusDraggingId(null)}
-                                onDrop={() => void handleQuickStatusDrop(item.id)}
-                              >
-                                <div className="flex-grow-1">
+                              <div className="d-flex flex-column gap-2" key={item.id}>
+                                <div className="card-panel rounded-3 p-3">
                                   <div className="fw-semibold">{item.label}</div>
                                   <div className="text-secondary small">{getQuickStatusMetricLabel(item.metric_key)}</div>
                                   <div className="text-secondary small">
@@ -2228,6 +2452,30 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       </label>
                     </div>
                     <div>
+                      <label className="form-label">Alert batch window (seconds)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={3600}
+                        className="form-control bg-dark text-light border-secondary"
+                        value={telegram?.notification_batch_window_seconds ?? 60}
+                        onChange={(event) =>
+                          setTelegram((prev) => {
+                            const base = ensureTelegramState(prev);
+                            return {
+                              ...base,
+                              notification_batch_window_seconds: Math.max(0, Number(event.target.value || 0)),
+                            };
+                          })
+                        }
+                        required
+                      />
+                      <div className="form-text text-secondary small">
+                        When a new warning or error appears, wait this long before sending so related issues can be
+                        grouped into one message.
+                      </div>
+                    </div>
+                    <div>
                       <label className="form-label">Notification cooldown (minutes)</label>
                       <input
                         type="number"
@@ -2247,8 +2495,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         required
                       />
                       <div className="form-text text-secondary small">
-                        Automatic quick-status Telegram notifications are batched so they are not sent more often
-                        than this interval. Recovery messages use the same cooldown.
+                        After a message is sent, automatic warning, error, and recovery messages wait at least this
+                        long before the next delivery. Cooldown starts from send time, not from when the issue first
+                        appeared.
                       </div>
                     </div>
                     <div className="form-text text-secondary small">
@@ -2436,7 +2685,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   </div>
                   <div className="small text-secondary mb-2 d-flex flex-column">
                     <span>
-                      DB size: <span className="text-light fw-semibold">{formatBytes(dbSizeBytes)}</span>
+                      DB size: <span className="text-light fw-semibold">{formatBinaryBytes(dbSizeBytes)}</span>
                     </span>
                     {dbSizeStatus && <span className="text-warning">{dbSizeStatus}</span>}
                   </div>

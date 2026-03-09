@@ -50,6 +50,13 @@ def ensure_schema_compat(connection: Connection) -> None:
 
     if inspector.has_table("telegram_settings"):
         columns = {col["name"] for col in inspector.get_columns("telegram_settings")}
+        if "notification_batch_window_seconds" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE telegram_settings "
+                    "ADD COLUMN notification_batch_window_seconds INT NOT NULL DEFAULT 60"
+                )
+            )
         if "notification_cooldown_minutes" not in columns:
             connection.execute(
                 text(
