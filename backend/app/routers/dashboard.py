@@ -10,9 +10,9 @@ from backend.app.core.security import get_current_user
 from backend.app.db.session import get_session
 from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, QuickStatusItem
 from backend.app.schemas.backend import BackendWithLatestSnapshot
-from backend.app.schemas.common import MetricSnapshotRead
 from backend.app.schemas.metrics import MetricSeriesPoint, MetricSeriesResponse
 from backend.app.schemas.quick_status import QuickStatusTileRead
+from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
 from backend.app.services.quick_status import build_quick_status_tiles
 
 
@@ -30,23 +30,10 @@ async def fetch_dashboard_data(
     _: object = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[BackendWithLatestSnapshot]:
-    result = await session.execute(
-        select(MonitoredBackend)
-        .options(selectinload(MonitoredBackend.snapshots))
-        .where(MonitoredBackend.is_active.is_(True))
-        .order_by(MonitoredBackend.display_order, MonitoredBackend.name)
+    return await fetch_backends_with_latest_snapshots(
+        session,
+        only_active=True,
     )
-    payload: list[BackendWithLatestSnapshot] = []
-    for backend in result.scalars():
-        latest_snapshot = backend.snapshots[-1] if backend.snapshots else None
-        base = BackendWithLatestSnapshot.model_validate(backend)
-        payload.append(
-            BackendWithLatestSnapshot(
-                **base.model_dump(exclude={"latest_snapshot"}),
-                latest_snapshot=MetricSnapshotRead.model_validate(latest_snapshot) if latest_snapshot else None,
-            )
-        )
-    return payload
 
 
 @router.get("/quick-status", response_model=list[QuickStatusTileRead])

@@ -1,33 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.security import get_current_user, require_admin_user
 from backend.app.db.session import get_session
-from backend.app.models.monitors import MetricSnapshot, MonitoredBackend
+from backend.app.models.monitors import MonitoredBackend
 from backend.app.schemas.backend import (
     BackendWithLatestSnapshot,
     MonitoredBackendCreate,
     MonitoredBackendRead,
     MonitoredBackendUpdate,
 )
-from backend.app.schemas.common import MetricSnapshotRead
 from backend.app.schemas.metrics import MetricsIngestResponse
 from backend.app.services.backend_ingest import MetricsPayloadError, ingest_backend_metrics
+from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
 from backend.app.services.monitor_client import MonitorClientError, fetch_metrics, request_monitor_reboot
 
 
 router = APIRouter(prefix="/backends", tags=["backends"])
 
 
+def _mask_backend_secret(backend: MonitoredBackendRead) -> MonitoredBackendRead:
+    payload = backend.model_dump()
+    payload["api_token"] = None
+    return MonitoredBackendRead.model_validate(payload)
+
+
 @router.get("/", response_model=list[MonitoredBackendRead])
 async def list_backends(
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[MonitoredBackendRead]:
     result = await session.execute(select(MonitoredBackend).order_by(MonitoredBackend.display_order))
-    return list(result.scalars())
+    return [_mask_backend_secret(MonitoredBackendRead.model_validate(item)) for item in result.scalars()]
 
 
 @router.get(
@@ -38,22 +43,10 @@ async def list_backends(
 async def list_backends_with_latest(
     session: AsyncSession = Depends(get_session),
 ) -> list[BackendWithLatestSnapshot]:
-    result = await session.execute(
-        select(MonitoredBackend)
-        .options(selectinload(MonitoredBackend.snapshots))
-        .order_by(MonitoredBackend.display_order)
+    return await fetch_backends_with_latest_snapshots(
+        session,
+        require_admin_ordering=True,
     )
-    backends = []
-    for backend in result.scalars():
-        latest_snapshot = backend.snapshots[-1] if backend.snapshots else None
-        base = MonitoredBackendRead.model_validate(backend)
-        backends.append(
-            BackendWithLatestSnapshot(
-                **base.model_dump(),
-                latest_snapshot=MetricSnapshotRead.model_validate(latest_snapshot) if latest_snapshot else None,
-            )
-        )
-    return backends
 
 
 @router.post(
@@ -70,7 +63,7 @@ async def create_backend(
     session.add(backend)
     await session.commit()
     await session.refresh(backend)
-    return backend
+    return _mask_backend_secret(MonitoredBackendRead.model_validate(backend))
 
 
 @router.get(
@@ -79,13 +72,13 @@ async def create_backend(
 )
 async def get_backend(
     backend_id: int,
-    _: object = Depends(get_current_user),
+    _: object = Depends(require_admin_user),
     session: AsyncSession = Depends(get_session),
 ) -> MonitoredBackendRead:
     backend = await session.get(MonitoredBackend, backend_id)
     if not backend:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
-    return backend
+    return _mask_backend_secret(MonitoredBackendRead.model_validate(backend))
 
 
 @router.put(
@@ -101,11 +94,14 @@ async def update_backend(
     backend = await session.get(MonitoredBackend, backend_id)
     if not backend:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
-    for key, value in payload.model_dump(exclude_unset=True, mode="json").items():
+    updates = payload.model_dump(exclude_unset=True, mode="json")
+    if updates.get("api_token") in (None, ""):
+        updates.pop("api_token", None)
+    for key, value in updates.items():
         setattr(backend, key, value)
     await session.commit()
     await session.refresh(backend)
-    return backend
+    return _mask_backend_secret(MonitoredBackendRead.model_validate(backend))
 
 
 @router.post(

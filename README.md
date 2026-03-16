@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `5.0.0`
+Current version: `5.0.1`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 

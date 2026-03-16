@@ -28,6 +28,17 @@ DISK_WARN_PERCENT = 90.0
 
 logger = logging.getLogger(__name__)
 
+_TOP_PROCESSES_CACHE_TTL_SECONDS = 5.0
+_SSH_SNAPSHOT_CACHE_TTL_SECONDS = 5.0
+_SSH_SETTINGS_CACHE_TTL_SECONDS = 30.0
+_MOUNT_POINTS_CACHE_TTL_SECONDS = 30.0
+_OS_VERSION_CACHE_TTL_SECONDS = 300.0
+_top_processes_cache: tuple[float, dict[str, list[dict[str, Any]]] | None] | None = None
+_ssh_snapshot_cache: tuple[float, dict[str, Any]] | None = None
+_ssh_settings_cache: tuple[float, tuple[bool, bool, bool, str, str, str, str, str]] | None = None
+_mount_points_cache: tuple[float, list[str]] | None = None
+_os_version_cache: tuple[float, str] | None = None
+
 _SSH_LOG_TIMESTAMP_RE = re.compile(r"^(?P<stamp>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+")
 _LAST_OUTPUT_TIMESTAMP_RE = re.compile(r"([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})")
 _JOURNAL_SHORT_UNIX_RE = re.compile(r"^(?P<stamp>\d+(?:\.\d+)?)\s+")
@@ -81,6 +92,13 @@ def _safe_percent(value: Any) -> float | None:
 
 
 def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] | None:
+    global _top_processes_cache
+    now = time.monotonic()
+    if _top_processes_cache is not None:
+        cached_at, cached_value = _top_processes_cache
+        if now - cached_at <= _TOP_PROCESSES_CACHE_TTL_SECONDS:
+            return cached_value
+
     try:
         processes = list(psutil.process_iter(["pid", "name", "memory_percent"]))
     except (psutil.Error, OSError):
@@ -95,7 +113,7 @@ def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] |
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
 
-    time.sleep(0.1)
+    time.sleep(0.05)
 
     entries: list[dict[str, Any]] = []
     for process in processes:
@@ -132,10 +150,12 @@ def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] |
         reverse=True,
     )[:limit]
 
-    return {
+    result = {
         "cpu": cpu_entries,
         "memory": memory_entries,
     }
+    _top_processes_cache = (now, result)
+    return result
 
 
 def _get_cpu_temperature() -> float | None:
@@ -579,6 +599,13 @@ def _resolve_ssh_include_patterns(raw_value: str, from_file: str) -> list[str]:
 
 
 def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str, str, str, str, str]:
+    global _ssh_settings_cache
+    now = time.monotonic()
+    if _ssh_settings_cache is not None:
+        cached_at, cached_value = _ssh_settings_cache
+        if now - cached_at <= _SSH_SETTINGS_CACHE_TTL_SECONDS:
+            return cached_value
+
     pubkey_value: str | None = None
     permit_root_value: str | None = None
     password_auth_value: str | None = None
@@ -634,7 +661,7 @@ def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str, str, str, st
     password_auth_enabled = _coerce_bool(password_auth_value, default=True)
     kbd_interactive_enabled = _coerce_bool(kbd_interactive_value, default=False)
     permit_root_token = permit_root_value.strip().lower() if permit_root_value else "prohibit-password"
-    return (
+    result = (
         pubkey_enabled,
         not password_auth_enabled,
         not kbd_interactive_enabled,
@@ -645,9 +672,18 @@ def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str, str, str, st
         or f"KbdInteractiveAuthentication {'no' if not kbd_interactive_enabled else 'yes'} (default)",
         permit_root_line or f"PermitRootLogin {permit_root_token} (default)",
     )
+    _ssh_settings_cache = (now, result)
+    return result
 
 
 def _collect_ssh_snapshot() -> dict[str, Any]:
+    global _ssh_snapshot_cache
+    now = time.monotonic()
+    if _ssh_snapshot_cache is not None:
+        cached_at, cached_value = _ssh_snapshot_cache
+        if now - cached_at <= _SSH_SNAPSHOT_CACHE_TTL_SECONDS:
+            return dict(cached_value)
+
     success_age_seconds, failure_age_seconds, success_details, failure_details = _extract_ssh_login_ages()
     (
         pubkey_enabled,
@@ -673,7 +709,7 @@ def _collect_ssh_snapshot() -> dict[str, Any]:
     else:
         status_level = 0
     status_text = "ok" if status_level == 0 else "warn" if status_level == 1 else "critical"
-    return {
+    result = {
         "ssh_last_successful_login_seconds": success_age_seconds,
         "ssh_last_successful_auth_method": success_details.get("method") if success_details else None,
         "ssh_last_successful_username": success_details.get("username") if success_details else None,
@@ -698,6 +734,8 @@ def _collect_ssh_snapshot() -> dict[str, Any]:
         "ssh_status_level": status_level,
         "ssh_status": status_text,
     }
+    _ssh_snapshot_cache = (now, result)
+    return dict(result)
 
 
 def _configured_mount_points() -> tuple[list[str], bool]:
@@ -747,6 +785,13 @@ def _discover_mount_points() -> list[str]:
 
 
 def _resolve_mount_points() -> list[str]:
+    global _mount_points_cache
+    now = time.monotonic()
+    if _mount_points_cache is not None:
+        cached_at, cached_value = _mount_points_cache
+        if now - cached_at <= _MOUNT_POINTS_CACHE_TTL_SECONDS:
+            return list(cached_value)
+
     configured, auto = _configured_mount_points()
     discovered: list[str] = []
     if auto or not configured:
@@ -768,6 +813,20 @@ def _resolve_mount_points() -> list[str]:
             result.append(mount_path)
     if not result:
         result.append("/")
+    _mount_points_cache = (now, list(result))
+    return list(result)
+
+
+def _get_os_version() -> str:
+    global _os_version_cache
+    now = time.monotonic()
+    if _os_version_cache is not None:
+        cached_at, cached_value = _os_version_cache
+        if now - cached_at <= _OS_VERSION_CACHE_TTL_SECONDS:
+            return cached_value
+
+    result = platform.platform()
+    _os_version_cache = (now, result)
     return result
 
 
@@ -964,7 +1023,7 @@ def collect_metrics() -> dict[str, Any]:
         "cpu_load": {"one": load_one, "five": load_five, "fifteen": load_fifteen},
         "network_counters": network_counters,
         "disk_temperatures": disk_temps,
-        "os_version": platform.platform(),
+        "os_version": _get_os_version(),
         "uptime_seconds": uptime_seconds,
     }
     top_processes = _collect_top_processes(limit=10)

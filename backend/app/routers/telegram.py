@@ -23,6 +23,12 @@ from backend.app.services.monitor_client import request_monitor_reboot, MonitorC
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
 
+def _mask_telegram_secret(payload: TelegramSettingsRead) -> TelegramSettingsRead:
+    data = payload.model_dump()
+    data["bot_token"] = None
+    return TelegramSettingsRead.model_validate(data)
+
+
 @router.get(
     "/settings",
     response_model=TelegramSettingsRead,
@@ -32,7 +38,7 @@ async def read_settings(
     session: AsyncSession = Depends(get_session),
 ) -> TelegramSettingsRead:
     settings_model = await get_or_create_settings(session)
-    return TelegramSettingsRead.model_validate(settings_model)
+    return _mask_telegram_secret(TelegramSettingsRead.model_validate(settings_model))
 
 
 @router.put(
@@ -45,12 +51,15 @@ async def update_settings(
     session: AsyncSession = Depends(get_session),
 ) -> TelegramSettingsRead:
     settings_model = await get_or_create_settings(session)
-    for key, value in payload.model_dump().items():
+    updates = payload.model_dump()
+    if updates.get("bot_token") in (None, ""):
+        updates.pop("bot_token", None)
+    for key, value in updates.items():
         setattr(settings_model, key, value)
     session.add(settings_model)
     await session.commit()
     await session.refresh(settings_model)
-    return TelegramSettingsRead.model_validate(settings_model)
+    return _mask_telegram_secret(TelegramSettingsRead.model_validate(settings_model))
 
 
 class TelegramUpdate(BaseModel):

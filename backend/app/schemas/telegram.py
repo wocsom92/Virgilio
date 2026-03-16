@@ -56,6 +56,7 @@ class TelegramSettingsUpdate(TelegramSettingsBase):
 
 class TelegramSettingsRead(TelegramSettingsBase):
     id: int
+    bot_token: str | None = None
 
     class Config:
         from_attributes = True

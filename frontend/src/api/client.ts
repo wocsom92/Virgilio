@@ -171,7 +171,7 @@ export interface MonitoredBackend {
   id: number;
   name: string;
   base_url: string;
-  api_token: string;
+  api_token?: string | null;
   is_active: boolean;
   display_order: number;
   poll_interval_seconds: number;

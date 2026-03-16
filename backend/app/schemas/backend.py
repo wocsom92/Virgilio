@@ -34,6 +34,7 @@ class MonitoredBackendUpdate(BaseModel):
 
 class MonitoredBackendRead(MonitoredBackendBase):
     id: int
+    api_token: str | None = None
     last_seen_at: datetime | None = None
     last_warning: str | None = None
     created_at: datetime

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import hmac
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 
@@ -14,7 +15,7 @@ async def verify_token(authorization: str | None = Header(None)) -> None:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
     token = authorization.split(" ", 1)[1]
-    if token != settings.api_token:
+    if not hmac.compare_digest(token, settings.api_token):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 

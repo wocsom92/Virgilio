@@ -12,19 +12,38 @@ import {
 import { Dashboard } from './components/Dashboard';
 import { AdminPanel } from './components/AdminPanel';
 import { Layout } from './components/Layout';
-import { useLocalStorage } from './hooks/useLocalStorage';
+import { useSessionStorage } from './hooks/useSessionStorage';
 
 type View = 'dashboard' | 'admin';
 
 export default function App() {
   const [view, setView] = useState<View>('dashboard');
-  const [storedToken, setStoredToken] = useLocalStorage<string>('server-monitor-auth-token', '');
+  const [storedToken, setStoredToken] = useSessionStorage<string>('server-monitor-auth-token', '');
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authForm, setAuthForm] = useState({ username: '', password: '' });
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      const legacyToken = window.localStorage.getItem('server-monitor-auth-token');
+      const currentSessionToken = window.sessionStorage.getItem('server-monitor-auth-token');
+      if (legacyToken && !currentSessionToken) {
+        window.sessionStorage.setItem('server-monitor-auth-token', legacyToken);
+        setStoredToken(JSON.parse(legacyToken) as string);
+      }
+      if (legacyToken) {
+        window.localStorage.removeItem('server-monitor-auth-token');
+      }
+    } catch {
+      // Ignore storage migration failures and continue with the current session state.
+    }
+  }, [setStoredToken]);
 
   useEffect(() => {
     setAccessToken(storedToken || null);

@@ -8,13 +8,13 @@ from typing import Any, Callable, Sequence
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from backend.app.models.monitors import MonitoredBackend, QuickStatusItem, TelegramSettings as TelegramSettingsModel
-from backend.app.schemas.backend import BackendWithLatestSnapshot, MonitoredBackendRead
+from backend.app.schemas.backend import BackendWithLatestSnapshot
 from backend.app.schemas.common import MetricSnapshotRead
 from backend.app.schemas.metrics import MetricSnapshotCreate
 from backend.app.schemas.quick_status import QuickStatusTileRead
+from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
 from backend.app.services.metrics_service import build_stats_message
 from backend.app.services.monitor_client import MonitorClientError, fetch_metrics
 from backend.app.services.notification_center import record_notification_event
@@ -107,26 +107,13 @@ async def fetch_backends_with_latest(
     backend_ids: Sequence[int] | None = None,
     backend_name: str | None = None,
 ) -> list[BackendWithLatestSnapshot]:
-    query = select(MonitoredBackend).options(selectinload(MonitoredBackend.snapshots))
-    if backend_id is not None:
-        query = query.where(MonitoredBackend.id == backend_id)
-    elif backend_ids:
-        query = query.where(MonitoredBackend.id.in_(backend_ids))
-    if backend_name:
-        query = query.where(MonitoredBackend.name.ilike(f"%{backend_name}%"))
-
-    result = await session.execute(query)
-    backends: list[BackendWithLatestSnapshot] = []
-    for backend in result.scalars():
-        latest_snapshot = backend.snapshots[-1] if backend.snapshots else None
-        base = MonitoredBackendRead.model_validate(backend)
-        backends.append(
-            BackendWithLatestSnapshot(
-                **base.model_dump(),
-                latest_snapshot=MetricSnapshotRead.model_validate(latest_snapshot) if latest_snapshot else None,
-            )
-        )
-    return backends
+    return await fetch_backends_with_latest_snapshots(
+        session,
+        backend_id=backend_id,
+        backend_ids=backend_ids,
+        backend_name=backend_name,
+        require_admin_ordering=True,
+    )
 
 
 async def find_backend_for_telegram(session: AsyncSession, token: str) -> MonitoredBackend | None:

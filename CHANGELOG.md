@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.0] - 2026-03-16
+## [5.0.1] - 2026-03-16
 
 ### Added
 - In-app notification center with unread badge, notification history, and fallback visibility when Telegram delivery is blocked or fails.
@@ -12,9 +12,25 @@ All notable changes to this project will be documented in this file.
 - Notification logging API and UI fallback delivery history.
 
 ### Changed
-- Project version updated from `4.3.5` to `5.0.0` across backend, frontend, monitor, and displayed UI version constants.
+- Project version updated from `5.0.0` to `5.0.1` across backend, frontend, monitor, and displayed UI version constants.
 - Dashboard and admin UI received mobile-oriented quick-tile layout refinements, admin-only version visibility, admin-only backend address visibility, and a heartbeat (`HB`) freshness tile in the overview grid.
 - Deployment script now runs `sudo docker system prune -f` after a successful remote deployment.
+- Successful SSH login notifications now use a concrete timestamp instead of relative age wording, and raw SSH success log lines are no longer included in Telegram messages.
+- Hidden backend cards were compacted, and header actions/layout were refined so `Show/Hide`, `Refresh`, and hidden state indicators stay aligned cleanly.
+- Root and component documentation were refreshed for the release, including screenshot embedding, contribution guidance, and MIT licensing.
+
+### Security
+- Backend registry read routes that expose monitor connection details are now admin-only.
+- Stored monitor and Telegram secrets are masked in API read responses and no longer echoed back into admin forms.
+- Admin secret fields now preserve existing values when left blank during edits instead of overwriting them.
+- Frontend auth tokens now use `sessionStorage` instead of `localStorage`, with one-time migration of legacy stored sessions.
+- Backend CORS handling no longer falls back to wildcard origins with credentialed requests enabled.
+- Monitor bearer-token verification now uses constant-time comparison.
+
+### Performance
+- Backend monitor and Telegram outbound HTTP calls now reuse pooled async clients instead of creating a new client per request.
+- Dashboard/admin latest-snapshot queries now fetch only the newest snapshot per backend instead of loading full snapshot histories.
+- Monitor metric collection now caches top-process and SSH snapshot data briefly to reduce repeated expensive work during rapid polling.
 
 ## [4.3.5] - 2026-03-16
 

@@ -1165,11 +1165,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               <div className="col-md-6">
                 <label className="form-label">Monitor Token</label>
                 <input
+                  type="password"
                   className="form-control bg-dark text-light border-secondary"
                   value={form.api_token}
                   onChange={(event) => setForm({ ...form, api_token: event.target.value })}
-                  required
+                  required={!editingId}
+                  autoComplete="new-password"
+                  placeholder={editingId ? 'Leave blank to keep current token' : ''}
                 />
+                {editingId && <div className="form-text">Leave blank to keep the current monitor token.</div>}
               </div>
               <div className="col-md-3">
                 <label className="form-label">Display Order</label>
@@ -2438,6 +2442,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <div>
                       <label className="form-label">Bot Token</label>
                       <input
+                        type="password"
                         className="form-control bg-dark text-light border-secondary"
                         value={telegram?.bot_token ?? ''}
                         onChange={(event) =>
@@ -2446,8 +2451,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             return { ...base, bot_token: event.target.value };
                           })
                         }
-                        required
+                        autoComplete="new-password"
+                        placeholder="Leave blank to keep current bot token"
                       />
+                      <div className="form-text">Leave blank to keep the current Telegram bot token.</div>
                     </div>
                     <div>
                       <label className="form-label">Default Chat ID</label>
