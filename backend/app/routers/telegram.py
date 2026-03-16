@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 
@@ -8,14 +7,16 @@ from backend.app.core.security import require_admin_user
 from backend.app.db.session import get_session
 from backend.app.schemas.telegram import TelegramSettingsRead, TelegramSettingsUpdate
 from backend.app.services.telegram_notifications import (
+    find_backend_for_telegram,
     resolve_message_context,
+    send_cpu_message,
+    send_memory_message,
     send_stats_message,
     send_warn_message,
 )
 from backend.app.services.reboot_service import request_reboot
 from backend.app.services.telegram_settings import get_or_create_settings
 from backend.app.services.telegram_service import TelegramError, send_message
-from backend.app.models.monitors import MonitoredBackend
 from backend.app.services.monitor_client import request_monitor_reboot, MonitorClientError
 
 
@@ -255,6 +256,56 @@ async def telegram_webhook(
                 "parse_mode": "Markdown",
                 "disable_web_page_preview": True,
             }
+    if command == "/cpu":
+        if not args:
+            return {
+                "ok": True,
+                "method": "sendMessage",
+                "chat_id": chat_id,
+                "text": "Usage: /cpu <server_name>",
+            }
+        try:
+            await send_cpu_message(session, chat_id=str(chat_id) if chat_id is not None else None, backend_name=args[0])
+            return {"ok": True}
+        except Exception as exc:
+            text = "Unable to send CPU usage."
+            if isinstance(exc, TelegramError):
+                text = "Telegram delivery failed."
+            elif isinstance(exc, HTTPException):
+                text = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            _, target_chat = await resolve_message_context(session, chat_id, strict=False)
+            return {
+                "method": "sendMessage",
+                "chat_id": target_chat or chat_id,
+                "text": text,
+            }
+    if command == "/memory":
+        if not args:
+            return {
+                "ok": True,
+                "method": "sendMessage",
+                "chat_id": chat_id,
+                "text": "Usage: /memory <server_name>",
+            }
+        try:
+            await send_memory_message(
+                session,
+                chat_id=str(chat_id) if chat_id is not None else None,
+                backend_name=args[0],
+            )
+            return {"ok": True}
+        except Exception as exc:
+            text = "Unable to send memory usage."
+            if isinstance(exc, TelegramError):
+                text = "Telegram delivery failed."
+            elif isinstance(exc, HTTPException):
+                text = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+            _, target_chat = await resolve_message_context(session, chat_id, strict=False)
+            return {
+                "method": "sendMessage",
+                "chat_id": target_chat or chat_id,
+                "text": text,
+            }
     if command in ("/reboot", "/restart"):
         # Expecting backend identifier as first argument
         if not args:
@@ -265,14 +316,7 @@ async def telegram_webhook(
                 "text": "Usage: /reboot <backend_id|name>",
             }
         target = args[0].strip()
-        backend: MonitoredBackend | None = None
-        if target.isdigit():
-            backend = await session.get(MonitoredBackend, int(target))
-        else:
-            result = await session.execute(
-                select(MonitoredBackend).where(MonitoredBackend.name.ilike(target))
-            )
-            backend = result.scalars().first()
+        backend = await find_backend_for_telegram(session, target)
         if not backend:
             return {
                 "ok": True,

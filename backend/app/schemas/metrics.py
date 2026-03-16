@@ -27,6 +27,10 @@ class MetricSnapshotCreate(BaseModel):
     )
     os_version: str | None = None
     uptime_seconds: int | None = None
+    ssh_pubkey_auth_line: str | None = None
+    ssh_password_auth_line: str | None = None
+    ssh_kbd_interactive_auth_line: str | None = None
+    ssh_permit_root_login_line: str | None = None
     warnings: list[str] | None = None
     raw_payload: dict[str, Any] | None = None
 

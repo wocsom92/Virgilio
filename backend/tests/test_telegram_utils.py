@@ -9,6 +9,8 @@ from backend.app.routers import telegram
     ("message", "expected"),
     [
         ({"text": "/stats"}, "/stats"),
+        ({"text": "/cpu server-a"}, "/cpu"),
+        ({"text": "/memory server-a"}, "/memory"),
         ({"text": "   /warn@MyBot   now"}, "/warn"),
         ({"caption": "/warn"}, "/warn"),
         (

@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.core.config import settings
 from backend.app.models.monitors import MetricSnapshot, QuickStatusItem
 from backend.app.schemas.quick_status import (
+    QuickStatusDetailLine,
     QuickStatusItemCreate,
     QuickStatusTileRead,
     is_supported_quick_status_metric,
@@ -222,42 +223,53 @@ def _format_binary_size_from_gib(value_gib: float) -> str:
     return f"{round(value_mib * 1024):.0f} KiB"
 
 
-def _build_detail_lines(item: QuickStatusItem, snapshot: MetricSnapshot | None) -> list[str] | None:
+def _build_detail_lines(item: QuickStatusItem, snapshot: MetricSnapshot | None) -> list[QuickStatusDetailLine] | None:
     if snapshot is None or item.metric_key != "ssh_status":
         return None
     payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
     pubkey_enabled = payload.get("ssh_pubkey_auth_enabled")
-    root_password_disabled = payload.get("ssh_root_password_login_disabled")
     password_auth_disabled = payload.get("ssh_password_auth_disabled")
     kbd_interactive_disabled = payload.get("ssh_kbd_interactive_auth_disabled")
     permit_root_mode = payload.get("ssh_permit_root_login_mode")
+    pubkey_line = payload.get("ssh_pubkey_auth_line")
+    password_auth_line = payload.get("ssh_password_auth_line")
+    kbd_interactive_line = payload.get("ssh_kbd_interactive_auth_line")
+    permit_root_line = payload.get("ssh_permit_root_login_line")
 
-    def _flag(value: object, ok_text: str, fix_text: str) -> str:
-        if value is True:
-            return ok_text
-        return fix_text
+    lines: list[QuickStatusDetailLine] = []
 
-    lines = [
-        _flag(pubkey_enabled, "Public key authentication is enabled.", "Set `PubkeyAuthentication yes`."),
-        _flag(
-            password_auth_disabled,
-            "Password authentication is disabled.",
-            "Set `PasswordAuthentication no`.",
-        ),
-        _flag(
-            kbd_interactive_disabled,
-            "Keyboard-interactive authentication is disabled.",
-            "Set `KbdInteractiveAuthentication no` (or `ChallengeResponseAuthentication no`).",
-        ),
-        _flag(
-            root_password_disabled,
-            "Root password login is blocked.",
-            "Set `PermitRootLogin prohibit-password` or `PermitRootLogin no`.",
-        ),
-    ]
-    if isinstance(permit_root_mode, str) and permit_root_mode:
-        lines.append(f"Current `PermitRootLogin`: `{permit_root_mode}`.")
-    return lines
+    if isinstance(pubkey_line, str) and pubkey_line.strip():
+        lines.append(
+            QuickStatusDetailLine(
+                text=pubkey_line.strip(),
+                severity="ok" if pubkey_enabled is True else "warn",
+            )
+        )
+    if isinstance(password_auth_line, str) and password_auth_line.strip():
+        lines.append(
+            QuickStatusDetailLine(
+                text=password_auth_line.strip(),
+                severity="ok" if password_auth_disabled is True else "warn",
+            )
+        )
+    if isinstance(kbd_interactive_line, str) and kbd_interactive_line.strip():
+        lines.append(
+            QuickStatusDetailLine(
+                text=kbd_interactive_line.strip(),
+                severity="ok" if kbd_interactive_disabled is True else "warn",
+            )
+        )
+    if isinstance(permit_root_line, str) and permit_root_line.strip():
+        permit_root_token = permit_root_mode.strip().lower() if isinstance(permit_root_mode, str) else ""
+        if permit_root_token == "no":
+            severity = "ok"
+        elif permit_root_token in {"prohibit-password", "without-password", "forced-commands-only"}:
+            severity = "warn"
+        else:
+            severity = "critical"
+        lines.append(QuickStatusDetailLine(text=permit_root_line.strip(), severity=severity))
+
+    return lines or None
 
 
 def _format_uptime_hours(value: float) -> str:

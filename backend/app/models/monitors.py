@@ -87,6 +87,25 @@ class SystemSettings(TimestampMixin, Base):
     auth_session_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=1440)
 
 
+class NotificationEvent(TimestampMixin, Base):
+    __tablename__ = "notification_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False, default="telegram")
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False, default="info")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    backend_id: Mapped[int | None] = mapped_column(ForeignKey("monitored_backends.id"), nullable=True, index=True)
+    backend_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    delivery_status: Mapped[str] = mapped_column(String(16), nullable=False, default="sent")
+    target: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    backend: Mapped[MonitoredBackend | None] = relationship("MonitoredBackend")
+
+
 class QuickStatusItem(TimestampMixin, Base):
     __tablename__ = "quick_status_items"
 

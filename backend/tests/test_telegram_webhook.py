@@ -56,6 +56,96 @@ async def test_telegram_webhook_warn_triggers_notification(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_telegram_webhook_cpu_triggers_notification(monkeypatch):
+    monkeypatch.setattr("backend.app.routers.telegram._is_authorized_user", lambda message: True)
+
+    captured = {}
+
+    async def fake_send_cpu(session, chat_id=None, backend_name=None, **kwargs):
+        captured["cpu"] = (session, chat_id, backend_name)
+        return "sent"
+
+    monkeypatch.setattr("backend.app.routers.telegram.send_cpu_message", fake_send_cpu)
+
+    update = TelegramUpdate(message={
+        "text": "/cpu server-a",
+        "from": {"id": 111},
+        "chat": {"id": 444},
+    })
+
+    response = await telegram_webhook(update, session=DummySession())
+
+    assert response == {"ok": True}
+    assert captured["cpu"][1] == "444"
+    assert captured["cpu"][2] == "server-a"
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_memory_triggers_notification(monkeypatch):
+    monkeypatch.setattr("backend.app.routers.telegram._is_authorized_user", lambda message: True)
+
+    captured = {}
+
+    async def fake_send_memory(session, chat_id=None, backend_name=None, **kwargs):
+        captured["memory"] = (session, chat_id, backend_name)
+        return "sent"
+
+    monkeypatch.setattr("backend.app.routers.telegram.send_memory_message", fake_send_memory)
+
+    update = TelegramUpdate(message={
+        "text": "/memory server-a",
+        "from": {"id": 111},
+        "chat": {"id": 445},
+    })
+
+    response = await telegram_webhook(update, session=DummySession())
+
+    assert response == {"ok": True}
+    assert captured["memory"][1] == "445"
+    assert captured["memory"][2] == "server-a"
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_cpu_requires_server_name(monkeypatch):
+    monkeypatch.setattr("backend.app.routers.telegram._is_authorized_user", lambda message: True)
+
+    update = TelegramUpdate(message={
+        "text": "/cpu",
+        "from": {"id": 111},
+        "chat": {"id": 446},
+    })
+
+    response = await telegram_webhook(update, session=DummySession())
+
+    assert response == {
+        "ok": True,
+        "method": "sendMessage",
+        "chat_id": 446,
+        "text": "Usage: /cpu <server_name>",
+    }
+
+
+@pytest.mark.asyncio
+async def test_telegram_webhook_memory_requires_server_name(monkeypatch):
+    monkeypatch.setattr("backend.app.routers.telegram._is_authorized_user", lambda message: True)
+
+    update = TelegramUpdate(message={
+        "text": "/memory",
+        "from": {"id": 111},
+        "chat": {"id": 447},
+    })
+
+    response = await telegram_webhook(update, session=DummySession())
+
+    assert response == {
+        "ok": True,
+        "method": "sendMessage",
+        "chat_id": 447,
+        "text": "Usage: /memory <server_name>",
+    }
+
+
+@pytest.mark.asyncio
 async def test_telegram_webhook_unauthorized(monkeypatch):
     captured = {}
 

@@ -231,6 +231,11 @@ export interface QuickStatusItem {
   display_order: number;
 }
 
+export interface QuickStatusDetailLine {
+  text: string;
+  severity: 'ok' | 'warn' | 'critical';
+}
+
 export interface QuickStatusTile {
   id: number;
   backend_id: number;
@@ -242,12 +247,34 @@ export interface QuickStatusTile {
   display_value: string;
   status: 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
   reported_at?: string | null;
-  details?: string[] | null;
+  details?: QuickStatusDetailLine[] | null;
 }
 
 export interface RebootResponse {
   status: string;
   requested_at: string;
+}
+
+export interface NotificationEvent {
+  id: number;
+  channel: string;
+  category: string;
+  severity: string;
+  title: string;
+  body: string;
+  backend_id?: number | null;
+  backend_name?: string | null;
+  delivery_status: string;
+  target?: string | null;
+  error_message?: string | null;
+  read_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationCenterResponse {
+  unread_count: number;
+  items: NotificationEvent[];
 }
 
 export async function fetchDashboard(): Promise<MonitoredBackend[]> {
@@ -267,6 +294,11 @@ export async function fetchBackendVersion(): Promise<string> {
 
 export async function listBackends(): Promise<MonitoredBackend[]> {
   const { data } = await api.get<MonitoredBackend[]>('/backends/');
+  return data;
+}
+
+export async function listBackendsWithLatest(): Promise<MonitoredBackend[]> {
+  const { data } = await api.get<MonitoredBackend[]>('/backends/with-latest');
   return data;
 }
 
@@ -383,6 +415,16 @@ export async function deleteQuickStatusItem(id: number) {
 
 export async function requestReboot(reason?: string) {
   const { data } = await api.post<RebootResponse>('/system/reboot', { reason });
+  return data;
+}
+
+export async function fetchNotifications(limit = 100) {
+  const { data } = await api.get<NotificationCenterResponse>('/notifications/', { params: { limit } });
+  return data;
+}
+
+export async function markNotificationsRead() {
+  const { data } = await api.post<{ status: string; cleared: number }>('/notifications/read-all');
   return data;
 }
 

@@ -465,4 +465,7 @@ else
   log "Skipping post-deploy smoke checks (TARGET_${TARGET}_SMOKE_CHECK=false)."
 fi
 
+log "Pruning unused Docker resources on remote host..."
+run_ssh "sudo docker system prune -f"
+
 log "Deploy completed successfully."

@@ -9,15 +9,19 @@ from fastapi import HTTPException
 from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.ext import Application, ApplicationBuilder, CommandHandler, ContextTypes
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
 from backend.app.core.config import settings
 from backend.app.db.session import async_session_factory
-from backend.app.models.monitors import MonitoredBackend
 from backend.app.services.monitor_client import MonitorClientError, request_monitor_reboot
 from backend.app.services.reboot_service import request_reboot
 from backend.app.services.telegram_service import TelegramError, send_message
-from backend.app.services.telegram_notifications import send_stats_message, send_warn_message
+from backend.app.services.telegram_notifications import (
+    find_backend_for_telegram,
+    send_cpu_message,
+    send_memory_message,
+    send_stats_message,
+    send_warn_message,
+)
 from backend.app.bot.boot_tracker import BootTracker
 
 logger = logging.getLogger(__name__)
@@ -79,6 +83,26 @@ async def handle_warn(_: Update, __: ContextTypes.DEFAULT_TYPE, chat_id: str, se
     await send_warn_message(session, chat_id=chat_id)
 
 
+async def handle_cpu(update: Update, _: ContextTypes.DEFAULT_TYPE, chat_id: str, session) -> None:
+    message = update.effective_message
+    args = _extract_args(update)
+    if not args:
+        if message:
+            await message.reply_text("Usage: /cpu <server_name>")
+        return
+    await send_cpu_message(session, chat_id=chat_id, backend_name=args[0])
+
+
+async def handle_memory(update: Update, _: ContextTypes.DEFAULT_TYPE, chat_id: str, session) -> None:
+    message = update.effective_message
+    args = _extract_args(update)
+    if not args:
+        if message:
+            await message.reply_text("Usage: /memory <server_name>")
+        return
+    await send_memory_message(session, chat_id=chat_id, backend_name=args[0])
+
+
 def _describe_user(update: Update) -> str:
     user = update.effective_user
     if user and user.username:
@@ -86,15 +110,6 @@ def _describe_user(update: Update) -> str:
     if user and user.id is not None:
         return f"telegram:{user.id}"
     return "telegram-user"
-
-
-async def _find_backend(session: AsyncSession, token: str) -> MonitoredBackend | None:
-    if token.isdigit():
-        return await session.get(MonitoredBackend, int(token))
-    result = await session.execute(
-        select(MonitoredBackend).where(MonitoredBackend.name.ilike(token))
-    )
-    return result.scalars().first()
 
 
 def _extract_args(update: Update) -> list[str]:
@@ -122,7 +137,7 @@ async def handle_reboot_backend(update: Update, _: ContextTypes.DEFAULT_TYPE, ch
         return
 
     target = args[0]
-    backend = await _find_backend(session, target)
+    backend = await find_backend_for_telegram(session, target)
     if not backend:
         if message:
             await message.reply_text("Backend not found.")
@@ -170,9 +185,12 @@ async def handle_start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if not _is_authorized(update):
         return
     if update.effective_message:
-        keyboard = ReplyKeyboardMarkup([["/stats", "/warn", "/reboot", "/hostreboot"]], resize_keyboard=True)
+        keyboard = ReplyKeyboardMarkup(
+            [["/stats", "/warn"], ["/cpu", "/memory"], ["/reboot", "/hostreboot"]],
+            resize_keyboard=True,
+        )
         await update.effective_message.reply_text(
-            "Server Monitor bot ready. Use the buttons or type /stats /warn /reboot <backend> /hostreboot",
+            "Server Monitor bot ready. Use /stats /warn /cpu <server> /memory <server> /reboot <backend> /hostreboot",
             reply_markup=keyboard,
         )
 
@@ -201,6 +219,8 @@ async def configure_bot_commands(application: Application) -> None:
     commands = [
         BotCommand("stats", "Show latest metrics"),
         BotCommand("warn", "Show current warnings"),
+        BotCommand("cpu", "Show live CPU usage: /cpu <server>"),
+        BotCommand("memory", "Show live memory usage: /memory <server>"),
         BotCommand("reboot", "Reboot backend: /reboot <backend>"),
     ]
     if settings.allow_host_reboot:
@@ -225,6 +245,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CommandHandler("stats", with_session(handle_stats)))
     application.add_handler(CommandHandler("warn", with_session(handle_warn)))
+    application.add_handler(CommandHandler("cpu", with_session(handle_cpu)))
+    application.add_handler(CommandHandler("memory", with_session(handle_memory)))
     application.add_handler(CommandHandler(["reboot", "restart"], with_session(handle_reboot_backend)))
     application.add_handler(CommandHandler("hostreboot", with_session(handle_host_reboot)))
     application.post_init = post_init

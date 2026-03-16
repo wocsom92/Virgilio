@@ -49,8 +49,10 @@ export function QuickStatusTileCard({
   if (onClick && !action && !draggable && !onDragStart && !onDragOver && !onDragEnd && !onDrop) {
     return (
       <button type="button" className={tileClassName} onClick={onClick}>
-        <div className="quick-status-value">{tile.display_value}</div>
-        <div className="quick-status-label">{tile.label}</div>
+        <div className="quick-status-content">
+          <div className="quick-status-value">{tile.display_value}</div>
+          <div className="quick-status-label">{tile.label}</div>
+        </div>
         {tile.details && tile.details.length > 0 ? <div className="quick-status-hint">Details</div> : null}
       </button>
     );
@@ -70,8 +72,10 @@ export function QuickStatusTileCard({
       onKeyDown={handleKeyDown}
     >
       {action ? <div className="quick-status-tile__action">{action}</div> : null}
-      <div className="quick-status-value">{tile.display_value}</div>
-      <div className="quick-status-label">{tile.label}</div>
+      <div className="quick-status-content">
+        <div className="quick-status-value">{tile.display_value}</div>
+        <div className="quick-status-label">{tile.label}</div>
+      </div>
       {tile.details && tile.details.length > 0 ? <div className="quick-status-hint">Details</div> : null}
     </div>
   );

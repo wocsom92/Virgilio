@@ -51,6 +51,91 @@ _SSH_ROOT_PASSWORD_DISABLED_VALUES = {
 }
 _SSH_FALSE_VALUES = {"0", "false", "no", "off"}
 _SSH_TRUE_VALUES = {"1", "true", "yes", "on"}
+_SSH_FAILURE_DETAILS_RE = re.compile(
+    r"Failed\s+(?P<method>[A-Za-z0-9-]+)\s+for\s+(?:(?:invalid user)\s+)?(?P<username>\S+)\s+from\s+"
+    r"(?P<source_ip>\S+)(?:\s+port\s+(?P<port>\d+))?",
+    re.IGNORECASE,
+)
+_SSH_INVALID_USER_RE = re.compile(
+    r"Invalid user\s+(?P<username>\S+)\s+from\s+(?P<source_ip>\S+)(?:\s+port\s+(?P<port>\d+))?",
+    re.IGNORECASE,
+)
+_SSH_AUTH_FAILURE_RE = re.compile(
+    r"authentication failure.*?(?:user=(?P<username>\S+))?.*?(?:rhost=(?P<source_ip>\S+))?",
+    re.IGNORECASE,
+)
+_SSH_SUCCESS_DETAILS_RE = re.compile(
+    r"Accepted\s+(?P<method>[A-Za-z0-9-]+)\s+for\s+(?P<username>\S+)\s+from\s+"
+    r"(?P<source_ip>\S+)(?:\s+port\s+(?P<port>\d+))?",
+    re.IGNORECASE,
+)
+
+
+def _safe_percent(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return round(float(value), 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] | None:
+    try:
+        processes = list(psutil.process_iter(["pid", "name", "memory_percent"]))
+    except (psutil.Error, OSError):
+        return None
+
+    if not processes:
+        return None
+
+    for process in processes:
+        try:
+            process.cpu_percent(interval=None)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    time.sleep(0.1)
+
+    entries: list[dict[str, Any]] = []
+    for process in processes:
+        try:
+            info = process.info
+            pid = info.get("pid")
+            name = (info.get("name") or "").strip() or f"pid-{pid}"
+            entries.append(
+                {
+                    "pid": pid,
+                    "name": name[:80],
+                    "cpu_percent": _safe_percent(process.cpu_percent(interval=None)),
+                    "memory_percent": _safe_percent(info.get("memory_percent")),
+                }
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+
+    if not entries:
+        return None
+
+    cpu_entries = sorted(
+        entries,
+        key=lambda entry: (entry.get("cpu_percent") or 0.0, entry.get("memory_percent") or 0.0, entry.get("pid") or 0),
+        reverse=True,
+    )[:limit]
+    memory_entries = sorted(
+        entries,
+        key=lambda entry: (
+            entry.get("memory_percent") or 0.0,
+            entry.get("cpu_percent") or 0.0,
+            entry.get("pid") or 0,
+        ),
+        reverse=True,
+    )[:limit]
+
+    return {
+        "cpu": cpu_entries,
+        "memory": memory_entries,
+    }
 
 
 def _get_cpu_temperature() -> float | None:
@@ -180,10 +265,62 @@ def _parse_syslog_timestamp(line: str, now: datetime) -> datetime | None:
     return parsed
 
 
-def _extract_ssh_login_ages() -> tuple[int | None, int | None]:
+def _extract_ssh_failure_details(line: str) -> dict[str, Any] | None:
+    normalized = " ".join(line.split())
+
+    match = _SSH_FAILURE_DETAILS_RE.search(normalized)
+    if match:
+        return {
+            "method": (match.group("method") or "").lower() or None,
+            "username": match.group("username"),
+            "source_ip": match.group("source_ip"),
+            "port": int(match.group("port")) if match.group("port") else None,
+            "raw_line": normalized[-500:],
+        }
+
+    match = _SSH_INVALID_USER_RE.search(normalized)
+    if match:
+        return {
+            "method": "invalid-user",
+            "username": match.group("username"),
+            "source_ip": match.group("source_ip"),
+            "port": int(match.group("port")) if match.group("port") else None,
+            "raw_line": normalized[-500:],
+        }
+
+    match = _SSH_AUTH_FAILURE_RE.search(normalized)
+    if match:
+        return {
+            "method": "authentication-failure",
+            "username": match.group("username"),
+            "source_ip": match.group("source_ip"),
+            "port": None,
+            "raw_line": normalized[-500:],
+        }
+
+    return None
+
+
+def _extract_ssh_success_details(line: str) -> dict[str, Any] | None:
+    normalized = " ".join(line.split())
+    match = _SSH_SUCCESS_DETAILS_RE.search(normalized)
+    if not match:
+        return None
+    return {
+        "method": (match.group("method") or "").lower() or None,
+        "username": match.group("username"),
+        "source_ip": match.group("source_ip"),
+        "port": int(match.group("port")) if match.group("port") else None,
+        "raw_line": normalized[-500:],
+    }
+
+
+def _extract_ssh_login_ages() -> tuple[int | None, int | None, dict[str, Any] | None, dict[str, Any] | None]:
     now = datetime.now()
     latest_success: datetime | None = None
     latest_failure: datetime | None = None
+    latest_success_details: dict[str, Any] | None = None
+    latest_failure_details: dict[str, Any] | None = None
     for path in _candidate_ssh_log_files():
         try:
             payload = _read_text_tail(path)
@@ -198,15 +335,19 @@ def _extract_ssh_login_ages() -> tuple[int | None, int | None]:
             if any(marker in line for marker in _SSH_SUCCESS_MARKERS):
                 if latest_success is None or stamp > latest_success:
                     latest_success = stamp
+                    latest_success_details = _extract_ssh_success_details(line)
             if any(marker in line for marker in _SSH_FAILURE_MARKERS):
                 if latest_failure is None or stamp > latest_failure:
                     latest_failure = stamp
+                    latest_failure_details = _extract_ssh_failure_details(line)
     if latest_success is None or latest_failure is None:
-        journal_success, journal_failure = _extract_ssh_login_ages_from_journal()
+        journal_success, journal_failure, journal_success_details, journal_failure_details = _extract_ssh_login_ages_from_journal()
         if latest_success is None:
             latest_success = journal_success
+            latest_success_details = journal_success_details
         if latest_failure is None:
             latest_failure = journal_failure
+            latest_failure_details = journal_failure_details
     success_age = int((now - latest_success).total_seconds()) if latest_success else None
     failure_age = int((now - latest_failure).total_seconds()) if latest_failure else None
     if success_age is None:
@@ -217,7 +358,7 @@ def _extract_ssh_login_ages() -> tuple[int | None, int | None]:
         success_age = max(0, success_age)
     if failure_age is not None:
         failure_age = max(0, failure_age)
-    return success_age, failure_age
+    return success_age, failure_age, latest_success_details, latest_failure_details
 
 
 def _journal_directories() -> list[str]:
@@ -256,11 +397,11 @@ def _parse_journal_short_unix_timestamp(line: str) -> datetime | None:
         return None
 
 
-def _extract_ssh_login_ages_from_journal() -> tuple[datetime | None, datetime | None]:
+def _extract_ssh_login_ages_from_journal() -> tuple[datetime | None, datetime | None, dict[str, Any] | None, dict[str, Any] | None]:
     journal_root = _journal_root()
     directories = _journal_directories() if journal_root is None else []
     if journal_root is None and not directories:
-        return None, None
+        return None, None, None, None
 
     def _run_journal(args: list[str]) -> str:
         base_args = ["--no-pager", "-n", "200", "-o", "short-unix"]
@@ -319,6 +460,8 @@ def _extract_ssh_login_ages_from_journal() -> tuple[datetime | None, datetime | 
 
     latest_success: datetime | None = None
     latest_failure: datetime | None = None
+    latest_success_details: dict[str, Any] | None = None
+    latest_failure_details: dict[str, Any] | None = None
     output = _run_journal(["-u", "ssh"])
     if not output:
         output = _run_journal(["_COMM=sshd"])
@@ -331,10 +474,12 @@ def _extract_ssh_login_ages_from_journal() -> tuple[datetime | None, datetime | 
         if any(marker in line for marker in _SSH_SUCCESS_MARKERS):
             if latest_success is None or stamp > latest_success:
                 latest_success = stamp
+                latest_success_details = _extract_ssh_success_details(line)
         if any(marker in line for marker in _SSH_FAILURE_MARKERS):
             if latest_failure is None or stamp > latest_failure:
                 latest_failure = stamp
-    return latest_success, latest_failure
+                latest_failure_details = _extract_ssh_failure_details(line)
+    return latest_success, latest_failure, latest_success_details, latest_failure_details
 
 
 def _extract_login_age_from_last_command(command: str, host_log_path: str) -> int | None:
@@ -433,15 +578,20 @@ def _resolve_ssh_include_patterns(raw_value: str, from_file: str) -> list[str]:
     return patterns
 
 
-def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str]:
+def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str, str, str, str, str]:
     pubkey_value: str | None = None
     permit_root_value: str | None = None
     password_auth_value: str | None = None
     kbd_interactive_value: str | None = None
+    pubkey_line: str | None = None
+    permit_root_line: str | None = None
+    password_auth_line: str | None = None
+    kbd_interactive_line: str | None = None
     seen: set[str] = set()
 
     def parse_file(path: str) -> None:
         nonlocal pubkey_value, permit_root_value, password_auth_value, kbd_interactive_value
+        nonlocal pubkey_line, permit_root_line, password_auth_line, kbd_interactive_line
         resolved = str(Path(path).resolve())
         if resolved in seen:
             return
@@ -466,12 +616,16 @@ def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str]:
                 continue
             if key == "pubkeyauthentication":
                 pubkey_value = value
+                pubkey_line = f"{parts[0]} {value}"
             elif key == "permitrootlogin":
                 permit_root_value = value
+                permit_root_line = f"{parts[0]} {value}"
             elif key == "passwordauthentication":
                 password_auth_value = value
+                password_auth_line = f"{parts[0]} {value}"
             elif key in {"kbdinteractiveauthentication", "challengeresponseauthentication"}:
                 kbd_interactive_value = value
+                kbd_interactive_line = f"{parts[0]} {value}"
 
     for candidate in _host_candidate_paths("/etc/ssh/sshd_config"):
         parse_file(candidate)
@@ -480,13 +634,32 @@ def _read_sshd_effective_settings() -> tuple[bool, bool, bool, str]:
     password_auth_enabled = _coerce_bool(password_auth_value, default=True)
     kbd_interactive_enabled = _coerce_bool(kbd_interactive_value, default=False)
     permit_root_token = permit_root_value.strip().lower() if permit_root_value else "prohibit-password"
-    return pubkey_enabled, not password_auth_enabled, not kbd_interactive_enabled, permit_root_token
+    return (
+        pubkey_enabled,
+        not password_auth_enabled,
+        not kbd_interactive_enabled,
+        permit_root_token,
+        pubkey_line or f"PubkeyAuthentication {'yes' if pubkey_enabled else 'no'} (default)",
+        password_auth_line or f"PasswordAuthentication {'no' if not password_auth_enabled else 'yes'} (default)",
+        kbd_interactive_line
+        or f"KbdInteractiveAuthentication {'no' if not kbd_interactive_enabled else 'yes'} (default)",
+        permit_root_line or f"PermitRootLogin {permit_root_token} (default)",
+    )
 
 
 def _collect_ssh_snapshot() -> dict[str, Any]:
-    success_age_seconds, failure_age_seconds = _extract_ssh_login_ages()
-    pubkey_enabled, password_auth_disabled, kbd_interactive_disabled, permit_root_token = _read_sshd_effective_settings()
-    strict_root_policy = permit_root_token == "prohibit-password"
+    success_age_seconds, failure_age_seconds, success_details, failure_details = _extract_ssh_login_ages()
+    (
+        pubkey_enabled,
+        password_auth_disabled,
+        kbd_interactive_disabled,
+        permit_root_token,
+        pubkey_line,
+        password_auth_line,
+        kbd_interactive_line,
+        permit_root_line,
+    ) = _read_sshd_effective_settings()
+    strict_root_policy = permit_root_token == "no"
     root_password_disabled = permit_root_token in _SSH_ROOT_PASSWORD_DISABLED_VALUES
     if not pubkey_enabled and not root_password_disabled:
         status_level = 2
@@ -502,12 +675,26 @@ def _collect_ssh_snapshot() -> dict[str, Any]:
     status_text = "ok" if status_level == 0 else "warn" if status_level == 1 else "critical"
     return {
         "ssh_last_successful_login_seconds": success_age_seconds,
+        "ssh_last_successful_auth_method": success_details.get("method") if success_details else None,
+        "ssh_last_successful_username": success_details.get("username") if success_details else None,
+        "ssh_last_successful_source_ip": success_details.get("source_ip") if success_details else None,
+        "ssh_last_successful_port": success_details.get("port") if success_details else None,
+        "ssh_last_successful_line": success_details.get("raw_line") if success_details else None,
         "ssh_last_unsuccessful_attempt_seconds": failure_age_seconds,
+        "ssh_last_failure_auth_method": failure_details.get("method") if failure_details else None,
+        "ssh_last_failure_username": failure_details.get("username") if failure_details else None,
+        "ssh_last_failure_source_ip": failure_details.get("source_ip") if failure_details else None,
+        "ssh_last_failure_port": failure_details.get("port") if failure_details else None,
+        "ssh_last_failure_line": failure_details.get("raw_line") if failure_details else None,
         "ssh_pubkey_auth_enabled": pubkey_enabled,
         "ssh_root_password_login_disabled": root_password_disabled,
         "ssh_password_auth_disabled": password_auth_disabled,
         "ssh_kbd_interactive_auth_disabled": kbd_interactive_disabled,
         "ssh_permit_root_login_mode": permit_root_token,
+        "ssh_pubkey_auth_line": pubkey_line,
+        "ssh_password_auth_line": password_auth_line,
+        "ssh_kbd_interactive_auth_line": kbd_interactive_line,
+        "ssh_permit_root_login_line": permit_root_line,
         "ssh_status_level": status_level,
         "ssh_status": status_text,
     }
@@ -780,6 +967,9 @@ def collect_metrics() -> dict[str, Any]:
         "os_version": platform.platform(),
         "uptime_seconds": uptime_seconds,
     }
+    top_processes = _collect_top_processes(limit=10)
+    if top_processes:
+        payload["top_processes"] = top_processes
     payload.update(_collect_ssh_snapshot())
     warnings = _detect_warnings(payload)
     if warnings:

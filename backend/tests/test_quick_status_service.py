@@ -175,10 +175,13 @@ async def test_build_quick_status_tiles_include_ssh_action_details(db_session):
             raw_payload={
                 "ssh_status_level": 2,
                 "ssh_pubkey_auth_enabled": False,
-                "ssh_root_password_login_disabled": False,
                 "ssh_password_auth_disabled": False,
                 "ssh_kbd_interactive_auth_disabled": False,
                 "ssh_permit_root_login_mode": "yes",
+                "ssh_pubkey_auth_line": "PubkeyAuthentication no",
+                "ssh_password_auth_line": "PasswordAuthentication yes",
+                "ssh_kbd_interactive_auth_line": "KbdInteractiveAuthentication yes",
+                "ssh_permit_root_login_line": "PermitRootLogin yes",
             },
         )
     )
@@ -197,5 +200,5 @@ async def test_build_quick_status_tiles_include_ssh_action_details(db_session):
     tiles = await quick_status.build_quick_status_tiles(db_session, [item])
 
     assert tiles[0].details is not None
-    assert any("PubkeyAuthentication yes" in line for line in tiles[0].details)
-    assert any("PermitRootLogin" in line for line in tiles[0].details)
+    assert any(line.text == "PubkeyAuthentication no" and line.severity == "warn" for line in tiles[0].details)
+    assert any(line.text == "PermitRootLogin yes" and line.severity == "critical" for line in tiles[0].details)

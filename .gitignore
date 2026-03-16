@@ -19,6 +19,7 @@ env/
 .env
 .env.*
 env.*
+scripts/deploy.targets.env
 
 # Node / frontend artifacts
 frontend/node_modules/

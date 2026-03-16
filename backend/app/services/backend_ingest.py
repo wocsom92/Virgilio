@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from backend.app.services.monitor_client import MonitorClientError, fetch_metric
 from backend.app.services.quick_status import list_quick_status_items_for_backend
 from backend.app.services.telegram_notifications import (
     dispatch_due_quick_status_notifications,
+    maybe_send_successful_ssh_login_notification,
     queue_quick_status_notifications,
 )
 from backend.app.services.system_settings import metric_retention_timedelta
@@ -44,6 +45,13 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
         raise MetricsPayloadError("Monitor payload missing 'metrics'")
 
     payload = MetricSnapshotCreate.model_validate(metrics_payload)
+    previous_snapshot_result = await session.execute(
+        select(MetricSnapshot)
+        .where(MetricSnapshot.backend_id == backend.id)
+        .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
+        .limit(1)
+    )
+    previous_snapshot = previous_snapshot_result.scalar_one_or_none()
 
     quick_status_items = await list_quick_status_items_for_backend(session, backend.id)
 
@@ -67,6 +75,12 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
     await session.commit()
     await session.refresh(snapshot)
 
+    await maybe_send_successful_ssh_login_notification(
+        session,
+        backend=backend,
+        previous_snapshot=previous_snapshot,
+        payload=payload,
+    )
     await queue_quick_status_notifications(session, quick_status_items)
     await dispatch_due_quick_status_notifications(session)
 

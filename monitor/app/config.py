@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Backend Monitor"
-    version: str = "4.3.1"
+    version: str = "5.0.0"
     debug: bool = False
 
     api_token: str = "monitor-token"

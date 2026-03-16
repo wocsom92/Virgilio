@@ -11,6 +11,7 @@ import {
   QuickStatusItem,
   QuickStatusMetricKey,
   QuickStatusTile,
+  fetchBackendVersion,
   fetchDatabaseSize,
   fetchQuickStatusTiles,
   createQuickStatusItem,
@@ -25,6 +26,7 @@ import {
   getTelegramSettings,
   listQuickStatusItems,
   listBackends,
+  listBackendsWithLatest,
   listUsers,
   sendTelegramStats,
   sendTelegramWarnings,
@@ -36,6 +38,7 @@ import {
   requestReboot,
   rebootBackendHost,
 } from '../api/client';
+import { DEFAULT_BACKEND_VERSION, DEFAULT_MONITOR_VERSION, FRONTEND_VERSION } from '../constants/versions';
 import { QuickStatusTileCard } from './QuickStatusTileCard';
 import { formatBinaryBytes } from '../utils/formatting';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
@@ -472,6 +475,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     return fallback;
   };
 
+  const [backendVersion, setBackendVersion] = useState(DEFAULT_BACKEND_VERSION);
   const [backends, setBackends] = useState<MonitoredBackend[]>([]);
   const [form, setForm] = useState<BackendFormState>(() => createInitialForm());
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -504,7 +508,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [quickStatusOrdering, setQuickStatusOrdering] = useState(false);
   const [quickStatusOrderingBackendId, setQuickStatusOrderingBackendId] = useState<number | null>(null);
   const [quickStatusSelectedMoveId, setQuickStatusSelectedMoveId] = useState<number | null>(null);
-  const [quickStatusSearch, setQuickStatusSearch] = useState('');
+  const [quickStatusListSearch, setQuickStatusListSearch] = useState('');
   const [quickStatusCollapsedByBackend, setQuickStatusCollapsedByBackend] = useState<Record<number, boolean>>({});
   const [quickStatusPageByBackend, setQuickStatusPageByBackend] = useState<Record<number, number>>({});
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -563,6 +567,30 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const canFetchMountOptions = Boolean(editingId && isAdmin);
   const getQuickStatusMetricLabel = (key: QuickStatusMetricKey) =>
     quickStatusMetricOptions.find((option) => option.key === key)?.label ?? key;
+  const monitorVersionsByBackend = useMemo(
+    () =>
+      backends.map((backend) => ({
+        backendId: backend.id,
+        backendName: backend.name,
+        version: backend.latest_snapshot?.monitor_version ?? backend.latest_snapshot?.backend_version ?? DEFAULT_MONITOR_VERSION,
+      })),
+    [backends]
+  );
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setBackendVersion(DEFAULT_BACKEND_VERSION);
+      return;
+    }
+    void (async () => {
+      try {
+        const version = await fetchBackendVersion();
+        setBackendVersion(version || DEFAULT_BACKEND_VERSION);
+      } catch {
+        setBackendVersion(DEFAULT_BACKEND_VERSION);
+      }
+    })();
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -571,7 +599,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     }
     void (async () => {
       try {
-        const data = await listBackends();
+        const data = await listBackendsWithLatest();
         setBackends(sortBackends(data));
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unable to fetch backends');
@@ -746,7 +774,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       } else {
         await createBackend(payload);
       }
-      const updated = await listBackends();
+      const updated = await listBackendsWithLatest();
       setBackends(sortBackends(updated));
       resetForm();
       setStatus('Saved successfully.');
@@ -1438,7 +1466,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
           updateBackend(backend.id, { display_order: backend.display_order })
         )
       );
-      const refreshed = await listBackends();
+      const refreshed = await listBackendsWithLatest();
       setBackends(sortBackends(refreshed));
       setStatus('Order updated.');
     } catch (err) {
@@ -1490,7 +1518,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   );
 
   const quickStatusPreviewGroups = useMemo(() => {
-    const search = quickStatusSearch.trim().toLocaleLowerCase();
     const grouped = new Map<number, QuickStatusItem[]>();
     for (const item of quickStatusItems) {
       const current = grouped.get(item.backend_id) ?? [];
@@ -1507,25 +1534,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       .map((backendId) => {
         const backendName = backendNameById.get(backendId) ?? `Backend #${backendId}`;
         const allItems = grouped.get(backendId) ?? [];
-        const matchesBackend = search.length > 0 && backendName.toLocaleLowerCase().includes(search);
-        const filteredItems =
-          search.length === 0 || matchesBackend
-            ? allItems
-            : allItems.filter((item) => {
-                const metricLabel =
-                  quickStatusMetricOptions.find((option) => option.key === item.metric_key)?.label.toLocaleLowerCase() ??
-                  item.metric_key.toLocaleLowerCase();
-                const haystack = [
-                  item.label,
-                  metricLabel,
-                  item.mount_path ?? '',
-                  item.ping_endpoint ?? '',
-                ]
-                  .join(' ')
-                  .toLocaleLowerCase();
-                return haystack.includes(search);
-              });
-        if (filteredItems.length === 0) {
+        if (allItems.length === 0) {
           return null;
         }
         const tileById = new Map(quickStatusTiles.map((tile) => [tile.id, tile]));
@@ -1533,8 +1542,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
           backendId,
           backendName,
           allItemsCount: allItems.length,
-          filteredItemsCount: filteredItems.length,
-          items: filteredItems.map((item) => ({
+          filteredItemsCount: allItems.length,
+          items: allItems.map((item) => ({
             item,
             tile:
               tileById.get(item.id) ??
@@ -1554,10 +1563,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         };
       })
       .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [backends, backendNameById, quickStatusItems, quickStatusSearch, quickStatusTiles]);
+  }, [backends, backendNameById, quickStatusItems, quickStatusTiles]);
 
   const quickStatusListGroups = useMemo(() => {
-    const search = quickStatusSearch.trim().toLocaleLowerCase();
+    const search = quickStatusListSearch.trim().toLocaleLowerCase();
     const grouped = new Map<number, QuickStatusItem[]>();
     for (const item of quickStatusItems) {
       const current = grouped.get(item.backend_id) ?? [];
@@ -1604,7 +1613,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         };
       })
       .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [backends, backendNameById, quickStatusItems, quickStatusPageByBackend, quickStatusSearch]);
+  }, [backends, backendNameById, quickStatusItems, quickStatusListSearch, quickStatusPageByBackend]);
 
   const quickStatusMetricMeta = quickStatusMetricOptions.find(
     (option) => option.key === quickStatusForm.metric_key
@@ -1882,6 +1891,17 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         </div>
       </div>
       <div className="col-12 col-lg-9 order-lg-2 d-flex flex-column gap-4">
+        <section className="card bg-dark border border-secondary">
+          <div className="card-body d-flex flex-wrap align-items-center gap-2">
+            <span className="badge bg-secondary">Frontend v{FRONTEND_VERSION}</span>
+            <span className="badge bg-secondary">Backend v{backendVersion}</span>
+            {monitorVersionsByBackend.map((item) => (
+              <span className="badge bg-secondary" key={item.backendId}>
+                {item.backendName}: Monitor v{item.version}
+              </span>
+            ))}
+          </div>
+        </section>
         {activeSection === 'manage-backends' && (
           <section id="manage-backends" className="d-flex flex-column gap-3">
             <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
@@ -1935,21 +1955,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             <div className="card bg-dark border border-secondary">
               <div className="card-header border-secondary text-uppercase fw-semibold">Overview Preview</div>
               <div className="card-body d-flex flex-column gap-3">
-                <div className="d-flex flex-column flex-lg-row gap-2 justify-content-between align-items-lg-center">
-                  <div className="text-secondary small">
-                    Search tiles by server, label, metric, mount path, or ping target.
-                  </div>
-                  <input
-                    className="form-control bg-dark text-light border-secondary"
-                    style={{ maxWidth: '360px' }}
-                    value={quickStatusSearch}
-                    onChange={(event) => {
-                      setQuickStatusSearch(event.target.value);
-                      setQuickStatusPageByBackend({});
-                    }}
-                    placeholder="Search quick status tiles"
-                  />
-                </div>
                 {isAdmin && quickStatusItems.length > 1 && (
                   <div className="text-secondary small">
                     Use the server-level edit button to reorder tiles. Desktop supports drag and drop; on iPhone or
@@ -1958,8 +1963,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 )}
                 {quickStatusItems.length === 0 ? (
                   <div className="text-secondary small">No quick status tiles configured yet.</div>
-                ) : quickStatusPreviewGroups.length === 0 ? (
-                  <div className="text-secondary small">No quick status tiles match the current search.</div>
                 ) : (
                   quickStatusPreviewGroups.map((group) => (
                     <section className="quick-status-section" key={group.backendId}>
@@ -2059,7 +2062,18 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             </div>
                             <ul className="mb-0 small quick-status-detail__list">
                               {selectedPreviewTile.details.map((line) => (
-                                <li key={line}>{line}</li>
+                                <li
+                                  key={`${line.severity}:${line.text}`}
+                                  className={
+                                    line.severity === 'critical'
+                                      ? 'text-danger'
+                                      : line.severity === 'warn'
+                                        ? 'text-warning'
+                                        : 'text-success'
+                                  }
+                                >
+                                  <code>{line.text}</code>
+                                </li>
                               ))}
                             </ul>
                           </div>
@@ -2073,6 +2087,21 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             <div className="card bg-dark border border-secondary">
               <div className="card-header border-secondary text-uppercase fw-semibold">Existing Tiles</div>
               <div className="card-body d-flex flex-column gap-3">
+                <div className="d-flex flex-column flex-lg-row gap-2 justify-content-between align-items-lg-center">
+                  <div className="text-secondary small">
+                    Search tiles by server, label, metric, mount path, or ping target.
+                  </div>
+                  <input
+                    className="form-control bg-dark text-light border-secondary"
+                    style={{ maxWidth: '360px' }}
+                    value={quickStatusListSearch}
+                    onChange={(event) => {
+                      setQuickStatusListSearch(event.target.value);
+                      setQuickStatusPageByBackend({});
+                    }}
+                    placeholder="Search quick status tiles"
+                  />
+                </div>
                 {quickStatusItems.length === 0 ? (
                   <div className="text-secondary small">No quick status tiles configured yet.</div>
                 ) : quickStatusListGroups.length === 0 ? (
@@ -2098,7 +2127,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             {group.filteredItemsCount === 1 ? 'tile' : 'tiles'}
                           </span>
                           <span>
-                            {quickStatusSearch.trim()
+                            {quickStatusListSearch.trim()
                               ? 'Hide'
                               : (quickStatusCollapsedByBackend[group.backendId] ?? true)
                                 ? 'Expand'
@@ -2106,7 +2135,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           </span>
                         </span>
                       </button>
-                      {(quickStatusSearch.trim() || !(quickStatusCollapsedByBackend[group.backendId] ?? true)) && (
+                      {(quickStatusListSearch.trim() || !(quickStatusCollapsedByBackend[group.backendId] ?? true)) && (
                         <>
                           {group.items.map((item) => {
                             const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);

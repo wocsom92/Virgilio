@@ -5,6 +5,7 @@ import pytest
 from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, QuickStatusItem, TelegramSettings
 from backend.app.services.telegram_notifications import (
     dispatch_due_quick_status_notifications,
+    maybe_send_successful_ssh_login_notification,
     queue_quick_status_notifications,
 )
 
@@ -231,4 +232,175 @@ async def test_pending_alerts_are_grouped_across_batch_window(db_session, monkey
     assert text is not None
     assert "Disk changed" in text
     assert "Load changed" in text
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_transition_notification_includes_top_processes_for_cpu_and_memory_alerts(db_session, monkeypatch):
+    backend = await _create_backend(db_session)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
+
+    cpu_item = QuickStatusItem(
+        backend_id=backend.id,
+        label="CPU load",
+        metric_key="cpu_load_one",
+        warning_threshold=1,
+        critical_threshold=2,
+        display_order=0,
+        last_notified_status="ok",
+    )
+    memory_item = QuickStatusItem(
+        backend_id=backend.id,
+        label="Memory available",
+        metric_key="memory_available_gb",
+        warning_threshold=2,
+        critical_threshold=1,
+        display_order=1,
+        last_notified_status="ok",
+    )
+    db_session.add(cpu_item)
+    db_session.add(memory_item)
+    await db_session.commit()
+    await db_session.refresh(cpu_item)
+    await db_session.refresh(memory_item)
+
+    snapshot = MetricSnapshot(
+        backend_id=backend.id,
+        reported_at=datetime.now(tz=timezone.utc),
+        cpu_load={"one": 3.0},
+        memory_available_gb=0.5,
+        raw_payload={
+            "top_processes": {
+                "cpu": [{"pid": 101, "name": "ffmpeg", "cpu_percent": 87.5, "memory_percent": 4.2}],
+                "memory": [{"pid": 202, "name": "postgres", "cpu_percent": 12.0, "memory_percent": 33.3}],
+            }
+        },
+    )
+    db_session.add(snapshot)
+    await db_session.commit()
+
+    await queue_quick_status_notifications(db_session, [cpu_item, memory_item])
+
+    sent: list[str] = []
+
+    async def fake_send_message(token, chat_id, text):
+        sent.append(text)
+
+    monkeypatch.setattr("backend.app.services.telegram_notifications.send_message", fake_send_message)
+
+    text = await dispatch_due_quick_status_notifications(db_session)
+
+    assert text is not None
+    assert "Top CPU Processes" in text
+    assert "ffmpeg" in text
+    assert "Top Memory Processes" in text
+    assert "postgres" in text
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_transition_notification_includes_ssh_failure_details(db_session, monkeypatch):
+    backend = await _create_backend(db_session)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
+
+    ssh_item = QuickStatusItem(
+        backend_id=backend.id,
+        label="SSH failed login",
+        metric_key="ssh_last_unsuccessful_attempt",
+        warning_threshold=168,
+        critical_threshold=24,
+        display_order=0,
+        last_notified_status="ok",
+    )
+    db_session.add(ssh_item)
+    await db_session.commit()
+    await db_session.refresh(ssh_item)
+
+    snapshot = MetricSnapshot(
+        backend_id=backend.id,
+        reported_at=datetime.now(tz=timezone.utc),
+        raw_payload={
+            "ssh_last_unsuccessful_attempt_seconds": 3600,
+            "ssh_last_failure_auth_method": "publickey",
+            "ssh_last_failure_username": "root",
+            "ssh_last_failure_source_ip": "10.0.0.8",
+            "ssh_last_failure_port": 55123,
+            "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+        },
+    )
+    db_session.add(snapshot)
+    await db_session.commit()
+
+    await queue_quick_status_notifications(db_session, [ssh_item])
+
+    sent: list[str] = []
+
+    async def fake_send_message(token, chat_id, text):
+        sent.append(text)
+
+    monkeypatch.setattr("backend.app.services.telegram_notifications.send_message", fake_send_message)
+
+    text = await dispatch_due_quick_status_notifications(db_session)
+
+    assert text is not None
+    assert "SSH Failure Details" in text
+    assert "Method: publickey" in text
+    assert "User: root" in text
+    assert "Source: 10.0.0.8" in text
+    assert "Port: 55123" in text
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_successful_ssh_login_notification_includes_details(db_session, monkeypatch):
+    backend = await _create_backend(db_session)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
+
+    previous_snapshot = MetricSnapshot(
+        backend_id=backend.id,
+        reported_at=datetime.now(tz=timezone.utc) - timedelta(minutes=5),
+        raw_payload={"ssh_last_successful_login_seconds": 7200},
+    )
+    db_session.add(previous_snapshot)
+    await db_session.commit()
+
+    from backend.app.schemas.metrics import MetricSnapshotCreate
+
+    reported_at = datetime(2026, 3, 16, 16, 42, 0, tzinfo=timezone.utc)
+
+    payload = MetricSnapshotCreate.model_validate(
+        {
+            "reported_at": reported_at,
+            "raw_payload": {
+                "ssh_last_successful_login_seconds": 30,
+                "ssh_last_successful_auth_method": "publickey",
+                "ssh_last_successful_username": "root",
+                "ssh_last_successful_source_ip": "10.0.0.8",
+                "ssh_last_successful_port": 55123,
+                "ssh_last_successful_line": "Accepted publickey for root from 10.0.0.8 port 55123 ssh2",
+            },
+        }
+    )
+
+    sent: list[str] = []
+
+    async def fake_send_message(token, chat_id, text):
+        sent.append(text)
+
+    monkeypatch.setattr("backend.app.services.telegram_notifications.send_message", fake_send_message)
+
+    text = await maybe_send_successful_ssh_login_notification(
+        db_session,
+        backend=backend,
+        previous_snapshot=previous_snapshot,
+        payload=payload,
+    )
+
+    assert text is not None
+    assert "Successful SSH login detected at 2026\\-03\\-16 16:42:00 UTC\\." in text
+    assert "SSH Login Details" in text
+    assert "Method: publickey" in text
+    assert "User: root" in text
+    assert "Source: 10.0.0.8" in text
+    assert "Port: 55123" in text
     assert sent

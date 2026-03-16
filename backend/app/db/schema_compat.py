@@ -104,6 +104,34 @@ def ensure_schema_compat(connection: Connection) -> None:
             )
         )
 
+    if not inspector.has_table("notification_events"):
+        connection.execute(
+            text(
+                """
+                CREATE TABLE notification_events (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    channel VARCHAR(32) NOT NULL,
+                    category VARCHAR(64) NOT NULL,
+                    severity VARCHAR(16) NOT NULL DEFAULT 'info',
+                    title VARCHAR(255) NOT NULL,
+                    body TEXT NOT NULL,
+                    backend_id INT NULL,
+                    backend_name VARCHAR(100) NULL,
+                    delivery_status VARCHAR(16) NOT NULL DEFAULT 'sent',
+                    target VARCHAR(120) NULL,
+                    error_message TEXT NULL,
+                    read_at DATETIME NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX ix_notification_events_backend_id (backend_id),
+                    CONSTRAINT fk_notification_events_backend
+                        FOREIGN KEY (backend_id) REFERENCES monitored_backends(id)
+                        ON DELETE SET NULL
+                )
+                """
+            )
+        )
+
     # Add auth_session_minutes to system_settings if missing (introduced in 2025-03).
     if inspector.has_table("system_settings"):
         columns = {col["name"] for col in inspector.get_columns("system_settings")}

@@ -8,6 +8,17 @@ interface DashboardProps {
   canRefresh: boolean;
 }
 
+function parseDate(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const hasTimezone = /[zZ]|[+-]\d{2}:\d{2}$/.test(value);
+  const normalized = hasTimezone ? value : `${value}Z`;
+  const timestamp = Date.parse(normalized);
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+  return new Date(timestamp);
+}
+
 export function Dashboard({ canRefresh }: DashboardProps) {
   const [backends, setBackends] = useState<MonitoredBackend[]>([]);
   const [loading, setLoading] = useState(true);
@@ -134,13 +145,39 @@ export function Dashboard({ canRefresh }: DashboardProps) {
       grouped.set(tile.backend_id, current);
     }
     const backendMeta = new Map(backends.map((backend) => [backend.id, backend] as const));
-    const groups = Array.from(grouped.entries()).map(([backendId, items]) => {
-      const backend = backendMeta.get(backendId);
+    const groups = backends.map((backend) => {
+      const items = grouped.get(backend.id) ?? [];
+      const lastSeenDate = parseDate(backend.last_seen_at);
+      const freshnessThresholdMs = Math.max(backend.poll_interval_seconds || 60, 30) * 3 * 1000;
+      const freshnessAgeMs = lastSeenDate ? Math.max(0, Date.now() - lastSeenDate.getTime()) : Number.POSITIVE_INFINITY;
+      const isFresh = Number.isFinite(freshnessAgeMs) && freshnessAgeMs <= freshnessThresholdMs;
+      const heartbeatTile: QuickStatusTile = {
+        id: -backend.id,
+        backend_id: backend.id,
+        backend_display_order: backend.display_order,
+        backend_name: backend.name,
+        label: 'HB',
+        metric_key: 'ssh_status',
+        value: isFresh ? 1 : 0,
+        display_value: isFresh ? 'Now' : 'Late',
+        status: isFresh ? 'ok' : 'critical',
+        reported_at: backend.last_seen_at ?? backend.latest_snapshot?.reported_at ?? null,
+        details: [
+          {
+            text: `Heartbeat threshold: ${Math.max(backend.poll_interval_seconds || 60, 30) * 3}s`,
+            severity: isFresh ? 'ok' : 'critical',
+          },
+          {
+            text: lastSeenDate ? `Last seen: ${lastSeenDate.toLocaleString()}` : 'No heartbeat received yet',
+            severity: isFresh ? 'ok' : 'critical',
+          },
+        ],
+      };
       return {
-        backendId,
-        backendName: backend?.name ?? items[0]?.backend_name ?? `Backend #${backendId}`,
-        displayOrder: backend?.display_order ?? items[0]?.backend_display_order ?? Number.MAX_SAFE_INTEGER,
-        items,
+        backendId: backend.id,
+        backendName: backend.name,
+        displayOrder: backend.display_order,
+        items: [heartbeatTile, ...items],
       };
     });
     groups.sort((a, b) => {
@@ -171,7 +208,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
           Reload
         </button>
       </div>
-      {quickStatusTiles.length > 0 && (
+      {quickStatusGroups.length > 0 && (
         <div className="quick-status-sections">
           {quickStatusGroups.map((group) => (
             <section className="quick-status-section" key={group.backendId}>
@@ -220,7 +257,18 @@ export function Dashboard({ canRefresh }: DashboardProps) {
                     </div>
                     <ul className="mb-0 small quick-status-detail__list">
                       {selectedTile.details.map((line) => (
-                        <li key={line}>{line}</li>
+                        <li
+                          key={`${line.severity}:${line.text}`}
+                          className={
+                            line.severity === 'critical'
+                              ? 'text-danger'
+                              : line.severity === 'warn'
+                                ? 'text-warning'
+                                : 'text-success'
+                          }
+                        >
+                          <code>{line.text}</code>
+                        </li>
                       ))}
                     </ul>
                   </div>

@@ -77,8 +77,6 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
   const snapshot = backend.latest_snapshot ?? null;
   const warnings = snapshot?.warnings ?? [];
   const hasWarnings = warnings.length > 0;
-  const lastSeenDate = parseDate(backend.last_seen_at);
-  const lastSeen = lastSeenDate ? lastSeenDate.toLocaleString() : 'Never';
   const latestSampleDate = snapshot?.reported_at ? parseDate(snapshot.reported_at) : null;
   const latestSample = latestSampleDate ? latestSampleDate.toLocaleString() : null;
   const [range, setRange] = useState<MetricRange>('hourly');
@@ -403,49 +401,40 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
         <div className="d-flex flex-column flex-md-row gap-2 align-items-start align-items-md-center w-100">
           <div className="flex-grow-1">
             <span className="fw-semibold me-2 text-uppercase">{backend.name}</span>
-            <small className="text-secondary">{backend.base_url}</small>
           </div>
           <div className="d-flex flex-wrap align-items-center justify-content-end gap-2 w-100 w-md-auto">
-            <button
-              type="button"
-              className={classNames('btn btn-sm', hidden ? 'btn-light text-dark' : 'btn-outline-light')}
-              onClick={() => onToggleHidden(backend.id)}
-            >
-              {hidden ? 'Show' : 'Hide'}
-            </button>
+            <div className="btn-group flex-shrink-0" role="group" aria-label={`Actions for ${backend.name}`}>
+              <button
+                type="button"
+                className={classNames('btn btn-sm text-nowrap', hidden ? 'btn-light text-dark' : 'btn-outline-light')}
+                onClick={() => onToggleHidden(backend.id)}
+              >
+                {hidden ? 'Show' : 'Hide'}
+              </button>
+              {onRefresh && (
+                <button
+                  className="btn btn-sm btn-outline-light text-nowrap"
+                  onClick={() => onRefresh(backend)}
+                  disabled={disabled}
+                >
+                  Refresh
+                </button>
+              )}
+            </div>
+            {hidden && (
+              <div className="backend-hidden-state__pill">
+                <span className="backend-hidden-state__title">Hidden</span>
+              </div>
+            )}
             {hasWarnings && (
               <span className="badge bg-danger d-flex align-items-center gap-1">
                 <FiAlertTriangle /> Warning
               </span>
             )}
-            <span className="badge bg-secondary text-break">Last seen: {lastSeen}</span>
-            {(() => {
-              const monitorVersion =
-                backend.latest_snapshot?.monitor_version ?? backend.latest_snapshot?.backend_version ?? null;
-              if (!monitorVersion) {
-                return null;
-              }
-              return (
-                <span className="badge bg-secondary text-break">Monitor v{monitorVersion}</span>
-              );
-            })()}
-            {onRefresh && (
-              <button
-                className="btn btn-sm btn-outline-light"
-                onClick={() => onRefresh(backend)}
-                disabled={disabled}
-              >
-                Refresh
-              </button>
-            )}
           </div>
         </div>
       </div>
-      {hidden ? (
-        <div className="card-body bg-dark text-light">
-          <div className="text-secondary fst-italic">Metrics hidden for this backend. Press Show to display details.</div>
-        </div>
-      ) : (
+      {hidden ? null : (
         <>
           <div className="card-body bg-dark text-light">
             <div className="d-flex flex-column gap-3">
@@ -562,7 +551,6 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
                               }`
                             : 'N/A'}
                         </li>
-                        <li>Monitor version: {snapshot.monitor_version ?? snapshot.backend_version ?? 'N/A'}</li>
                         <li>OS version: {snapshot.os_version ?? 'N/A'}</li>
                         <li>Uptime: {uptime ?? 'N/A'}</li>
                         <li>

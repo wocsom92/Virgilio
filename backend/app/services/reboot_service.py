@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
 from backend.app.models.monitors import RebootEvent
+from backend.app.services.notification_center import record_notification_event
 from backend.app.services.telegram_notifications import resolve_message_context
 from backend.app.services.telegram_service import TelegramError, send_message
 
@@ -123,7 +124,27 @@ async def _notify_reboot_requested(
     try:
         await send_message(settings_model.bot_token, target_chat, text)
     except TelegramError as exc:
+        await record_notification_event(
+            session,
+            category="reboot_request",
+            severity="warn",
+            title="Reboot requested",
+            body=text,
+            delivery_status="failed",
+            target=target_chat,
+            error_message=str(exc),
+        )
         logger.warning("Failed to send reboot request notice: %s", exc)
+        return
+    await record_notification_event(
+        session,
+        category="reboot_request",
+        severity="warn",
+        title="Reboot requested",
+        body=text,
+        delivery_status="sent",
+        target=target_chat,
+    )
 
 
 async def request_reboot(
@@ -184,9 +205,28 @@ async def notify_reboot_recovery(session: AsyncSession) -> None:
         )
         try:
             await send_message(settings_model.bot_token, str(target_chat), text)
+            await record_notification_event(
+                session,
+                category="reboot_recovery",
+                severity="info",
+                title="Server back online",
+                body=text,
+                delivery_status="sent",
+                target=str(target_chat),
+            )
             event.back_notified_at = datetime.now(tz=timezone.utc)
             session.add(event)
             await session.commit()
         except TelegramError as exc:
+            await record_notification_event(
+                session,
+                category="reboot_recovery",
+                severity="info",
+                title="Server back online",
+                body=text,
+                delivery_status="failed",
+                target=str(target_chat),
+                error_message=str(exc),
+            )
             logger.warning("Failed to send reboot recovery notice: %s", exc)
             # Do not mark as notified; will retry on next startup.

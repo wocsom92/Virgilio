@@ -113,6 +113,11 @@ class QuickStatusItemRead(QuickStatusItemBase):
         from_attributes = True
 
 
+class QuickStatusDetailLine(BaseModel):
+    text: str = Field(..., min_length=1)
+    severity: Literal["ok", "warn", "critical"]
+
+
 class QuickStatusTileRead(BaseModel):
     id: int
     backend_id: int
@@ -124,4 +129,4 @@ class QuickStatusTileRead(BaseModel):
     display_value: str
     status: Literal["ok", "info", "warn", "critical", "unknown"]
     reported_at: datetime | None = None
-    details: list[str] | None = None
+    details: list[QuickStatusDetailLine] | None = None

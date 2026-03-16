@@ -1,14 +1,26 @@
 # Virgilio - System Monitoring
 
-Current version: `4.3.1`
+Current version: `5.0.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
+
+The interface combines an overview dashboard for quick operational checks with an admin area for backend configuration, Telegram integration, retention settings, and notification history.
+
+![Virgilio dashboard screenshot](assets/branding/screenshot.jpg)
+
+Example dashboard view showing per-server quick tiles, monitoring sections, and the mobile-oriented layout.
 
 It has three runtime parts:
 
 - `frontend/`: React dashboard + admin console.
 - `backend/`: FastAPI API (auth, backend registry, metric snapshots, quick status, system settings, Telegram integration).
 - `monitor/`: lightweight FastAPI agent that collects host metrics via `psutil`.
+
+Component docs:
+
+- [frontend/README.md](/Users/martin/code/server_monitor/frontend/README.md)
+- [backend/README.md](/Users/martin/code/server_monitor/backend/README.md)
+- [monitor/README.md](/Users/martin/code/server_monitor/monitor/README.md)
 
 ## Features
 
@@ -33,11 +45,14 @@ It has three runtime parts:
   - Last successful SSH login (compact elapsed time such as `5d 23h`, always `ok`)
   - Last failed SSH attempt (elapsed age with configurable warn/critical thresholds)
   - SSH posture (`PubkeyAuthentication` and `PermitRootLogin`) mapped to `ok`/`warn`/`critical`
-- Admin quick status management supports search, a separate Overview-style preview section, and a paginated management list.
+- Admin quick status management supports a separate Overview-style preview section plus search inside the paginated Existing Tiles list.
 - Quick status preview reordering is server-scoped and includes touch-friendly arrow controls for iPhone Safari.
 - Role-based auth (`admin`, `viewer`) with bootstrap flow for first admin user.
 - Admin controls for retention days and auth session duration.
-- Telegram bot support (`/stats`, `/warn`, reboot actions) with consistent warning output across `/stats` and `/warn`.
+- Telegram bot support (`/stats`, `/warn`, `/cpu <server>`, `/memory <server>`, reboot actions) with consistent warning output across `/stats` and `/warn`.
+- Telegram warning notifications for CPU and memory issues include the top 10 highest-usage processes.
+- SSH notifications include structured details for failed and successful login detection.
+- In-app notification center with unread counter and notification history as a fallback when Telegram delivery fails or is blocked.
 - Optional host reboot support (requires explicit enablement + container privileges).
 
 ## Prerequisites
@@ -166,6 +181,7 @@ Behavior summary:
 - `monitor-only` profile deploys monitor + monitor compose files.
 - `managed` purge mode removes only managed files in deploy path.
 - `full` purge mode removes entire deploy path before upload.
+- After a successful deployment, the script runs `sudo docker system prune -f` on the remote host.
 
 ## API overview
 
@@ -175,6 +191,7 @@ Main backend router prefixes:
 - `/backends`
 - `/metrics`
 - `/dashboard`
+- `/notifications`
 - `/system`
 - `/telegram`
 
@@ -194,6 +211,36 @@ npm --prefix frontend install
 pytest -q backend/tests monitor/tests
 npm --prefix frontend test -- --run
 ```
+
+## Contributing
+
+Contributions are welcome. Keep changes focused, reviewable, and consistent with the existing stack.
+
+Recommended workflow:
+
+1. Fork the repository and create a feature branch.
+2. Make changes with matching tests or verification steps where practical.
+3. Run the relevant checks before opening a pull request.
+4. Open a PR with a short summary, deployment impact, and screenshots for UI changes.
+
+Suggested local checks:
+
+```bash
+pytest -q backend/tests monitor/tests
+npm --prefix frontend test -- --run
+npm --prefix frontend run build
+```
+
+Guidelines:
+
+- Do not mix unrelated refactors into feature or bugfix PRs.
+- Preserve existing behavior unless the change intentionally updates it.
+- Update documentation when API, UI, deployment, or operational behavior changes.
+- For frontend changes, include mobile behavior in your validation.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](/Users/martin/code/server_monitor/LICENSE).
 
 ## Project structure
 

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.config import settings
 from backend.app.db.session import async_session_factory, engine
 from backend.app.models.base import Base
-from backend.app.routers import auth, backends, dashboard, metrics, telegram
+from backend.app.routers import auth, backends, dashboard, metrics, notifications, telegram
 from backend.app.routers import system
 from backend.app.services.backend_poller import BackendPoller
 from backend.app.version import BACKEND_VERSION
@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
     application.include_router(backends.router)
     application.include_router(metrics.router)
     application.include_router(dashboard.router)
+    application.include_router(notifications.router)
     application.include_router(system.router)
     application.include_router(telegram.router)
 

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Virgilio service icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="100%" stop-color="#111827" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#22d3ee" />
+      <stop offset="100%" stop-color="#0ea5e9" />
+    </linearGradient>
+    <linearGradient id="signal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="100%" stop-color="#22c55e" />
+    </linearGradient>
+  </defs>
+
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="url(#bg)" />
+
+  <rect x="208" y="230" width="608" height="440" rx="74" fill="#0b1220" stroke="url(#accent)" stroke-width="28" />
+  <rect x="258" y="282" width="508" height="336" rx="42" fill="#0f1c2e" />
+
+  <path d="M300 460 L390 460 L442 392 L504 532 L570 420 L630 498 L724 498" fill="none" stroke="url(#signal)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round" />
+
+  <rect x="402" y="710" width="220" height="52" rx="24" fill="#1f2937" />
+  <rect x="332" y="778" width="360" height="56" rx="28" fill="#111827" stroke="#374151" stroke-width="12" />
+
+  <circle cx="512" cy="170" r="26" fill="#22d3ee" />
+  <rect x="500" y="196" width="24" height="40" rx="12" fill="#22d3ee" />
+
+  <circle cx="816" cy="208" r="10" fill="#34d399" />
+  <circle cx="782" cy="176" r="8" fill="#22d3ee" />
+  <circle cx="846" cy="166" r="7" fill="#0ea5e9" />
+</svg>

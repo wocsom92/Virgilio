@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [5.0.0] - 2026-03-16
+
+### Added
+- In-app notification center with unread badge, notification history, and fallback visibility when Telegram delivery is blocked or fails.
+- Successful SSH login notifications and richer SSH failure alert details in Telegram.
+- Telegram `/cpu <server>` and `/memory <server>` commands for live usage lookups.
+- Telegram CPU and memory alerts now include the top 10 highest-usage processes.
+- Notification logging API and UI fallback delivery history.
+
+### Changed
+- Project version updated from `4.3.5` to `5.0.0` across backend, frontend, monitor, and displayed UI version constants.
+- Dashboard and admin UI received mobile-oriented quick-tile layout refinements, admin-only version visibility, admin-only backend address visibility, and a heartbeat (`HB`) freshness tile in the overview grid.
+- Deployment script now runs `sudo docker system prune -f` after a successful remote deployment.
+
+## [4.3.5] - 2026-03-16
+
+### Added
+- Telegram SSH failure alerts now include parsed details such as auth method, username, source IP, port, and the related log line when available.
+
+### Changed
+- Project version updated from `4.3.4` to `4.3.5` across backend, frontend, monitor, and displayed UI version constants.
+
+## [4.3.4] - 2026-03-13
+
+### Added
+- Telegram now supports `/cpu <server_name>` and `/memory <server_name>` commands that return live usage for the selected server.
+
+### Changed
+- Project version updated from `4.3.3` to `4.3.4` across backend, frontend, monitor, and displayed UI version constants.
+
+## [4.3.3] - 2026-03-13
+
+### Added
+- Telegram CPU and memory alerts now include the top 10 processes by usage for the affected backend.
+
+### Changed
+- Project version updated from `4.3.2` to `4.3.3` across backend, frontend, monitor, and displayed UI version constants.
+
+## [4.3.2] - 2026-03-09
+
+### Changed
+- Quick status admin search now lives inside the paginated Existing Tiles section instead of the separate Overview Preview block.
+- Project version updated from `4.3.1` to `4.3.2` across backend, frontend, monitor, and displayed UI version constants.
+
 ## [4.3.1] - 2026-03-09
 
 ### Changed
