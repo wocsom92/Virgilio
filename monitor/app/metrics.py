@@ -53,6 +53,9 @@ _SSH_FAILURE_MARKERS = (
     "Invalid user",
     "authentication failure",
     "maximum authentication attempts exceeded",
+    "Connection closed by authenticating user",
+    "Connection reset by authenticating user",
+    "Disconnected from authenticating user",
 )
 _SSH_ROOT_PASSWORD_DISABLED_VALUES = {
     "no",
@@ -73,6 +76,11 @@ _SSH_INVALID_USER_RE = re.compile(
 )
 _SSH_AUTH_FAILURE_RE = re.compile(
     r"authentication failure.*?(?:user=(?P<username>\S+))?.*?(?:rhost=(?P<source_ip>\S+))?",
+    re.IGNORECASE,
+)
+_SSH_PREAUTH_DISCONNECT_RE = re.compile(
+    r"(?:Connection closed|Connection reset|Disconnected)\s+from\s+authenticating user\s+"
+    r"(?P<username>\S+)\s+(?P<source_ip>\S+)(?:\s+port\s+(?P<port>\d+))?",
     re.IGNORECASE,
 )
 _SSH_SUCCESS_DETAILS_RE = re.compile(
@@ -315,6 +323,16 @@ def _extract_ssh_failure_details(line: str) -> dict[str, Any] | None:
             "username": match.group("username"),
             "source_ip": match.group("source_ip"),
             "port": None,
+            "raw_line": normalized[-500:],
+        }
+
+    match = _SSH_PREAUTH_DISCONNECT_RE.search(normalized)
+    if match:
+        return {
+            "method": "preauth-disconnect",
+            "username": match.group("username"),
+            "source_ip": match.group("source_ip"),
+            "port": int(match.group("port")) if match.group("port") else None,
             "raw_line": normalized[-500:],
         }
 

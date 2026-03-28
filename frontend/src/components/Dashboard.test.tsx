@@ -58,6 +58,7 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
     value: overrides.value ?? 42,
     display_value: overrides.display_value ?? '42%',
     status: overrides.status ?? 'ok',
+    history: overrides.history ?? Array.from({ length: 12 }, () => 'ok' as const),
     reported_at: overrides.reported_at ?? '2024-01-01T00:00:00Z',
   };
 }
@@ -75,7 +76,7 @@ describe('Dashboard', () => {
       makeBackend({ id: 1, name: 'Alpha', display_order: 1 }),
     ]);
 
-    render(<Dashboard canRefresh={false} />);
+    render(<Dashboard canRefresh={false} mode="graphs" />);
 
     expect(screen.getByText(/Loading metrics/i)).toBeInTheDocument();
 
@@ -91,7 +92,7 @@ describe('Dashboard', () => {
     } as any);
 
     const user = userEvent.setup();
-    render(<Dashboard canRefresh />);
+    render(<Dashboard canRefresh mode="graphs" />);
 
     await screen.findByTestId('backend-name');
 
@@ -124,7 +125,7 @@ describe('Dashboard', () => {
       makeQuickStatusTile({ id: 11, backend_id: 1, backend_name: 'Alpha' }),
     ]);
 
-    const { container } = render(<Dashboard canRefresh={false} />);
+    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" />);
 
     await waitFor(() => {
       const titles = Array.from(container.querySelectorAll('.quick-status-section__title')).map(
@@ -141,13 +142,52 @@ describe('Dashboard', () => {
       makeQuickStatusTile({ id: 11, backend_id: 1, backend_display_order: 1, backend_name: 'Alpha' }),
     ]);
 
-    const { container } = render(<Dashboard canRefresh={false} />);
+    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" />);
 
     await waitFor(() => {
       const titles = Array.from(container.querySelectorAll('.quick-status-section__title')).map(
         (node) => node.textContent
       );
       expect(titles).toEqual(['Alpha', 'Zulu']);
+    });
+  });
+
+  it('renders quick status history strips with 12 segments', async () => {
+    vi.mocked(fetchDashboard).mockResolvedValue([makeBackend({ id: 1, name: 'Alpha', display_order: 1 })]);
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({
+        id: -1,
+        backend_id: 1,
+        backend_display_order: 1,
+        backend_name: 'Alpha',
+        label: 'HB',
+      }),
+    ]);
+
+    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('.quick-status-history__segment')).toHaveLength(12);
+    });
+  });
+
+  it('shows backend cards only in graphs view', async () => {
+    vi.mocked(fetchDashboard).mockResolvedValue([makeBackend({ id: 1, name: 'Alpha', display_order: 1 })]);
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({ id: 10, backend_id: 1, backend_display_order: 1, backend_name: 'Alpha' }),
+    ]);
+
+    const { rerender } = render(<Dashboard canRefresh={false} mode="monitoring" />);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('backend-card')).not.toBeInTheDocument();
+      expect(screen.getByText('Alpha')).toBeInTheDocument();
+    });
+
+    rerender(<Dashboard canRefresh={false} mode="graphs" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('backend-card')).toBeInTheDocument();
     });
   });
 });

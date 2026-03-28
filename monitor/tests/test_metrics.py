@@ -409,3 +409,17 @@ def test_extract_ssh_failure_details_parses_auth_method_and_source():
         "port": 55123,
         "raw_line": "Mar 16 11:22:33 host sshd[123]: Failed publickey for root from 10.0.0.8 port 55123 ssh2",
     }
+
+
+def test_extract_ssh_failure_details_parses_preauth_disconnect():
+    line = "Mar 16 11:22:33 host sshd[123]: Connection closed by authenticating user root 10.0.0.8 port 55123 [preauth]"
+
+    details = metrics._extract_ssh_failure_details(line)
+
+    assert details == {
+        "method": "preauth-disconnect",
+        "username": "root",
+        "source_ip": "10.0.0.8",
+        "port": 55123,
+        "raw_line": "Mar 16 11:22:33 host sshd[123]: Connection closed by authenticating user root 10.0.0.8 port 55123 [preauth]",
+    }

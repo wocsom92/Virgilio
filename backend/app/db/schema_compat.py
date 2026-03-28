@@ -47,6 +47,27 @@ def ensure_schema_compat(connection: Connection) -> None:
             connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN pending_notification_status VARCHAR(16) NULL"))
         if "pending_notification_due_at" not in columns:
             connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN pending_notification_due_at DATETIME NULL"))
+    if not inspector.has_table("quick_status_ping_samples"):
+        connection.execute(
+            text(
+                """
+                CREATE TABLE quick_status_ping_samples (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    quick_status_item_id INT NOT NULL,
+                    checked_at DATETIME NOT NULL,
+                    success BOOLEAN NOT NULL DEFAULT FALSE,
+                    latency_ms FLOAT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX ix_quick_status_ping_samples_quick_status_item_id (quick_status_item_id),
+                    INDEX ix_quick_status_ping_samples_checked_at (checked_at),
+                    CONSTRAINT fk_quick_status_ping_samples_item
+                        FOREIGN KEY (quick_status_item_id) REFERENCES quick_status_items(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+        )
 
     if inspector.has_table("telegram_settings"):
         columns = {col["name"] for col in inspector.get_columns("telegram_settings")}

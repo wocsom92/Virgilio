@@ -233,11 +233,7 @@ export function MetricsChart({
   }
 
   if (error) {
-    return (
-      <div className="alert alert-warning small py-2 mb-0">
-        Unable to load {title.toLowerCase()}: {error}
-      </div>
-    );
+    return <div className="alert alert-warning small py-2 mb-0">{error}</div>;
   }
 
   return (

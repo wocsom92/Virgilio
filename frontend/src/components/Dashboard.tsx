@@ -1,25 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchDashboard, fetchQuickStatusTiles, MonitoredBackend, QuickStatusTile, refreshBackend } from '../api/client';
 import { useLocalStorage } from '../hooks/useLocalStorage';
+import { getUserFacingErrorMessage } from '../utils/errors';
 import { BackendCard } from './BackendCard';
 import { QuickStatusTileCard } from './QuickStatusTileCard';
 
 interface DashboardProps {
   canRefresh: boolean;
+  mode: 'monitoring' | 'graphs';
 }
 
-function parseDate(value: string | null | undefined): Date | null {
-  if (!value) return null;
-  const hasTimezone = /[zZ]|[+-]\d{2}:\d{2}$/.test(value);
-  const normalized = hasTimezone ? value : `${value}Z`;
-  const timestamp = Date.parse(normalized);
-  if (Number.isNaN(timestamp)) {
-    return null;
-  }
-  return new Date(timestamp);
-}
-
-export function Dashboard({ canRefresh }: DashboardProps) {
+export function Dashboard({ canRefresh, mode }: DashboardProps) {
   const [backends, setBackends] = useState<MonitoredBackend[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +33,9 @@ export function Dashboard({ canRefresh }: DashboardProps) {
       setQuickStatusTiles(tiles);
     } catch (err) {
       setQuickStatusTiles([]);
-      setQuickStatusError(err instanceof Error ? err.message : 'Unable to load quick status tiles');
+      setQuickStatusError(
+        getUserFacingErrorMessage(err, 'Could not load quick tiles. Check the API connection and try again.')
+      );
     } finally {
       isQuickStatusFetchingRef.current = false;
     }
@@ -76,7 +69,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
           return valid;
         });
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to load dashboard');
+        setError(getUserFacingErrorMessage(err, 'Could not load dashboard data. Check the API connection and try again.'));
       } finally {
         if (showSpinner) {
           setLoading(false);
@@ -104,7 +97,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
   }, [loadQuickStatus]);
 
   useEffect(() => {
-    const QUICK_STATUS_REFRESH_INTERVAL_MS = 15_000;
+    const QUICK_STATUS_REFRESH_INTERVAL_MS = 300_000;
     const intervalId = window.setInterval(() => {
       void loadQuickStatus();
     }, QUICK_STATUS_REFRESH_INTERVAL_MS);
@@ -122,7 +115,7 @@ export function Dashboard({ canRefresh }: DashboardProps) {
         )
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to refresh backend');
+      setError(getUserFacingErrorMessage(err, 'Could not refresh this backend. Check the monitor connection and try again.'));
     } finally {
       setRefreshingId(null);
     }
@@ -145,58 +138,49 @@ export function Dashboard({ canRefresh }: DashboardProps) {
       grouped.set(tile.backend_id, current);
     }
     const backendMeta = new Map(backends.map((backend) => [backend.id, backend] as const));
-    const groups = backends.map((backend) => {
-      const items = grouped.get(backend.id) ?? [];
-      const lastSeenDate = parseDate(backend.last_seen_at);
-      const freshnessThresholdMs = Math.max(backend.poll_interval_seconds || 60, 30) * 3 * 1000;
-      const freshnessAgeMs = lastSeenDate ? Math.max(0, Date.now() - lastSeenDate.getTime()) : Number.POSITIVE_INFINITY;
-      const isFresh = Number.isFinite(freshnessAgeMs) && freshnessAgeMs <= freshnessThresholdMs;
-      const heartbeatTile: QuickStatusTile = {
-        id: -backend.id,
-        backend_id: backend.id,
-        backend_display_order: backend.display_order,
-        backend_name: backend.name,
-        label: 'HB',
-        metric_key: 'ssh_status',
-        value: isFresh ? 1 : 0,
-        display_value: isFresh ? 'Now' : 'Late',
-        status: isFresh ? 'ok' : 'critical',
-        reported_at: backend.last_seen_at ?? backend.latest_snapshot?.reported_at ?? null,
-        details: [
-          {
-            text: `Heartbeat threshold: ${Math.max(backend.poll_interval_seconds || 60, 30) * 3}s`,
-            severity: isFresh ? 'ok' : 'critical',
-          },
-          {
-            text: lastSeenDate ? `Last seen: ${lastSeenDate.toLocaleString()}` : 'No heartbeat received yet',
-            severity: isFresh ? 'ok' : 'critical',
-          },
-        ],
-      };
-      return {
+    const orderedGroups = backends
+      .filter((backend) => grouped.has(backend.id))
+      .map((backend) => ({
         backendId: backend.id,
         backendName: backend.name,
         displayOrder: backend.display_order,
-        items: [heartbeatTile, ...items],
-      };
-    });
-    groups.sort((a, b) => {
-      if (a.displayOrder !== b.displayOrder) {
-        return a.displayOrder - b.displayOrder;
-      }
-      const byName = a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
-      if (byName !== 0) {
-        return byName;
-      }
-      return a.backendId - b.backendId;
-    });
-    return groups.map(({ displayOrder: _displayOrder, ...group }) => group);
+        items: grouped.get(backend.id) ?? [],
+      }));
+    const fallbackGroups = Array.from(grouped.entries())
+      .filter(([backendId]) => !backendMeta.has(backendId))
+      .map(([backendId, items]) => ({
+        backendId,
+        backendName: items[0]?.backend_name ?? `Backend #${backendId}`,
+        displayOrder: items[0]?.backend_display_order ?? 0,
+        items,
+      }))
+      .sort((a, b) => {
+        if (a.displayOrder !== b.displayOrder) {
+          return a.displayOrder - b.displayOrder;
+        }
+        const byName = a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
+        if (byName !== 0) {
+          return byName;
+        }
+        return a.backendId - b.backendId;
+      });
+    return [...orderedGroups, ...fallbackGroups];
   }, [backends, quickStatusTiles]);
+
+  const isMonitoringView = mode === 'monitoring';
+  const shouldShowDashboardError = !isMonitoringView || quickStatusGroups.length === 0;
 
   return (
     <div className="d-flex flex-column gap-4">
       <div className="d-flex justify-content-between align-items-center">
-        <h2 className="fw-semibold text-uppercase">Overview</h2>
+        <div>
+          <h2 className="fw-semibold text-uppercase mb-1">{isMonitoringView ? 'Quick Tiles' : 'All Graphs'}</h2>
+          <p className="text-secondary small mb-0">
+            {isMonitoringView
+              ? 'Server quick tiles and drill-down status details.'
+              : 'Historical metrics, snapshots, and warning states for every backend.'}
+          </p>
+        </div>
         <button
           className="btn btn-outline-light"
           onClick={() => {
@@ -208,93 +192,108 @@ export function Dashboard({ canRefresh }: DashboardProps) {
           Reload
         </button>
       </div>
-      {quickStatusGroups.length > 0 && (
-        <div className="quick-status-sections">
-          {quickStatusGroups.map((group) => (
-            <section className="quick-status-section" key={group.backendId}>
-              <div className="quick-status-section__header">
-                <h3 className="quick-status-section__title">{group.backendName}</h3>
-                <span className="quick-status-section__count">
-                  {group.items.length} {group.items.length === 1 ? 'tile' : 'tiles'}
-                </span>
-              </div>
-              <div className="quick-status-grid">
-                {group.items.map((tile) => {
-                  return (
-                    <div className="quick-status-grid__item" key={tile.id}>
-                      <QuickStatusTileCard
-                        tile={tile}
-                        onClick={
-                          tile.details && tile.details.length > 0
-                            ? () =>
-                                setSelectedQuickStatusTileId((current) => (current === tile.id ? null : tile.id))
-                            : undefined
-                        }
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-              {(() => {
-                const selectedTile = group.items.find((tile) => tile.id === selectedQuickStatusTileId);
-                if (!selectedTile?.details?.length) {
-                  return null;
-                }
-                return (
-                  <div className="quick-status-detail card-panel rounded-4 p-3 mt-3">
-                    <div className="d-flex justify-content-between align-items-center gap-2 mb-2">
-                      <div>
-                        <div className="text-uppercase card-panel__heading fw-semibold">{selectedTile.label}</div>
-                        <div className="small text-secondary">{selectedTile.backend_name}</div>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-outline-light"
-                        onClick={() => setSelectedQuickStatusTileId(null)}
-                      >
-                        Close
-                      </button>
-                    </div>
-                    <ul className="mb-0 small quick-status-detail__list">
-                      {selectedTile.details.map((line) => (
-                        <li
-                          key={`${line.severity}:${line.text}`}
-                          className={
-                            line.severity === 'critical'
-                              ? 'text-danger'
-                              : line.severity === 'warn'
-                                ? 'text-warning'
-                                : 'text-success'
-                          }
-                        >
-                          <code>{line.text}</code>
-                        </li>
-                      ))}
-                    </ul>
+      {isMonitoringView ? (
+        <>
+          {quickStatusGroups.length > 0 ? (
+            <div className="quick-status-sections">
+              {quickStatusGroups.map((group) => (
+                <section className="quick-status-section" key={group.backendId}>
+                  <div className="quick-status-section__header">
+                    <h3 className="quick-status-section__title">{group.backendName}</h3>
+                    <span className="quick-status-section__count">
+                      {group.items.length} {group.items.length === 1 ? 'tile' : 'tiles'}
+                    </span>
                   </div>
-                );
-              })()}
-            </section>
-          ))}
-        </div>
-      )}
-      {quickStatusError && <div className="text-secondary small">{quickStatusError}</div>}
-      {error && <div className="alert alert-danger">{error}</div>}
-      {loading ? (
-        <div className="text-secondary">Loading metrics…</div>
-      ) : backends.length === 0 ? (
-        <div className="alert alert-secondary text-dark">No backends configured yet.</div>
+                  <div className="quick-status-grid">
+                    {group.items.map((tile) => (
+                      <div className="quick-status-grid__item" key={tile.id}>
+                        <QuickStatusTileCard
+                          tile={tile}
+                          onClick={
+                            tile.details && tile.details.length > 0
+                              ? () =>
+                                  setSelectedQuickStatusTileId((current) => (current === tile.id ? null : tile.id))
+                              : undefined
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {(() => {
+                    const selectedTile = group.items.find((tile) => tile.id === selectedQuickStatusTileId);
+                    if (!selectedTile?.details?.length) {
+                      return null;
+                    }
+                    return (
+                      <div className="quick-status-detail card-panel rounded-4 p-3 mt-3">
+                        <div className="d-flex justify-content-between align-items-center gap-2 mb-2">
+                          <div>
+                            <div className="text-uppercase card-panel__heading fw-semibold">{selectedTile.label}</div>
+                            <div className="small text-secondary">{selectedTile.backend_name}</div>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-light"
+                            onClick={() => setSelectedQuickStatusTileId(null)}
+                          >
+                            Close
+                          </button>
+                        </div>
+                        <ul className="mb-0 small quick-status-detail__list">
+                          {selectedTile.details.map((line) => (
+                            <li
+                              key={`${line.severity}:${line.text}`}
+                              className={
+                                line.severity === 'critical'
+                                  ? 'text-danger'
+                                  : line.severity === 'warn'
+                                    ? 'text-warning'
+                                    : 'text-success'
+                              }
+                            >
+                              <code>{line.text}</code>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })()}
+                </section>
+              ))}
+            </div>
+          ) : (
+            !quickStatusError && (
+              <div className="card-panel rounded-4 p-4">
+                <div className="fw-semibold mb-1">No quick tiles configured</div>
+                <div className="text-secondary small">
+                  {loading ? 'Loading current monitoring state…' : 'Add quick tiles from Administration to populate this view.'}
+                </div>
+              </div>
+            )
+          )}
+          {quickStatusError && <div className="alert alert-warning small mb-0">{quickStatusError}</div>}
+          {error && shouldShowDashboardError && <div className="alert alert-danger">{error}</div>}
+        </>
       ) : (
-        backends.map((backend) => (
-          <BackendCard
-            key={backend.id}
-            backend={backend}
-            onRefresh={canRefresh ? handleRefresh : undefined}
-            disabled={refreshingId === backend.id}
-            hidden={hiddenBackendIds.includes(backend.id)}
-            onToggleHidden={toggleBackendVisibility}
-          />
-        ))
+        <>
+          {error && <div className="alert alert-danger">{error}</div>}
+          {loading ? (
+            <div className="text-secondary">Loading metrics…</div>
+          ) : backends.length === 0 ? (
+            <div className="alert alert-secondary text-dark">No backends configured yet.</div>
+          ) : (
+            backends.map((backend) => (
+              <BackendCard
+                key={backend.id}
+                backend={backend}
+                onRefresh={canRefresh ? handleRefresh : undefined}
+                disabled={refreshingId === backend.id}
+                hidden={hiddenBackendIds.includes(backend.id)}
+                onToggleHidden={toggleBackendVisibility}
+              />
+            ))
+          )}
+        </>
       )}
     </div>
   );

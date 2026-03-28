@@ -16,14 +16,20 @@ router = APIRouter(prefix="/notifications", tags=["notifications"], dependencies
 
 @router.get("/", response_model=NotificationCenterResponse)
 async def list_notifications(
-    limit: int = Query(100, ge=1, le=500),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ) -> NotificationCenterResponse:
-    items = await list_notification_events(session, limit=limit)
+    notification_page = await list_notification_events(session, page=page, page_size=page_size)
     unread_count = await count_unread_notification_events(session)
+    total_pages = max(1, (notification_page.total_items + notification_page.page_size - 1) // notification_page.page_size)
     return NotificationCenterResponse(
         unread_count=unread_count,
-        items=[NotificationEventRead.model_validate(item) for item in items],
+        page=notification_page.page,
+        page_size=notification_page.page_size,
+        total_items=notification_page.total_items,
+        total_pages=total_pages,
+        items=[NotificationEventRead.model_validate(item) for item in notification_page.items],
     )
 
 

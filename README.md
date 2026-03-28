@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `5.0.1`
+Current version: `6.0.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -37,6 +37,8 @@ Component docs:
 - Time-range charts (`hourly`, `daily`, `weekly`) with previous/next window navigation.
 - Reboot markers on charts (detected from uptime resets).
 - Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
+- Quick status tiles now include a 24-hour history strip with 12 aggregated two-hour segments under each square tile.
+- Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
 - Quick status tile types include:
   - Mounted volume usage (%)
   - Mounted volume free space (`MiB` / `GiB` / `TiB`)
@@ -48,11 +50,12 @@ Component docs:
 - Admin quick status management supports a separate Overview-style preview section plus search inside the paginated Existing Tiles list.
 - Quick status preview reordering is server-scoped and includes touch-friendly arrow controls for iPhone Safari.
 - Role-based auth (`admin`, `viewer`) with bootstrap flow for first admin user.
+- Persistent login sessions across browser restarts, with a 48-hour default auth session duration for new logins.
 - Admin controls for retention days and auth session duration.
 - Telegram bot support (`/stats`, `/warn`, `/cpu <server>`, `/memory <server>`, reboot actions) with consistent warning output across `/stats` and `/warn`.
 - Telegram warning notifications for CPU and memory issues include the top 10 highest-usage processes.
 - SSH notifications include structured details for failed and successful login detection.
-- In-app notification center with unread counter and notification history as a fallback when Telegram delivery fails or is blocked.
+- In-app notification center with unread counter, paginated history, fallback visibility when Telegram delivery fails or is blocked, and severity labels that mirror tile colors (`warn` orange, `critical` red).
 - Optional host reboot support (requires explicit enablement + container privileges).
 
 ## Prerequisites
@@ -94,7 +97,8 @@ Common optional values:
 Notes:
 
 - In production frontend builds, if `VITE_API_BASE_URL` is not set, frontend uses same-origin `/api` (proxied by frontend Nginx to `backend:8000`).
-- `docker-compose.yml` currently passes `VITE_API_BASE_URL` build arg with default `http://localhost:28000`. Set it explicitly for your target domain/port, or set it to `/api` for same-origin routing.
+- Use `VITE_API_BASE_URL=/api` for same-origin production deployments so the frontend keeps working when clients open the UI by IP, hostname, or reverse-proxied domain.
+- `docker-compose.yml` currently passes `VITE_API_BASE_URL` build arg with default `http://localhost:28000`. Override it for your target deployment, preferably with `/api` for same-origin routing.
 - In development, frontend defaults to `http://localhost:8000`.
 - SSH quick status checks require host filesystem bind mount (set `MONITOR_HOST_ROOT_SOURCE=/` and keep `MONITOR_HOST_ROOT_TARGET=/hostfs`).
 
@@ -199,6 +203,21 @@ Meta endpoints:
 
 - `GET /healthz`
 - `GET /version`
+
+## User-facing errors
+
+The frontend normalizes the main API, auth, monitor, and Telegram failures into shorter messages that tell the user what to check next.
+
+| Area | Message shown to user | Meaning / what to check |
+| --- | --- | --- |
+| Sign in | `Incorrect username or password.` | The credentials were rejected. Re-enter the username/password and try again. |
+| Session | `Your session expired. Sign in again.` | The saved token is no longer valid. Log in again to continue. |
+| Frontend to API | `Cannot reach the API. Check whether Virgilio is online and try again.` | The browser cannot contact the backend at all. Check the deployment, reverse proxy, and `VITE_API_BASE_URL`. |
+| Backend to monitor | `The monitor agent did not respond. Check the backend address, API token, and monitor availability.` | The backend is up, but it cannot reach the selected monitor agent. Check the backend record, agent container, and token. |
+| Permissions | `This action requires an admin account.` | A viewer account tried to perform an admin-only action, or the session no longer has admin access. |
+| Telegram config | `Telegram settings are incomplete. Add the bot token and default chat first.` | Telegram is enabled but required settings are missing. |
+| Telegram delivery | `Telegram rejected the request. Check the bot token, chat ID, and bot permissions.` | Telegram answered with an API error. Check the bot token, chat ID, and whether the bot can post to that chat. |
+| Reboot | `The reboot command failed on the host. Check the configured reboot command and container permissions.` | Virgilio reached the reboot path, but the host or container setup blocked the command. |
 
 ## Local tests
 

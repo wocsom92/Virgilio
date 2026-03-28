@@ -128,5 +128,6 @@ class QuickStatusTileRead(BaseModel):
     value: float | None
     display_value: str
     status: Literal["ok", "info", "warn", "critical", "unknown"]
+    history: list[Literal["ok", "info", "warn", "critical", "unknown"]] = Field(default_factory=list)
     reported_at: datetime | None = None
     details: list[QuickStatusDetailLine] | None = None

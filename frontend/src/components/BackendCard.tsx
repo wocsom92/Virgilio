@@ -10,6 +10,7 @@ import type {
 } from '../api/client';
 import { fetchMetricSeries } from '../api/client';
 import { MetricsChart } from './MetricsChart';
+import { getUserFacingErrorMessage } from '../utils/errors';
 import { formatBinarySizeFromGiB, formatTemperature } from '../utils/formatting';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
 
@@ -160,7 +161,9 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
       } catch (err) {
         if (!cancelled) {
           setSeries([]);
-          setSeriesError(err instanceof Error ? err.message : 'Unable to load metrics');
+          setSeriesError(
+            getUserFacingErrorMessage(err, 'Could not load chart data for this backend. Check the connection and try again.')
+          );
         }
       } finally {
         if (!cancelled) {

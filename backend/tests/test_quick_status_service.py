@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import select
 
-from backend.app.models.monitors import MonitoredBackend, MetricSnapshot, QuickStatusItem
+from backend.app.models.monitors import MonitoredBackend, MetricSnapshot, QuickStatusItem, QuickStatusPingSample
 from backend.app.services import quick_status
 
 
@@ -202,3 +203,219 @@ async def test_build_quick_status_tiles_include_ssh_action_details(db_session):
     assert tiles[0].details is not None
     assert any(line.text == "PubkeyAuthentication no" and line.severity == "warn" for line in tiles[0].details)
     assert any(line.text == "PermitRootLogin yes" and line.severity == "critical" for line in tiles[0].details)
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_history_uses_longest_status_duration_per_bucket(db_session):
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+        poll_interval_seconds=60,
+        last_seen_at=now,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MetricSnapshot(
+                backend_id=backend.id,
+                reported_at=now.replace(day=27, hour=11),
+                raw_payload={},
+                ram_used_percent=20,
+            ),
+            MetricSnapshot(
+                backend_id=backend.id,
+                reported_at=now.replace(hour=10, minute=0),
+                raw_payload={},
+                ram_used_percent=95,
+            ),
+            MetricSnapshot(
+                backend_id=backend.id,
+                reported_at=now.replace(hour=11, minute=0),
+                raw_payload={},
+                ram_used_percent=85,
+            ),
+            MetricSnapshot(
+                backend_id=backend.id,
+                reported_at=now.replace(hour=11, minute=30),
+                raw_payload={},
+                ram_used_percent=None,
+            ),
+        ]
+    )
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="RAM",
+        metric_key="ram_used_percent",
+        warning_threshold=80,
+        critical_threshold=90,
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
+
+    assert tiles[0].history == ["ok"] * 11 + ["critical"]
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_can_include_heartbeat_tiles(db_session):
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+        poll_interval_seconds=3600,
+        last_seen_at=now,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            MetricSnapshot(
+                backend_id=backend.id,
+                reported_at=now.replace(day=27, hour=11),
+                raw_payload={},
+                ram_used_percent=20,
+            ),
+            MetricSnapshot(
+                backend_id=backend.id,
+                reported_at=now.replace(hour=10, minute=30),
+                raw_payload={},
+                ram_used_percent=20,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tiles(
+        db_session,
+        [],
+        include_heartbeat_tiles=True,
+        backends=[backend],
+        now=now,
+    )
+
+    assert [tile.label for tile in tiles] == ["HB"]
+    assert tiles[0].status == "ok"
+    assert len(tiles[0].history) == 12
+    assert tiles[0].history[-1] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_aggregates_stored_ping_history(db_session):
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="Ping",
+        metric_key="ping_delay_ms",
+        warning_threshold=100,
+        critical_threshold=200,
+        ping_endpoint="https://example.com/health",
+        ping_interval_seconds=7200,
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            QuickStatusPingSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(day=27, hour=11),
+                success=True,
+                latency_ms=50,
+            ),
+            QuickStatusPingSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(hour=10, minute=0),
+                success=False,
+                latency_ms=None,
+            ),
+            QuickStatusPingSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(hour=11, minute=0),
+                success=True,
+                latency_ms=120,
+            ),
+            QuickStatusPingSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(hour=11, minute=30),
+                success=True,
+                latency_ms=50,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
+
+    assert tiles[0].history == ["ok"] * 11 + ["critical"]
+    assert tiles[0].display_value == "50ms"
+    assert tiles[0].status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_persists_new_ping_samples(db_session, monkeypatch):
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="Ping",
+        metric_key="ping_result",
+        warning_threshold=0,
+        critical_threshold=0,
+        ping_endpoint="https://example.com/health",
+        ping_interval_seconds=300,
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    async def fake_fetch_ping(base_url: str, token: str, target: str, timeout_seconds: int) -> dict:
+        assert base_url == "http://alpha"
+        assert token == "token-alpha"
+        assert target == "https://example.com/health"
+        return {"success": False, "latency_ms": None}
+
+    monkeypatch.setattr(quick_status, "fetch_ping", fake_fetch_ping)
+
+    tiles = await quick_status.build_quick_status_tiles(
+        db_session,
+        [item],
+        persist_ping_history=True,
+    )
+
+    samples = (
+        await db_session.execute(
+            select(QuickStatusPingSample)
+            .where(QuickStatusPingSample.quick_status_item_id == item.id)
+            .order_by(QuickStatusPingSample.checked_at.asc(), QuickStatusPingSample.id.asc())
+        )
+    ).scalars().all()
+
+    assert tiles[0].status == "critical"
+    assert tiles[0].display_value == "NOK"
+    assert len(samples) == 1
+    assert samples[0].success is False

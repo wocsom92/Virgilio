@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
 
-from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, QuickStatusItem, TelegramSettings
+from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, NotificationEvent, QuickStatusItem, TelegramSettings
 from backend.app.services.telegram_notifications import (
     dispatch_due_quick_status_notifications,
+    maybe_send_unsuccessful_ssh_login_notification,
     maybe_send_successful_ssh_login_notification,
     queue_quick_status_notifications,
 )
@@ -175,6 +177,47 @@ async def test_recovery_notification_is_sent_when_alert_clears(db_session, monke
     assert sent
     assert item.last_notified_status == "ok"
     assert item.pending_notification_status is None
+
+
+@pytest.mark.asyncio
+async def test_alert_transition_is_recorded_in_notification_center_without_telegram_send(db_session):
+    backend = await _create_backend(db_session)
+    item = await _create_item(db_session, backend.id, last_notified_status="ok")
+    await _create_snapshot(db_session, backend.id, 95)
+
+    await queue_quick_status_notifications(db_session, [item])
+
+    result = await db_session.execute(
+        select(NotificationEvent)
+        .where(NotificationEvent.category == "quick_status")
+        .order_by(NotificationEvent.id.desc())
+    )
+    events = list(result.scalars())
+
+    assert len(events) == 1
+    assert events[0].channel == "local"
+    assert events[0].delivery_status == "local"
+    assert events[0].severity == "critical"
+    assert "Disk changed from normal to error" in events[0].body
+
+
+@pytest.mark.asyncio
+async def test_requeueing_same_pending_alert_does_not_duplicate_notification_center_event(db_session):
+    backend = await _create_backend(db_session)
+    item = await _create_item(db_session, backend.id, last_notified_status="ok")
+    await _create_snapshot(db_session, backend.id, 95)
+
+    await queue_quick_status_notifications(db_session, [item])
+    await queue_quick_status_notifications(db_session, [item])
+
+    result = await db_session.execute(
+        select(NotificationEvent)
+        .where(NotificationEvent.category == "quick_status")
+        .order_by(NotificationEvent.id.desc())
+    )
+    events = list(result.scalars())
+
+    assert len(events) == 1
 
 
 @pytest.mark.asyncio
@@ -403,4 +446,60 @@ async def test_successful_ssh_login_notification_includes_details(db_session, mo
     assert "User: root" in text
     assert "Source: 10.0.0.8" in text
     assert "Port: 55123" in text
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_unsuccessful_ssh_login_notification_includes_details(db_session, monkeypatch):
+    backend = await _create_backend(db_session)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
+
+    previous_snapshot = MetricSnapshot(
+        backend_id=backend.id,
+        reported_at=datetime.now(tz=timezone.utc) - timedelta(minutes=5),
+        raw_payload={"ssh_last_unsuccessful_attempt_seconds": 7200},
+    )
+    db_session.add(previous_snapshot)
+    await db_session.commit()
+
+    from backend.app.schemas.metrics import MetricSnapshotCreate
+
+    reported_at = datetime(2026, 3, 16, 16, 42, 0, tzinfo=timezone.utc)
+
+    payload = MetricSnapshotCreate.model_validate(
+        {
+            "reported_at": reported_at,
+            "raw_payload": {
+                "ssh_last_unsuccessful_attempt_seconds": 30,
+                "ssh_last_failure_auth_method": "publickey",
+                "ssh_last_failure_username": "root",
+                "ssh_last_failure_source_ip": "10.0.0.8",
+                "ssh_last_failure_port": 55123,
+                "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+            },
+        }
+    )
+
+    sent: list[str] = []
+
+    async def fake_send_message(token, chat_id, text):
+        sent.append(text)
+
+    monkeypatch.setattr("backend.app.services.telegram_notifications.send_message", fake_send_message)
+
+    text = await maybe_send_unsuccessful_ssh_login_notification(
+        db_session,
+        backend=backend,
+        previous_snapshot=previous_snapshot,
+        payload=payload,
+    )
+
+    assert text is not None
+    assert "Unsuccessful SSH login detected at 2026\\-03\\-16 16:41:30 UTC\\." in text
+    assert "SSH Failure Details" in text
+    assert "Method: publickey" in text
+    assert "User: root" in text
+    assert "Source: 10.0.0.8" in text
+    assert "Port: 55123" in text
+    assert "Log: Failed publickey for root from 10.0.0.8 port 55123 ssh2" in text
     assert sent

@@ -7,6 +7,7 @@ Lightweight FastAPI agent that runs on a monitored host, collects local metrics 
 - Collects host metrics on demand.
 - Stores a short in-process history buffer for `latest` responses and chart continuity.
 - Exposes network ping checks for quick status tiles.
+- Exposes network ping checks that the backend can persist and aggregate into 24-hour quick-tile history bars.
 - Collects process-heavy CPU and memory snapshots used in Telegram alert summaries and command responses.
 - Collects SSH login and SSH posture details for quick status tiles and Telegram notifications.
 - Optionally triggers a local host reboot when explicitly enabled.

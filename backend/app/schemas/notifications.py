@@ -25,4 +25,8 @@ class NotificationEventRead(BaseModel):
 
 class NotificationCenterResponse(BaseModel):
     unread_count: int
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
     items: list[NotificationEventRead]

@@ -84,7 +84,7 @@ class SystemSettings(TimestampMixin, Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     metric_retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
-    auth_session_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=1440)
+    auth_session_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=2880)
 
 
 class NotificationEvent(TimestampMixin, Base):
@@ -124,3 +124,21 @@ class QuickStatusItem(TimestampMixin, Base):
     pending_notification_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     backend: Mapped[MonitoredBackend] = relationship("MonitoredBackend")
+    ping_samples: Mapped[list["QuickStatusPingSample"]] = relationship(
+        "QuickStatusPingSample",
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="QuickStatusPingSample.checked_at",
+    )
+
+
+class QuickStatusPingSample(TimestampMixin, Base):
+    __tablename__ = "quick_status_ping_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    quick_status_item_id: Mapped[int] = mapped_column(ForeignKey("quick_status_items.id"), nullable=False, index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+
+    item: Mapped[QuickStatusItem] = relationship("QuickStatusItem", back_populates="ping_samples")

@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # Authentication options
     admin_api_token: str = "change-me"  # Legacy token, superseded by username/password auth
     auth_secret_key: str = "change-me-secret"
-    auth_access_token_exp_minutes: int = 24 * 60
+    auth_access_token_exp_minutes: int = 48 * 60
     auth_algorithm: str = "HS256"
 
     # Telegram related configuration

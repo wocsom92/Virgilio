@@ -16,6 +16,7 @@ from backend.app.services.monitor_client import MonitorClientError, fetch_metric
 from backend.app.services.quick_status import list_quick_status_items_for_backend
 from backend.app.services.telegram_notifications import (
     dispatch_due_quick_status_notifications,
+    maybe_send_unsuccessful_ssh_login_notification,
     maybe_send_successful_ssh_login_notification,
     queue_quick_status_notifications,
 )
@@ -76,6 +77,12 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
     await session.refresh(snapshot)
 
     await maybe_send_successful_ssh_login_notification(
+        session,
+        backend=backend,
+        previous_snapshot=previous_snapshot,
+        payload=payload,
+    )
+    await maybe_send_unsuccessful_ssh_login_notification(
         session,
         backend=backend,
         previous_snapshot=previous_snapshot,

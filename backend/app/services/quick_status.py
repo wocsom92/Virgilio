@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import settings
-from backend.app.models.monitors import MetricSnapshot, QuickStatusItem
+from backend.app.models.monitors import MetricSnapshot, QuickStatusItem, QuickStatusPingSample
 from backend.app.schemas.quick_status import (
     QuickStatusDetailLine,
     QuickStatusItemCreate,
@@ -18,6 +18,7 @@ from backend.app.schemas.quick_status import (
     is_supported_quick_status_metric,
 )
 from backend.app.services.monitor_client import MonitorClientError, fetch_ping
+from backend.app.services.system_settings import metric_retention_timedelta
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "swap_used_percent", "mount_used_percent"}
@@ -25,6 +26,16 @@ _REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "mount_avai
 _PING_METRICS = {"ping_result", "ping_delay_ms"}
 _INFO_ONLY_METRICS = {"swap_used_percent"}
 _ALERT_STATUSES = {"warn", "critical"}
+_HISTORY_SEGMENT_COUNT = 12
+_HISTORY_SEGMENT_DURATION = timedelta(hours=2)
+_HISTORY_WINDOW = _HISTORY_SEGMENT_DURATION * _HISTORY_SEGMENT_COUNT
+_HISTORY_STATUS_PRIORITY = {
+    "critical": 4,
+    "warn": 3,
+    "unknown": 2,
+    "info": 1,
+    "ok": 1,
+}
 
 
 @dataclass(slots=True)
@@ -291,6 +302,91 @@ def _format_elapsed_seconds(value: float) -> str:
     return f"{days:02d}:{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def _coerce_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _history_window_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
+    window_end = _coerce_utc(now or datetime.now(tz=timezone.utc))
+    return window_end - _HISTORY_WINDOW, window_end
+
+
+def _empty_history() -> list[str]:
+    return ["unknown"] * _HISTORY_SEGMENT_COUNT
+
+
+def _history_segment_ranges(window_start: datetime) -> list[tuple[datetime, datetime]]:
+    return [
+        (
+            window_start + (_HISTORY_SEGMENT_DURATION * index),
+            window_start + (_HISTORY_SEGMENT_DURATION * (index + 1)),
+        )
+        for index in range(_HISTORY_SEGMENT_COUNT)
+    ]
+
+
+def _dominant_status(durations: dict[str, float]) -> str:
+    if not durations:
+        return "unknown"
+    return max(
+        durations.items(),
+        key=lambda entry: (
+            entry[1],
+            _HISTORY_STATUS_PRIORITY.get(entry[0], 0),
+        ),
+    )[0]
+
+
+def _accumulate_status_durations(
+    buckets: list[dict[str, float]],
+    bucket_ranges: list[tuple[datetime, datetime]],
+    status: str,
+    start: datetime,
+    end: datetime,
+) -> None:
+    if end <= start:
+        return
+    for index, (bucket_start, bucket_end) in enumerate(bucket_ranges):
+        overlap_start = max(start, bucket_start)
+        overlap_end = min(end, bucket_end)
+        if overlap_end <= overlap_start:
+            continue
+        buckets[index][status] = buckets[index].get(status, 0.0) + (overlap_end - overlap_start).total_seconds()
+
+
+def _finalize_history_buckets(buckets: list[dict[str, float]]) -> list[str]:
+    return [_dominant_status(bucket) for bucket in buckets]
+
+
+def _ping_result_from_sample(sample: QuickStatusPingSample) -> PingCheckResult:
+    return PingCheckResult(
+        checked_at=_coerce_utc(sample.checked_at),
+        success=bool(sample.success),
+        latency_ms=float(sample.latency_ms) if sample.latency_ms is not None else None,
+    )
+
+
+def _evaluate_ping_result(item: QuickStatusItem, ping_result: PingCheckResult | None) -> QuickStatusEvaluation:
+    if ping_result is None:
+        return QuickStatusEvaluation(value=None, display_value="—", status="unknown")
+    if item.metric_key == "ping_result":
+        return QuickStatusEvaluation(
+            value=1.0 if ping_result.success else 0.0,
+            display_value="OK" if ping_result.success else "NOK",
+            status="ok" if ping_result.success else "critical",
+        )
+    if ping_result.success and ping_result.latency_ms is not None:
+        value = ping_result.latency_ms
+        return QuickStatusEvaluation(
+            value=value,
+            display_value=_format_value(item.metric_key, value),
+            status=_resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key),
+        )
+    return QuickStatusEvaluation(value=None, display_value="timeout", status="critical")
+
+
 def _resolve_status(value: float | None, warning_threshold: float, critical_threshold: float, metric_key: str) -> str:
     if value is None:
         return "unknown"
@@ -334,18 +430,277 @@ def evaluate_quick_status_item(item: QuickStatusItem, snapshot: MetricSnapshot |
     )
 
 
-async def _check_ping(item: QuickStatusItem) -> PingCheckResult | None:
-    if not item.ping_endpoint:
+def _build_item_history(
+    item: QuickStatusItem,
+    snapshots: list[MetricSnapshot],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[str]:
+    if item.metric_key in _PING_METRICS:
+        return _empty_history()
+
+    bucket_ranges = _history_segment_ranges(window_start)
+    buckets = [{} for _ in range(_HISTORY_SEGMENT_COUNT)]
+    ordered_snapshots = sorted(
+        snapshots,
+        key=lambda snapshot: (_coerce_utc(snapshot.reported_at), snapshot.id),
+    )
+
+    previous_snapshot = next(
+        (
+            snapshot
+            for snapshot in reversed(ordered_snapshots)
+            if _coerce_utc(snapshot.reported_at) < window_start
+        ),
+        None,
+    )
+    current_status = evaluate_quick_status_item(item, previous_snapshot).status
+    current_start = window_start
+
+    for snapshot in ordered_snapshots:
+        reported_at = _coerce_utc(snapshot.reported_at)
+        if reported_at < window_start:
+            continue
+        if reported_at > window_end:
+            break
+        _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, reported_at)
+        current_status = evaluate_quick_status_item(item, snapshot).status
+        current_start = reported_at
+
+    _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, window_end)
+    return _finalize_history_buckets(buckets)
+
+
+def _build_ping_history(
+    item: QuickStatusItem,
+    samples: list[QuickStatusPingSample],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[str]:
+    bucket_ranges = _history_segment_ranges(window_start)
+    buckets = [{} for _ in range(_HISTORY_SEGMENT_COUNT)]
+    ordered_samples = sorted(
+        samples,
+        key=lambda sample: (_coerce_utc(sample.checked_at), sample.id),
+    )
+
+    previous_sample = next(
+        (
+            sample
+            for sample in reversed(ordered_samples)
+            if _coerce_utc(sample.checked_at) < window_start
+        ),
+        None,
+    )
+    current_status = _evaluate_ping_result(
+        item,
+        _ping_result_from_sample(previous_sample) if previous_sample is not None else None,
+    ).status
+    current_start = window_start
+
+    for sample in ordered_samples:
+        checked_at = _coerce_utc(sample.checked_at)
+        if checked_at < window_start:
+            continue
+        if checked_at > window_end:
+            break
+        _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, checked_at)
+        current_status = _evaluate_ping_result(item, _ping_result_from_sample(sample)).status
+        current_start = checked_at
+
+    _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, window_end)
+    return _finalize_history_buckets(buckets)
+
+
+def _build_heartbeat_history(
+    backend: object,
+    snapshots: list[MetricSnapshot],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[str]:
+    bucket_ranges = _history_segment_ranges(window_start)
+    buckets = [{} for _ in range(_HISTORY_SEGMENT_COUNT)]
+    ordered_snapshots = sorted(
+        snapshots,
+        key=lambda snapshot: (_coerce_utc(snapshot.reported_at), snapshot.id),
+    )
+    if not ordered_snapshots:
+        for bucket in buckets:
+            bucket["unknown"] = _HISTORY_SEGMENT_DURATION.total_seconds()
+        return _finalize_history_buckets(buckets)
+
+    freshness_seconds = max(getattr(backend, "poll_interval_seconds", 60) or 60, 30) * 3
+    freshness_window = timedelta(seconds=freshness_seconds)
+    has_previous_snapshot = any(_coerce_utc(snapshot.reported_at) < window_start for snapshot in ordered_snapshots)
+    first_known_at = window_start if has_previous_snapshot else max(window_start, _coerce_utc(ordered_snapshots[0].reported_at))
+
+    if first_known_at > window_start:
+        _accumulate_status_durations(buckets, bucket_ranges, "unknown", window_start, first_known_at)
+    _accumulate_status_durations(buckets, bucket_ranges, "critical", first_known_at, window_end)
+
+    for snapshot in ordered_snapshots:
+        reported_at = _coerce_utc(snapshot.reported_at)
+        ok_start = max(window_start, reported_at)
+        ok_end = min(window_end, reported_at + freshness_window)
+        _accumulate_status_durations(buckets, bucket_ranges, "ok", ok_start, ok_end)
+
+    return _finalize_history_buckets(buckets)
+
+
+async def _load_history_snapshots(
+    session: AsyncSession,
+    backend_ids: set[int],
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[int, list[MetricSnapshot]]:
+    if not backend_ids:
+        return {}
+
+    ranked_previous_snapshots = (
+        select(
+            MetricSnapshot.id.label("snapshot_id"),
+            func.row_number().over(
+                partition_by=MetricSnapshot.backend_id,
+                order_by=(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc()),
+            ).label("row_number"),
+        )
+        .where(
+            MetricSnapshot.backend_id.in_(backend_ids),
+            MetricSnapshot.reported_at < window_start,
+        )
+        .subquery()
+    )
+
+    previous_result = await session.execute(
+        select(MetricSnapshot).join(
+            ranked_previous_snapshots,
+            MetricSnapshot.id == ranked_previous_snapshots.c.snapshot_id,
+        ).where(ranked_previous_snapshots.c.row_number == 1)
+    )
+    current_result = await session.execute(
+        select(MetricSnapshot)
+        .where(
+            MetricSnapshot.backend_id.in_(backend_ids),
+            MetricSnapshot.reported_at >= window_start,
+            MetricSnapshot.reported_at <= window_end,
+        )
+        .order_by(MetricSnapshot.backend_id, MetricSnapshot.reported_at, MetricSnapshot.id)
+    )
+
+    snapshots_by_backend: dict[int, list[MetricSnapshot]] = {backend_id: [] for backend_id in backend_ids}
+    for snapshot in previous_result.scalars():
+        snapshots_by_backend.setdefault(snapshot.backend_id, []).append(snapshot)
+    for snapshot in current_result.scalars():
+        snapshots_by_backend.setdefault(snapshot.backend_id, []).append(snapshot)
+    for snapshots in snapshots_by_backend.values():
+        snapshots.sort(key=lambda snapshot: (_coerce_utc(snapshot.reported_at), snapshot.id))
+    return snapshots_by_backend
+
+
+async def _load_ping_history_samples(
+    session: AsyncSession,
+    item_ids: set[int],
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[int, list[QuickStatusPingSample]]:
+    if not item_ids:
+        return {}
+
+    ranked_previous_samples = (
+        select(
+            QuickStatusPingSample.id.label("sample_id"),
+            func.row_number().over(
+                partition_by=QuickStatusPingSample.quick_status_item_id,
+                order_by=(QuickStatusPingSample.checked_at.desc(), QuickStatusPingSample.id.desc()),
+            ).label("row_number"),
+        )
+        .where(
+            QuickStatusPingSample.quick_status_item_id.in_(item_ids),
+            QuickStatusPingSample.checked_at < window_start,
+        )
+        .subquery()
+    )
+
+    previous_result = await session.execute(
+        select(QuickStatusPingSample).join(
+            ranked_previous_samples,
+            QuickStatusPingSample.id == ranked_previous_samples.c.sample_id,
+        ).where(ranked_previous_samples.c.row_number == 1)
+    )
+    current_result = await session.execute(
+        select(QuickStatusPingSample)
+        .where(
+            QuickStatusPingSample.quick_status_item_id.in_(item_ids),
+            QuickStatusPingSample.checked_at >= window_start,
+            QuickStatusPingSample.checked_at <= window_end,
+        )
+        .order_by(QuickStatusPingSample.quick_status_item_id, QuickStatusPingSample.checked_at, QuickStatusPingSample.id)
+    )
+
+    samples_by_item: dict[int, list[QuickStatusPingSample]] = {item_id: [] for item_id in item_ids}
+    for sample in previous_result.scalars():
+        samples_by_item.setdefault(sample.quick_status_item_id, []).append(sample)
+    for sample in current_result.scalars():
+        samples_by_item.setdefault(sample.quick_status_item_id, []).append(sample)
+    for samples in samples_by_item.values():
+        samples.sort(key=lambda sample: (_coerce_utc(sample.checked_at), sample.id))
+    return samples_by_item
+
+
+async def _persist_ping_result(
+    session: AsyncSession,
+    item: QuickStatusItem,
+    ping_result: PingCheckResult,
+    latest_sample: QuickStatusPingSample | None,
+) -> QuickStatusPingSample | None:
+    if latest_sample is not None and _coerce_utc(latest_sample.checked_at) >= ping_result.checked_at:
         return None
+
+    retention_window = await metric_retention_timedelta(session)
+    cutoff = ping_result.checked_at - retention_window
+    await session.execute(
+        QuickStatusPingSample.__table__.delete()
+        .where(QuickStatusPingSample.checked_at < cutoff)
+        .execution_options(synchronize_session=False)
+    )
+    sample = QuickStatusPingSample(
+        quick_status_item_id=item.id,
+        checked_at=ping_result.checked_at,
+        success=ping_result.success,
+        latency_ms=ping_result.latency_ms,
+    )
+    session.add(sample)
+    await session.flush()
+    return sample
+
+
+async def _check_ping(
+    session: AsyncSession,
+    item: QuickStatusItem,
+    *,
+    latest_sample: QuickStatusPingSample | None = None,
+    persist_history: bool = False,
+    now: datetime | None = None,
+) -> tuple[PingCheckResult | None, QuickStatusPingSample | None]:
+    if not item.ping_endpoint:
+        return None, None
     backend = getattr(item, "backend", None)
     if backend is None:
-        return None
+        return None, None
     interval = max(5, int(item.ping_interval_seconds or 60))
-    now = datetime.now(tz=timezone.utc)
+    checked_at = _coerce_utc(now or datetime.now(tz=timezone.utc))
+    latest_result = _ping_result_from_sample(latest_sample) if latest_sample is not None else None
     async with _PING_LOCK:
         cached = _PING_CACHE.get(item.id)
-        if cached and now - cached.checked_at < timedelta(seconds=interval):
-            return cached
+        if cached and checked_at - cached.checked_at < timedelta(seconds=interval):
+            if persist_history:
+                persisted_sample = await _persist_ping_result(session, item, cached, latest_sample)
+                return cached, persisted_sample
+            return cached, None
+    if latest_result is not None and checked_at - latest_result.checked_at < timedelta(seconds=interval):
+        async with _PING_LOCK:
+            _PING_CACHE[item.id] = latest_result
+        return latest_result, None
     timeout_seconds = max(1, int(settings.monitor_request_timeout_seconds or 1))
     timeout_seconds = min(30, timeout_seconds)
     try:
@@ -365,10 +720,13 @@ async def _check_ping(item: QuickStatusItem) -> PingCheckResult | None:
         success = bool(payload.get("success"))
         latency = payload.get("latency_ms")
         latency_ms = float(latency) if isinstance(latency, (int, float)) else None
-    result = PingCheckResult(checked_at=now, success=success, latency_ms=latency_ms)
+    result = PingCheckResult(checked_at=checked_at, success=success, latency_ms=latency_ms)
     async with _PING_LOCK:
         _PING_CACHE[item.id] = result
-    return result
+    persisted_sample = None
+    if persist_history:
+        persisted_sample = await _persist_ping_result(session, item, result, latest_sample)
+    return result, persisted_sample
 
 
 async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem]:
@@ -392,62 +750,123 @@ async def list_quick_status_items_for_backend(session: AsyncSession, backend_id:
 async def build_quick_status_tiles(
     session: AsyncSession,
     items: Iterable[QuickStatusItem],
+    *,
+    include_heartbeat_tiles: bool = False,
+    backends: Iterable[object] | None = None,
+    now: datetime | None = None,
+    persist_ping_history: bool = False,
 ) -> list[QuickStatusTileRead]:
     items_list = sorted(
         [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))],
         key=_quick_status_item_sort_key,
     )
-    if not items_list:
-        return []
-
-    backend_ids = {item.backend_id for item in items_list}
-    latest_snapshot_sq = (
-        select(
-            MetricSnapshot.backend_id.label("backend_id"),
-            func.max(MetricSnapshot.id).label("snapshot_id"),
-        )
-        .where(MetricSnapshot.backend_id.in_(backend_ids))
-        .group_by(MetricSnapshot.backend_id)
-        .subquery()
-    )
-    result = await session.execute(
-        select(MetricSnapshot).join(
-            latest_snapshot_sq,
-            MetricSnapshot.id == latest_snapshot_sq.c.snapshot_id,
-        )
-    )
-    snapshots = {snap.backend_id: snap for snap in result.scalars()}
-
-    tiles: list[QuickStatusTileRead] = []
+    backend_by_id: dict[int, object] = {}
     for item in items_list:
         backend = getattr(item, "backend", None)
-        snapshot = snapshots.get(item.backend_id)
-        ping_result = await _check_ping(item) if item.metric_key in _PING_METRICS else None
+        if backend is not None:
+            backend_by_id[item.backend_id] = backend
+    for backend in backends or []:
+        backend_id = getattr(backend, "id", None)
+        if backend_id is not None:
+            backend_by_id[backend_id] = backend
+
+    if not items_list and not (include_heartbeat_tiles and backend_by_id):
+        return []
+
+    backend_ids = set(backend_by_id) | {item.backend_id for item in items_list}
+    window_start, window_end = _history_window_bounds(now)
+    ping_history_by_item = await _load_ping_history_samples(
+        session,
+        {item.id for item in items_list if item.metric_key in _PING_METRICS},
+        window_start,
+        window_end,
+    )
+    ping_results_by_item: dict[int, PingCheckResult | None] = {}
+    for item in items_list:
+        if item.metric_key not in _PING_METRICS:
+            continue
+        latest_sample = ping_history_by_item.get(item.id, [])[-1] if ping_history_by_item.get(item.id) else None
+        ping_result, persisted_sample = await _check_ping(
+            session,
+            item,
+            latest_sample=latest_sample,
+            persist_history=persist_ping_history,
+            now=window_end,
+        )
+        ping_results_by_item[item.id] = ping_result
+        if persisted_sample is not None:
+            ping_history_by_item.setdefault(item.id, []).append(persisted_sample)
+            ping_history_by_item[item.id].sort(key=lambda sample: (_coerce_utc(sample.checked_at), sample.id))
+    history_snapshots_by_backend = await _load_history_snapshots(session, backend_ids, window_start, window_end)
+    latest_snapshots = {
+        backend_id: snapshots[-1]
+        for backend_id, snapshots in history_snapshots_by_backend.items()
+        if snapshots
+    }
+
+    tiles: list[QuickStatusTileRead] = []
+    if include_heartbeat_tiles:
+        for backend_id in sorted(
+            backend_ids,
+            key=lambda current_backend_id: (
+                getattr(backend_by_id.get(current_backend_id), "display_order", 0),
+                getattr(backend_by_id.get(current_backend_id), "name", "").casefold(),
+                current_backend_id,
+            ),
+        ):
+            backend = backend_by_id.get(backend_id)
+            latest_snapshot = latest_snapshots.get(backend_id)
+            freshness_seconds = max(getattr(backend, "poll_interval_seconds", 60) or 60, 30) * 3
+            reference_at = getattr(backend, "last_seen_at", None) or getattr(latest_snapshot, "reported_at", None)
+            reference_date = _coerce_utc(reference_at) if isinstance(reference_at, datetime) else None
+            is_fresh = reference_date is not None and (window_end - reference_date).total_seconds() <= freshness_seconds
+            tiles.append(
+                QuickStatusTileRead(
+                    id=-backend_id,
+                    backend_id=backend_id,
+                    backend_display_order=getattr(backend, "display_order", 0),
+                    backend_name=getattr(backend, "name", f"Backend #{backend_id}"),
+                    label="HB",
+                    metric_key="ssh_status",
+                    value=1.0 if is_fresh else (0.0 if reference_date is not None else None),
+                    display_value="Now" if is_fresh else ("Late" if reference_date is not None else "—"),
+                    status="ok" if is_fresh else ("critical" if reference_date is not None else "unknown"),
+                    history=_build_heartbeat_history(
+                        backend,
+                        history_snapshots_by_backend.get(backend_id, []),
+                        window_start,
+                        window_end,
+                    ),
+                    reported_at=reference_date,
+                    details=[
+                        QuickStatusDetailLine(
+                            text=f"Heartbeat threshold: {freshness_seconds}s",
+                            severity="ok" if is_fresh else ("critical" if reference_date is not None else "warn"),
+                        ),
+                        QuickStatusDetailLine(
+                            text=f"Last seen: {reference_date.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                            if reference_date is not None
+                            else "No heartbeat received yet",
+                            severity="ok" if is_fresh else ("critical" if reference_date is not None else "warn"),
+                        ),
+                    ],
+                )
+            )
+
+    for item in items_list:
+        backend = getattr(item, "backend", None)
+        snapshot = latest_snapshots.get(item.backend_id)
+        ping_result = ping_results_by_item.get(item.id) if item.metric_key in _PING_METRICS else None
         value = _metric_value(snapshot, item.metric_key, item.mount_path) if snapshot else None
         status = _resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key)
         display_value = _format_value(item.metric_key, value)
         reported_at = snapshot.reported_at if snapshot else None
         if item.metric_key in _PING_METRICS:
-            if ping_result is None:
-                status = "unknown"
-                display_value = "—"
-                value = None
-                reported_at = None
-            else:
-                reported_at = ping_result.checked_at
-                if item.metric_key == "ping_result":
-                    status = "ok" if ping_result.success else "critical"
-                    display_value = "OK" if ping_result.success else "NOK"
-                    value = 1.0 if ping_result.success else 0.0
-                else:
-                    if ping_result.success and ping_result.latency_ms is not None:
-                        value = ping_result.latency_ms
-                        display_value = _format_value(item.metric_key, value)
-                        status = _resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key)
-                    else:
-                        value = None
-                        display_value = "timeout"
-                        status = "critical"
+            ping_evaluation = _evaluate_ping_result(item, ping_result)
+            value = ping_evaluation.value
+            display_value = ping_evaluation.display_value
+            status = ping_evaluation.status
+            reported_at = ping_result.checked_at if ping_result is not None else None
         tiles.append(
             QuickStatusTileRead(
                 id=item.id,
@@ -459,6 +878,16 @@ async def build_quick_status_tiles(
                 value=value,
                 display_value=display_value,
                 status=status,
+                history=(
+                    _build_ping_history(item, ping_history_by_item.get(item.id, []), window_start, window_end)
+                    if item.metric_key in _PING_METRICS
+                    else _build_item_history(
+                        item,
+                        history_snapshots_by_backend.get(item.backend_id, []),
+                        window_start,
+                        window_end,
+                    )
+                ),
                 reported_at=reported_at,
                 details=_build_detail_lines(item, snapshot),
             )

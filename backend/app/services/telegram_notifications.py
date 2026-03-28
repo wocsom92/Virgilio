@@ -8,6 +8,7 @@ from typing import Any, Callable, Sequence
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from backend.app.models.monitors import MonitoredBackend, QuickStatusItem, TelegramSettings as TelegramSettingsModel
 from backend.app.schemas.backend import BackendWithLatestSnapshot
@@ -470,6 +471,43 @@ def _build_transition_message(
     return "\n".join(lines)
 
 
+async def _record_quick_status_inbox_event(
+    session: AsyncSession,
+    *,
+    item: QuickStatusItem,
+    backend_name: str,
+    label: str,
+    previous_status: str,
+    current_status: str,
+    display_value: str,
+) -> None:
+    if current_status in _ALERT_STATUSES:
+        severity = current_status
+        title = f"Quick status alert: {backend_name}"
+        body = (
+            f"{label} changed from {_status_label(previous_status)} "
+            f"to {_status_label(current_status)} ({display_value})"
+        )
+    else:
+        severity = "info"
+        title = f"Quick status cleared: {backend_name}"
+        body = (
+            f"{label} cleared "
+            f"(was {_status_label(previous_status)}, now {display_value})"
+        )
+    await record_notification_event(
+        session,
+        channel="local",
+        category="quick_status",
+        severity=severity,
+        title=title,
+        body=body,
+        backend_id=item.backend_id,
+        backend_name=backend_name,
+        delivery_status="local",
+    )
+
+
 async def queue_quick_status_notifications(
     session: AsyncSession,
     items: Sequence[QuickStatusItem],
@@ -505,9 +543,27 @@ async def queue_quick_status_notifications(
             continue
         if item.pending_notification_due_at is not None:
             item.pending_notification_status = current_status
+            await _record_quick_status_inbox_event(
+                session,
+                item=item,
+                backend_name=tile.backend_name,
+                label=tile.label,
+                previous_status=previous_status or "unknown",
+                current_status=current_status,
+                display_value=tile.display_value,
+            )
         else:
             item.pending_notification_status = current_status
             item.pending_notification_due_at = due_at
+            await _record_quick_status_inbox_event(
+                session,
+                item=item,
+                backend_name=tile.backend_name,
+                label=tile.label,
+                previous_status=previous_status or "unknown",
+                current_status=current_status,
+                display_value=tile.display_value,
+            )
         session.add(item)
         changed = True
 
@@ -835,9 +891,47 @@ def _build_ssh_success_lines(payload: MetricSnapshotCreate) -> list[str]:
     return lines
 
 
+def _ssh_failure_age_seconds_from_payload(payload: MetricSnapshotCreate) -> float | None:
+    if not isinstance(payload.raw_payload, dict):
+        return None
+    value = payload.raw_payload.get("ssh_last_unsuccessful_attempt_seconds")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _build_ssh_failure_lines_from_payload(payload: MetricSnapshotCreate) -> list[str]:
+    raw_payload = payload.raw_payload if isinstance(payload.raw_payload, dict) else {}
+    method = raw_payload.get("ssh_last_failure_auth_method")
+    username = raw_payload.get("ssh_last_failure_username")
+    source_ip = raw_payload.get("ssh_last_failure_source_ip")
+    port = raw_payload.get("ssh_last_failure_port")
+    raw_line = raw_payload.get("ssh_last_failure_line")
+
+    if not any(value not in (None, "") for value in (method, username, source_ip, port, raw_line)):
+        return []
+
+    lines = ["*SSH Failure Details:*"]
+    if isinstance(method, str) and method.strip():
+        lines.append(f"• Method: {_escape_markdown(method.strip())}")
+    if isinstance(username, str) and username.strip():
+        lines.append(f"• User: {_escape_markdown(username.strip())}")
+    if isinstance(source_ip, str) and source_ip.strip():
+        lines.append(f"• Source: {_escape_markdown(source_ip.strip())}")
+    if isinstance(port, int):
+        lines.append(f"• Port: {_escape_markdown(str(port))}")
+    if isinstance(raw_line, str) and raw_line.strip():
+        lines.append(f"• Log: {_escape_markdown(raw_line.strip())}")
+    return lines
+
+
 def _ssh_success_age_seconds_from_snapshot(snapshot: Any) -> float | None:
     raw_payload = snapshot.raw_payload if snapshot is not None and isinstance(getattr(snapshot, "raw_payload", None), dict) else {}
     value = raw_payload.get("ssh_last_successful_login_seconds")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _ssh_failure_age_seconds_from_snapshot(snapshot: Any) -> float | None:
+    raw_payload = snapshot.raw_payload if snapshot is not None and isinstance(getattr(snapshot, "raw_payload", None), dict) else {}
+    value = raw_payload.get("ssh_last_unsuccessful_attempt_seconds")
     return float(value) if isinstance(value, (int, float)) else None
 
 
@@ -855,6 +949,67 @@ def _is_new_successful_ssh_login(previous_snapshot: Any, payload: MetricSnapshot
     )
     tolerance_seconds = max(15.0, elapsed_seconds * 0.5)
     return current_age + tolerance_seconds < previous_age
+
+
+def _is_new_unsuccessful_ssh_login(previous_snapshot: Any, payload: MetricSnapshotCreate) -> bool:
+    previous_age = _ssh_failure_age_seconds_from_snapshot(previous_snapshot)
+    current_age = _ssh_failure_age_seconds_from_payload(payload)
+    if previous_age is None or current_age is None:
+        return False
+    previous_reported_at = getattr(previous_snapshot, "reported_at", None)
+    if previous_reported_at is None:
+        return False
+    elapsed_seconds = max(
+        0.0,
+        (payload.reported_at.astimezone(timezone.utc) - previous_reported_at.astimezone(timezone.utc)).total_seconds(),
+    )
+    tolerance_seconds = max(15.0, elapsed_seconds * 0.5)
+    return current_age + tolerance_seconds < previous_age
+
+
+async def maybe_send_unsuccessful_ssh_login_notification(
+    session: AsyncSession,
+    *,
+    backend: MonitoredBackend,
+    previous_snapshot: Any,
+    payload: MetricSnapshotCreate,
+) -> str | None:
+    if not _is_new_unsuccessful_ssh_login(previous_snapshot, payload):
+        return None
+
+    settings_model, target_chat = await resolve_message_context(session, None, strict=False)
+    if not settings_model or not target_chat:
+        return None
+
+    failure_age_seconds = _ssh_failure_age_seconds_from_payload(payload)
+    failure_timestamp = payload.reported_at.astimezone(timezone.utc)
+    if failure_age_seconds is not None:
+        failure_timestamp = failure_timestamp - timedelta(seconds=max(0.0, failure_age_seconds))
+    failure_timestamp_text = failure_timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+    text = (
+        f"*SSH Login Failure Detected*\n\n"
+        f"*{_escape_markdown(backend.name)}*\n"
+        f"🚨 Unsuccessful SSH login detected at {_escape_markdown(failure_timestamp_text)}."
+    )
+    extra_lines = _build_ssh_failure_lines_from_payload(payload)
+    if extra_lines:
+        text = "\n".join([text, *extra_lines])
+    try:
+        await _send_tracked_telegram_message(
+            session,
+            bot_token=settings_model.bot_token,
+            target_chat=target_chat,
+            text=text,
+            category="ssh_login_failure",
+            severity="warn",
+            title=f"SSH login failure: {backend.name}",
+            backend_id=backend.id,
+            backend_name=backend.name,
+        )
+    except TelegramError as exc:
+        logger.warning("Failed to send SSH login failure notification: %s", exc)
+        return None
+    return text
 
 
 async def maybe_send_successful_ssh_login_notification(

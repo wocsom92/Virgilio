@@ -41,6 +41,7 @@ import {
 import { DEFAULT_BACKEND_VERSION, DEFAULT_MONITOR_VERSION, FRONTEND_VERSION } from '../constants/versions';
 import { QuickStatusTileCard } from './QuickStatusTileCard';
 import { formatBinaryBytes } from '../utils/formatting';
+import { getUserFacingErrorMessage } from '../utils/errors';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
 
 interface AdminPanelProps {
@@ -462,17 +463,7 @@ const createQuickStatusForm = (): QuickStatusFormState => {
 
 export function AdminPanel({ currentUser }: AdminPanelProps) {
   const extractErrorMessage = (err: unknown, fallback: string): string => {
-    if (err && typeof err === 'object') {
-      const data = (err as { response?: { data?: Record<string, unknown> } }).response?.data;
-      const detail = data?.detail ?? data?.error;
-      if (typeof detail === 'string' && detail.trim()) {
-        return detail.trim();
-      }
-    }
-    if (err instanceof Error && err.message.trim()) {
-      return err.message;
-    }
-    return fallback;
+    return getUserFacingErrorMessage(err, fallback);
   };
 
   const [backendVersion, setBackendVersion] = useState(DEFAULT_BACKEND_VERSION);
@@ -556,7 +547,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       }
     } catch (err) {
       setMountOptions([]);
-      setMountOptionsError(err instanceof Error ? err.message : 'Unable to load mount points');
+      setMountOptionsError(
+        extractErrorMessage(err, 'Could not load mount points from the monitor. Check the monitor connection and try again.')
+      );
     } finally {
       setLoadingMountOptions(false);
     }
@@ -602,7 +595,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         const data = await listBackendsWithLatest();
         setBackends(sortBackends(data));
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unable to fetch backends');
+        setError(extractErrorMessage(err, 'Could not load the backend list. Check the API connection and try again.'));
       }
     })();
   }, [isAuthenticated]);
@@ -619,7 +612,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setTelegram(normalizeTelegramSettings(settings));
       } catch (err) {
         setTelegram(null);
-        setTelegramStatus('Unable to load Telegram settings - admin access required.');
+        setTelegramStatus(extractErrorMessage(err, 'Could not load Telegram settings. Check your admin access and try again.'));
       }
     })();
   }, [isAdmin]);
@@ -638,7 +631,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       } catch (err) {
         setQuickStatusItems([]);
         setQuickStatusTiles([]);
-        setQuickStatusStatus(err instanceof Error ? err.message : 'Unable to load quick status tiles');
+        setQuickStatusStatus(extractErrorMessage(err, 'Could not load quick tiles. Check the API connection and try again.'));
       }
     })();
   }, [isAdmin]);
@@ -657,7 +650,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setDbSizeStatus(null);
       } catch (err) {
         setDbSizeBytes(null);
-        setDbSizeStatus(extractErrorMessage(err, 'Unable to load database size'));
+        setDbSizeStatus(extractErrorMessage(err, 'Could not load the database size right now. Try again.'));
       }
     })();
   }, [isAdmin]);
@@ -676,7 +669,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setRetentionStatus(null);
       } catch (err) {
         setRetentionDays('');
-        setRetentionStatus(extractErrorMessage(err, 'Unable to load retention settings'));
+        setRetentionStatus(extractErrorMessage(err, 'Could not load retention settings. Try again.'));
       }
     })();
   }, [isAdmin]);
@@ -695,7 +688,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setAuthSessionStatus(null);
       } catch (err) {
         setAuthSessionMinutes('');
-        setAuthSessionStatus(extractErrorMessage(err, 'Unable to load session settings'));
+        setAuthSessionStatus(extractErrorMessage(err, 'Could not load session settings. Try again.'));
       }
     })();
   }, [isAdmin]);
@@ -713,7 +706,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setUserStatus(null);
       } catch (err) {
         setUsers([]);
-        setUserStatus(extractErrorMessage(err, 'Unable to load users'));
+        setUserStatus(extractErrorMessage(err, 'Could not load users. Try again.'));
       }
     })();
   }, [isAdmin]);
@@ -781,7 +774,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setShowNewForm(false);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to save backend');
+      setError(extractErrorMessage(err, 'Could not save backend settings. Review the form and try again.'));
       setStatus(null);
     }
   };
@@ -957,7 +950,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setQuickStatusTiles(await fetchQuickStatusTiles());
       resetQuickStatusForm({ keepStatus: true });
     } catch (err) {
-      setQuickStatusStatus(extractErrorMessage(err, 'Unable to save quick status tile'));
+      setQuickStatusStatus(extractErrorMessage(err, 'Could not save the quick tile. Review the form and try again.'));
     }
   };
 
@@ -989,7 +982,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         resetQuickStatusForm();
       }
     } catch (err) {
-      setQuickStatusStatus(extractErrorMessage(err, 'Unable to delete quick status tile'));
+      setQuickStatusStatus(extractErrorMessage(err, 'Could not delete the quick tile. Try again.'));
     }
   };
 
@@ -1072,7 +1065,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setQuickStatusStatus('Order updated.');
     } catch (err) {
       setQuickStatusItems(previous);
-      setQuickStatusStatus(extractErrorMessage(err, 'Unable to update order'));
+      setQuickStatusStatus(extractErrorMessage(err, 'Could not save the quick-tile order. Try again.'));
     } finally {
       setQuickStatusOrdering(false);
     }
@@ -1418,7 +1411,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       await rebootBackendHost(backend.id);
       setStatus(`Requested reboot for ${backend.name}`);
     } catch (err) {
-      setStatus(extractErrorMessage(err, 'Unable to request reboot'));
+      setStatus(extractErrorMessage(err, 'Could not request a reboot from the monitor. Try again.'));
     } finally {
       setRebootingBackendId(null);
     }
@@ -1434,7 +1427,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       await deleteBackend(backend.id);
       setBackends((prev) => prev.filter((item) => item.id !== backend.id));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to delete backend');
+      setError(extractErrorMessage(err, 'Could not delete this backend. Try again.'));
     }
   }
 
@@ -1476,7 +1469,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     } catch (err) {
       setBackends(previous);
       setStatus(null);
-      setError(err instanceof Error ? err.message : 'Unable to update order');
+      setError(extractErrorMessage(err, 'Could not save the backend order. Try again.'));
     } finally {
       setIsOrdering(false);
     }
@@ -1561,6 +1554,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 value: null,
                 display_value: '—',
                 status: 'unknown',
+                history: Array.from({ length: 12 }, () => 'unknown' as const),
                 details: null,
               } satisfies QuickStatusTile),
           })),
@@ -1660,7 +1654,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setTelegram(normalizeTelegramSettings(updated));
       setTelegramStatus('Telegram settings saved.');
     } catch (err) {
-      setTelegramStatus(err instanceof Error ? err.message : 'Unable to save Telegram settings');
+      setTelegramStatus(extractErrorMessage(err, 'Could not save Telegram settings. Review the values and try again.'));
     }
   };
 
@@ -1671,7 +1665,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       const result = command === 'stats' ? await sendTelegramStats() : await sendTelegramWarnings();
       setTelegramStatus(`Sent: ${result.message.slice(0, 160)}${result.message.length > 160 ? '…' : ''}`);
     } catch (err) {
-      setTelegramStatus(err instanceof Error ? err.message : 'Unable to send Telegram message');
+      setTelegramStatus(extractErrorMessage(err, 'Could not send the Telegram test message. Check Telegram settings and try again.'));
     }
   };
 
@@ -1688,7 +1682,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setRetentionDays(updated.retention_days);
       setRetentionStatus('Retention saved.');
     } catch (err) {
-      setRetentionStatus(extractErrorMessage(err, 'Unable to update retention'));
+      setRetentionStatus(extractErrorMessage(err, 'Could not update retention settings. Try again.'));
     }
   };
 
@@ -1705,7 +1699,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setAuthSessionMinutes(updated.auth_session_minutes);
       setAuthSessionStatus('Session length saved.');
     } catch (err) {
-      setAuthSessionStatus(extractErrorMessage(err, 'Unable to update session length'));
+      setAuthSessionStatus(extractErrorMessage(err, 'Could not update the session length. Try again.'));
     }
   };
 
@@ -1720,7 +1714,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         `Restart command sent.${requestedAt ? ` Requested at ${requestedAt}.` : ''} You will receive a Telegram notice when back online.`
       );
     } catch (err) {
-      setRebootStatus(extractErrorMessage(err, 'Unable to request restart'));
+      setRebootStatus(extractErrorMessage(err, 'Could not request an application restart. Try again.'));
     } finally {
       setRebootPending(false);
     }
@@ -1739,7 +1733,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setUserForm((prev) => ({ ...prev, username: '', password: '' }));
       setUserStatus('User saved.');
     } catch (err) {
-      setUserStatus(extractErrorMessage(err, 'Unable to save user'));
+      setUserStatus(extractErrorMessage(err, 'Could not save the user. Review the form and try again.'));
     }
   };
 
@@ -1756,7 +1750,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setUsers((prev) => prev.filter((item) => item.id !== user.id));
       setUserStatus('User removed.');
     } catch (err) {
-      setUserStatus(extractErrorMessage(err, 'Unable to remove user'));
+      setUserStatus(extractErrorMessage(err, 'Could not remove the user. Try again.'));
     }
   };
 
@@ -2704,7 +2698,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         }
                       />
                       <div className="form-text text-secondary small">
-                        15 minutes to 30 days (1440 = 24 hours).
+                        15 minutes to 30 days (2880 = 48 hours).
                       </div>
                     </div>
                     <div className="col-auto d-flex align-items-end">

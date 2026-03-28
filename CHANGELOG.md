@@ -2,17 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
-## [5.0.1] - 2026-03-16
+## [6.0.0] - 2026-03-28
+
+### Added
+- Quick status tiles now show a horizontal 24-hour history strip made of 12 aggregated two-hour segments under each square tile.
+- Ping quick-status checks are now persisted in the backend so ping tiles can build correct historical state bars instead of showing only gray history.
+
+### Changed
+- Dashboard quick-status history is now aggregated by the longest-duration state inside each 2-hour bucket, with the rightmost segment representing the most recent completed 2-hour window.
+- Quick-status heartbeat (`HB`) tiles are now built server-side alongside metric and ping tiles so dashboard and admin previews share one tile contract.
+- Quick-status overview polling now refreshes every 5 minutes for the new 24-hour history strip.
+- Dashboard quick tiles now stay compact on larger desktop layouts while preserving the existing mobile/iPhone sizing.
+- Notification Center severity labels now use orange for `warn` and red for `critical` so alert states match the main tile colors more closely.
+- Frontend login sessions are now persisted across browser restarts, and the default auth session lifetime for new logins is now 48 hours.
+- Project version updated from `5.0.3` to `6.0.0` across backend, frontend, monitor, and displayed UI version constants.
+
+## [5.0.3] - 2026-03-26
+
+### Added
+- Quick status alert transitions are now recorded as local notification-history events so they appear in Notification Center even when Telegram delivery is skipped or unavailable.
+
+### Changed
+- Notification Center history now treats local quick-status events as first-class history entries instead of showing current alerts in a separate section.
+- Admin quick-status reorder arrows now stack below each tile on narrow iPhone layouts so they no longer block the tile preview.
+- Project version updated from `5.0.2` to `5.0.3` across backend, frontend, monitor, and displayed UI version constants.
+
+## [5.0.2] - 2026-03-17
 
 ### Added
 - In-app notification center with unread badge, notification history, and fallback visibility when Telegram delivery is blocked or fails.
 - Successful SSH login notifications and richer SSH failure alert details in Telegram.
+- Dedicated Telegram notifications for newly detected unsuccessful SSH logins, including parsed failure details.
 - Telegram `/cpu <server>` and `/memory <server>` commands for live usage lookups.
 - Telegram CPU and memory alerts now include the top 10 highest-usage processes.
 - Notification logging API and UI fallback delivery history.
 
 ### Changed
-- Project version updated from `5.0.0` to `5.0.1` across backend, frontend, monitor, and displayed UI version constants.
+- Project version updated from `5.0.1` to `5.0.2` across backend, frontend, monitor, and displayed UI version constants.
+- Notification center history is now paginated, and notification retention now follows the same configurable data-retention window used for metrics.
+- SSH failure detection now also treats pre-auth disconnect/reset log lines as unsuccessful login attempts, so key-less attempts on key-only hosts appear in the UI and notifications.
 - Dashboard and admin UI received mobile-oriented quick-tile layout refinements, admin-only version visibility, admin-only backend address visibility, and a heartbeat (`HB`) freshness tile in the overview grid.
 - Deployment script now runs `sudo docker system prune -f` after a successful remote deployment.
 - Successful SSH login notifications now use a concrete timestamp instead of relative age wording, and raw SSH success log lines are no longer included in Telegram messages.

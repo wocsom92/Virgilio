@@ -4,11 +4,11 @@ React + Vite dashboard for the monitoring suite. It handles bootstrap/login, bac
 
 ## Responsibilities
 
-- Auth flow for bootstrap admin, login, and current session state.
+- Auth flow for bootstrap admin, login, and persistent current-session state.
 - Dashboard views for backend health, metrics charts, warnings, and quick status tiles.
 - Admin UI for monitored backends, users, Telegram settings, notification history, and retention/session settings.
-- Notification center with unread counter and Telegram delivery fallback inbox.
-- Mobile-friendly quick-tile layout, including the `HB` heartbeat freshness tile in the overview grid.
+- Notification center with unread counter, Telegram delivery fallback inbox, and severity badges aligned with tile colors.
+- Responsive quick-tile layout, including the `HB` heartbeat freshness tile, a 12-segment 24-hour history strip under each overview tile, and tighter sizing on desktop without changing the mobile/iPhone presentation.
 - Admin-only visibility for backend addresses and version metadata.
 - API access through a single Axios client.
 
@@ -58,6 +58,9 @@ npm --prefix frontend run build
 The frontend currently displays:
 
 - Dashboard-only operational views for backend cards, charts, quick tiles, and heartbeat freshness.
+- Quick tiles now display a backend-provided 24-hour status history strip, including persisted ping history.
+- Notification Center severity pills now render `warn` in orange and `critical` in red.
+- Auth tokens are kept in `localStorage`, so login sessions survive tab and browser restarts until the backend session expires.
 - Admin-only metadata such as frontend/backend/monitor versions and backend addresses.
 
 Preview the production bundle:

@@ -246,6 +246,7 @@ export interface QuickStatusTile {
   value?: number | null;
   display_value: string;
   status: 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
+  history: Array<'ok' | 'info' | 'warn' | 'critical' | 'unknown'>;
   reported_at?: string | null;
   details?: QuickStatusDetailLine[] | null;
 }
@@ -274,6 +275,10 @@ export interface NotificationEvent {
 
 export interface NotificationCenterResponse {
   unread_count: number;
+  page: number;
+  page_size: number;
+  total_items: number;
+  total_pages: number;
   items: NotificationEvent[];
 }
 
@@ -418,8 +423,10 @@ export async function requestReboot(reason?: string) {
   return data;
 }
 
-export async function fetchNotifications(limit = 100) {
-  const { data } = await api.get<NotificationCenterResponse>('/notifications/', { params: { limit } });
+export async function fetchNotifications(page = 1, pageSize = 20) {
+  const { data } = await api.get<NotificationCenterResponse>('/notifications/', {
+    params: { page, page_size: pageSize },
+  });
   return data;
 }
 

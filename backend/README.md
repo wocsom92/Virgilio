@@ -7,7 +7,8 @@ FastAPI service for auth, backend registry, metric ingestion, dashboard data, qu
 - Exposes the main API used by the React frontend.
 - Polls registered monitor agents and stores metric snapshots in MySQL.
 - Computes dashboard ranges, warnings, reboot markers, and quick status summaries.
-- Manages users, auth sessions, Telegram settings, notification event history, and optional reboot actions.
+- Persists ping quick-status samples so 24-hour tile history remains accurate across refreshes and restarts.
+- Manages users, 48-hour default auth sessions, Telegram settings, notification event history, and optional reboot actions.
 - Sends Telegram commands and alert notifications, including process-heavy CPU/memory incident summaries.
 
 ## Main entrypoints
@@ -63,6 +64,8 @@ Notes:
 - CORS defaults to `http://localhost:5173` and `http://127.0.0.1:5173`.
 - Database tables are created on startup, and schema compatibility checks run during app lifespan.
 - `/backends/with-latest` is the admin-oriented backend listing that includes the latest snapshot payload used for monitor-version display.
+- `/dashboard/quick-status` now returns the current tile state plus 12 aggregated two-hour history segments per tile.
+- New logins default to `2880` minutes (`48` hours) unless the stored system setting overrides that value.
 
 ## Run locally
 

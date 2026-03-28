@@ -11,14 +11,13 @@ import {
 } from './api/client';
 import { Dashboard } from './components/Dashboard';
 import { AdminPanel } from './components/AdminPanel';
-import { Layout } from './components/Layout';
-import { useSessionStorage } from './hooks/useSessionStorage';
-
-type View = 'dashboard' | 'admin';
+import { AppView, Layout } from './components/Layout';
+import { useLocalStorage } from './hooks/useLocalStorage';
+import { getUserFacingErrorMessage } from './utils/errors';
 
 export default function App() {
-  const [view, setView] = useState<View>('dashboard');
-  const [storedToken, setStoredToken] = useSessionStorage<string>('server-monitor-auth-token', '');
+  const [view, setView] = useState<AppView>('monitoring');
+  const [storedToken, setStoredToken] = useLocalStorage<string>('server-monitor-auth-token', '');
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -31,17 +30,17 @@ export default function App() {
       return;
     }
     try {
-      const legacyToken = window.localStorage.getItem('server-monitor-auth-token');
-      const currentSessionToken = window.sessionStorage.getItem('server-monitor-auth-token');
-      if (legacyToken && !currentSessionToken) {
-        window.sessionStorage.setItem('server-monitor-auth-token', legacyToken);
-        setStoredToken(JSON.parse(legacyToken) as string);
+      const persistedToken = window.localStorage.getItem('server-monitor-auth-token');
+      const sessionToken = window.sessionStorage.getItem('server-monitor-auth-token');
+      if (sessionToken && !persistedToken) {
+        window.localStorage.setItem('server-monitor-auth-token', sessionToken);
+        setStoredToken(JSON.parse(sessionToken) as string);
       }
-      if (legacyToken) {
-        window.localStorage.removeItem('server-monitor-auth-token');
+      if (sessionToken) {
+        window.sessionStorage.removeItem('server-monitor-auth-token');
       }
     } catch {
-      // Ignore storage migration failures and continue with the current session state.
+      // Ignore storage migration failures and continue with the current auth state.
     }
   }, [setStoredToken]);
 
@@ -69,7 +68,7 @@ export default function App() {
         }
       } catch (err) {
         if (!cancelled) {
-          setAuthError(err instanceof Error ? err.message : 'Unable to check authentication status.');
+          setAuthError(getUserFacingErrorMessage(err, 'Could not verify the current session. Try signing in again.'));
           setCurrentUser(null);
           const status = (err as { response?: { status?: number } })?.response?.status;
           if (status === 401) {
@@ -108,7 +107,7 @@ export default function App() {
         : await login(username, password);
       applyAuthToken(token);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to sign in';
+      const message = getUserFacingErrorMessage(err, 'Could not sign in. Check your credentials and try again.');
       setAuthError(message);
     } finally {
       setAuthSubmitting(false);
@@ -119,11 +118,12 @@ export default function App() {
     setStoredToken('');
     setAccessToken(null);
     setCurrentUser(null);
+    setView('monitoring');
   };
 
   useEffect(() => {
     if (view === 'admin' && currentUser?.role === 'viewer') {
-      setView('dashboard');
+      setView('monitoring');
     }
   }, [view, currentUser]);
 
@@ -154,7 +154,7 @@ export default function App() {
                 <p className="text-secondary mb-0">
                   {needsBootstrap
                     ? 'Set the first admin credentials for this Virgilio instance.'
-                    : 'Sign in to access the dashboard and admin console.'}
+                    : 'Sign in to access monitoring, graphs, and the admin console.'}
                 </p>
                 {authError && <div className="alert alert-danger mb-0">{authError}</div>}
                 <form className="d-flex flex-column gap-3" onSubmit={handleAuthSubmit}>
@@ -198,10 +198,10 @@ export default function App() {
 
   return (
     <Layout activeView={view} onSwitch={setView} currentUser={currentUser} onLogout={handleLogout}>
-      {view === 'dashboard' ? (
-        <Dashboard canRefresh={currentUser.role === 'admin'} />
-      ) : (
+      {view === 'admin' ? (
         <AdminPanel currentUser={currentUser} />
+      ) : (
+        <Dashboard canRefresh={currentUser.role === 'admin'} mode={view} />
       )}
     </Layout>
   );

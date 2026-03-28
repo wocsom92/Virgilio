@@ -41,9 +41,15 @@ async def fetch_quick_status_tiles(
     _: object = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[QuickStatusTileRead]:
-    result = await session.execute(
+    backends_result = await session.execute(
+        select(MonitoredBackend)
+        .where(MonitoredBackend.is_active.is_(True))
+        .order_by(MonitoredBackend.display_order, MonitoredBackend.name, MonitoredBackend.id)
+    )
+    item_result = await session.execute(
         select(QuickStatusItem)
         .join(MonitoredBackend, QuickStatusItem.backend_id == MonitoredBackend.id)
+        .where(MonitoredBackend.is_active.is_(True))
         .options(selectinload(QuickStatusItem.backend))
         .order_by(
             MonitoredBackend.display_order,
@@ -53,8 +59,17 @@ async def fetch_quick_status_tiles(
             QuickStatusItem.id,
         )
     )
-    items = list(result.scalars())
-    return await build_quick_status_tiles(session, items)
+    items = list(item_result.scalars())
+    backends = list(backends_result.scalars())
+    tiles = await build_quick_status_tiles(
+        session,
+        items,
+        include_heartbeat_tiles=True,
+        backends=backends,
+        persist_ping_history=True,
+    )
+    await session.commit()
+    return tiles
 
 
 @router.get(

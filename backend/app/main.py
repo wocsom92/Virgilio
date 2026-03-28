@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,7 @@ from backend.app.db.schema_compat import ensure_schema_compat
 
 
 poller = BackendPoller(async_session_factory)
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -26,7 +28,10 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(ensure_schema_compat)
     await poller.start()
     async with async_session_factory() as session:
-        await notify_reboot_recovery(session)
+        try:
+            await notify_reboot_recovery(session)
+        except Exception as exc:  # pragma: no cover - startup resilience
+            logger.warning("Reboot recovery notification failed during startup: %s", exc)
     try:
         yield
     finally:
