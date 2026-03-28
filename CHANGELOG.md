@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.0.2] - 2026-03-28
+
+### Changed
+- Site Monitoring now uses a fixed 30-minute check cadence and 48 half-hour history rectangles for each site, so one row always represents a full 24-hour day.
+- Site Monitoring rows were compacted for iPhone and other narrow screens by hiding target, type, status text, response value, and last-check details until the row is expanded.
+- Failed SSH quick tiles now expose parsed failure details on click, including auth method, username, source IP, port, and the raw log line.
+- Notification Center entries for failed SSH quick-status alerts now include the same parsed SSH failure details in the stored local event body.
+- Dashboard, auth, site monitoring, and admin surfaces now share one visual system based on the same translucent panel treatment used by the left navigation.
+- Frontend Nginx now resolves the backend service dynamically so `/api` proxying survives backend container IP changes after restarts.
+- Project version updated from `6.0.1` to `6.0.2` across backend, frontend, package metadata, README, changelog, and displayed UI version constants.
+
 ## [6.0.1] - 2026-03-28
 
 ### Added

@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `6.0.1`
+Current version: `6.0.2`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -41,6 +41,7 @@ Component docs:
 - Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
 - Dedicated Site Monitoring view with ping and HTTP checks, 48 half-hour status rectangles per site for the last 24 hours, and admin-managed timeout and failure thresholds.
 - Site Monitoring checks support ping reachability or HTTP GET validation with expected status codes and optional response-text matching.
+- Site Monitoring rows are compact by default for mobile/iPhone layouts and reveal check type, target, status text, response value, and last-check details on click.
 - Quick status tile types include:
   - Mounted volume usage (%)
   - Mounted volume free space (`MiB` / `GiB` / `TiB`)
@@ -57,7 +58,8 @@ Component docs:
 - Telegram bot support (`/stats`, `/warn`, `/cpu <server>`, `/memory <server>`, reboot actions) with consistent warning output across `/stats` and `/warn`.
 - Telegram warning notifications for CPU and memory issues include the top 10 highest-usage processes.
 - SSH notifications include structured details for failed and successful login detection.
-- In-app notification center with unread counter, paginated history, fallback visibility when Telegram delivery fails or is blocked, and severity labels that mirror tile colors (`warn` orange, `critical` red).
+- In-app notification center with unread counter, paginated history, fallback visibility when Telegram delivery fails or is blocked, severity labels that mirror tile colors (`warn` orange, `critical` red), and expanded SSH failure details for quick-status alerts.
+- Shared UI styling now uses one translucent panel language across navigation, dashboard, auth, site monitoring, and admin screens instead of separate flat dark sections.
 - Optional host reboot support (requires explicit enablement + container privileges).
 
 ## Prerequisites
