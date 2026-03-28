@@ -12,6 +12,7 @@ import {
 import { Dashboard } from './components/Dashboard';
 import { AdminPanel } from './components/AdminPanel';
 import { AppView, Layout } from './components/Layout';
+import { SiteMonitoring } from './components/SiteMonitoring';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { getUserFacingErrorMessage } from './utils/errors';
 
@@ -134,7 +135,7 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="container py-5 text-light">
+      <div className="container py-5 text-light app-auth-shell">
         <div className="h4">Loading…</div>
         <div className="text-secondary small">Checking authentication status.</div>
       </div>
@@ -143,18 +144,18 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <div className="container py-5 text-light">
+      <div className="container py-5 text-light app-auth-shell">
         <div className="row justify-content-center">
           <div className="col-12 col-md-8 col-lg-6">
-            <div className="card bg-dark border border-secondary shadow-sm">
-              <div className="card-header text-uppercase fw-semibold border-secondary">
+            <div className="card app-auth-card shadow-sm">
+              <div className="card-header text-uppercase fw-semibold app-auth-card__header">
                 {authTitle}
               </div>
               <div className="card-body d-flex flex-column gap-3">
                 <p className="text-secondary mb-0">
                   {needsBootstrap
                     ? 'Set the first admin credentials for this Virgilio instance.'
-                    : 'Sign in to access monitoring, graphs, and the admin console.'}
+                    : 'Sign in to access monitoring, site monitoring, graphs, and the admin console.'}
                 </p>
                 {authError && <div className="alert alert-danger mb-0">{authError}</div>}
                 <form className="d-flex flex-column gap-3" onSubmit={handleAuthSubmit}>
@@ -200,6 +201,8 @@ export default function App() {
     <Layout activeView={view} onSwitch={setView} currentUser={currentUser} onLogout={handleLogout}>
       {view === 'admin' ? (
         <AdminPanel currentUser={currentUser} />
+      ) : view === 'site-monitoring' ? (
+        <SiteMonitoring />
       ) : (
         <Dashboard canRefresh={currentUser.role === 'admin'} mode={view} />
       )}

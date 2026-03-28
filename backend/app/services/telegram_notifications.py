@@ -480,6 +480,7 @@ async def _record_quick_status_inbox_event(
     previous_status: str,
     current_status: str,
     display_value: str,
+    detail_lines: list[QuickStatusDetailLine] | None = None,
 ) -> None:
     if current_status in _ALERT_STATUSES:
         severity = current_status
@@ -495,6 +496,8 @@ async def _record_quick_status_inbox_event(
             f"{label} cleared "
             f"(was {_status_label(previous_status)}, now {display_value})"
         )
+    if item.metric_key == "ssh_last_unsuccessful_attempt" and detail_lines:
+        body = "\n".join([body, "", "SSH Failure Details:", *(line.text for line in detail_lines)])
     await record_notification_event(
         session,
         channel="local",
@@ -551,6 +554,7 @@ async def queue_quick_status_notifications(
                 previous_status=previous_status or "unknown",
                 current_status=current_status,
                 display_value=tile.display_value,
+                detail_lines=tile.details,
             )
         else:
             item.pending_notification_status = current_status
@@ -563,6 +567,7 @@ async def queue_quick_status_notifications(
                 previous_status=previous_status or "unknown",
                 current_status=current_status,
                 display_value=tile.display_value,
+                detail_lines=tile.details,
             )
         session.add(item)
         changed = True

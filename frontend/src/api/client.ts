@@ -199,6 +199,43 @@ export interface AuthSessionSettings {
   auth_session_minutes: number;
 }
 
+export type StatusLevel = 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
+
+export type SiteMonitorCheckType = 'ping' | 'http';
+
+export interface SiteMonitorConfig {
+  name: string;
+  check_type: SiteMonitorCheckType;
+  target: string;
+  expected_status_codes: number[];
+  expected_response_substring?: string | null;
+  timeout_ms: number;
+  warning_consecutive_failures: number;
+  critical_consecutive_failures: number;
+  check_interval_seconds: number;
+  display_order: number;
+  is_active: boolean;
+}
+
+export interface SiteMonitor extends SiteMonitorConfig {
+  id: number;
+}
+
+export interface SiteMonitorStatus {
+  id: number;
+  name: string;
+  check_type: SiteMonitorCheckType;
+  target: string;
+  status: Exclude<StatusLevel, 'info'>;
+  display_value: string;
+  history: Array<Exclude<StatusLevel, 'info'>>;
+  checked_at?: string | null;
+  latency_ms?: number | null;
+  status_code?: number | null;
+  detail?: string | null;
+  consecutive_failures: number;
+}
+
 export type QuickStatusMetricKey =
   | 'disk_usage_percent'
   | 'ram_used_percent'
@@ -245,8 +282,8 @@ export interface QuickStatusTile {
   metric_key: QuickStatusMetricKey;
   value?: number | null;
   display_value: string;
-  status: 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
-  history: Array<'ok' | 'info' | 'warn' | 'critical' | 'unknown'>;
+  status: StatusLevel;
+  history: StatusLevel[];
   reported_at?: string | null;
   details?: QuickStatusDetailLine[] | null;
 }
@@ -289,6 +326,11 @@ export async function fetchDashboard(): Promise<MonitoredBackend[]> {
 
 export async function fetchQuickStatusTiles(): Promise<QuickStatusTile[]> {
   const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status');
+  return data;
+}
+
+export async function fetchSiteMonitorStatuses(): Promise<SiteMonitorStatus[]> {
+  const { data } = await api.get<SiteMonitorStatus[]>('/dashboard/site-monitors');
   return data;
 }
 
@@ -416,6 +458,25 @@ export async function updateQuickStatusItem(id: number, payload: Omit<QuickStatu
 
 export async function deleteQuickStatusItem(id: number) {
   await api.delete(`/system/quick-status/${id}`);
+}
+
+export async function listSiteMonitors() {
+  const { data } = await api.get<SiteMonitor[]>('/system/site-monitors');
+  return data;
+}
+
+export async function createSiteMonitor(payload: SiteMonitorConfig) {
+  const { data } = await api.post<SiteMonitor>('/system/site-monitors', payload);
+  return data;
+}
+
+export async function updateSiteMonitor(id: number, payload: SiteMonitorConfig) {
+  const { data } = await api.put<SiteMonitor>(`/system/site-monitors/${id}`, payload);
+  return data;
+}
+
+export async function deleteSiteMonitor(id: number) {
+  await api.delete(`/system/site-monitors/${id}`);
 }
 
 export async function requestReboot(reason?: string) {

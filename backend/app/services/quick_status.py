@@ -234,10 +234,46 @@ def _format_binary_size_from_gib(value_gib: float) -> str:
     return f"{round(value_mib * 1024):.0f} KiB"
 
 
-def _build_detail_lines(item: QuickStatusItem, snapshot: MetricSnapshot | None) -> list[QuickStatusDetailLine] | None:
-    if snapshot is None or item.metric_key != "ssh_status":
+def _detail_severity_for_status(status: str) -> str:
+    if status == "critical":
+        return "critical"
+    if status == "warn":
+        return "warn"
+    return "ok"
+
+
+def _build_detail_lines(
+    item: QuickStatusItem,
+    snapshot: MetricSnapshot | None,
+    *,
+    status: str,
+) -> list[QuickStatusDetailLine] | None:
+    if snapshot is None:
         return None
     payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    if item.metric_key == "ssh_last_unsuccessful_attempt":
+        method = payload.get("ssh_last_failure_auth_method")
+        username = payload.get("ssh_last_failure_username")
+        source_ip = payload.get("ssh_last_failure_source_ip")
+        port = payload.get("ssh_last_failure_port")
+        raw_line = payload.get("ssh_last_failure_line")
+        severity = _detail_severity_for_status(status)
+
+        lines: list[QuickStatusDetailLine] = []
+        if isinstance(method, str) and method.strip():
+            lines.append(QuickStatusDetailLine(text=f"Method: {method.strip()}", severity=severity))
+        if isinstance(username, str) and username.strip():
+            lines.append(QuickStatusDetailLine(text=f"User: {username.strip()}", severity=severity))
+        if isinstance(source_ip, str) and source_ip.strip():
+            lines.append(QuickStatusDetailLine(text=f"Source: {source_ip.strip()}", severity=severity))
+        if isinstance(port, int):
+            lines.append(QuickStatusDetailLine(text=f"Port: {port}", severity=severity))
+        if isinstance(raw_line, str) and raw_line.strip():
+            lines.append(QuickStatusDetailLine(text=f"Log: {raw_line.strip()}", severity=severity))
+        return lines or None
+
+    if item.metric_key != "ssh_status":
+        return None
     pubkey_enabled = payload.get("ssh_pubkey_auth_enabled")
     password_auth_disabled = payload.get("ssh_password_auth_disabled")
     kbd_interactive_disabled = payload.get("ssh_kbd_interactive_auth_disabled")
@@ -889,7 +925,7 @@ async def build_quick_status_tiles(
                     )
                 ),
                 reported_at=reported_at,
-                details=_build_detail_lines(item, snapshot),
+                details=_build_detail_lines(item, snapshot, status=status),
             )
         )
     return tiles

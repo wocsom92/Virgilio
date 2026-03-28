@@ -206,6 +206,57 @@ async def test_build_quick_status_tiles_include_ssh_action_details(db_session):
 
 
 @pytest.mark.asyncio
+async def test_build_quick_status_tiles_include_ssh_failure_details(db_session):
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    db_session.add(
+        MetricSnapshot(
+            backend_id=backend.id,
+            reported_at=datetime.now(tz=timezone.utc),
+            raw_payload={
+                "ssh_last_unsuccessful_attempt_seconds": 3600,
+                "ssh_last_failure_auth_method": "publickey",
+                "ssh_last_failure_username": "root",
+                "ssh_last_failure_source_ip": "10.0.0.8",
+                "ssh_last_failure_port": 55123,
+                "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+            },
+        )
+    )
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="SSH failed login",
+        metric_key="ssh_last_unsuccessful_attempt",
+        warning_threshold=168,
+        critical_threshold=24,
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item])
+
+    assert tiles[0].status == "critical"
+    assert tiles[0].details is not None
+    assert any(line.text == "Method: publickey" and line.severity == "critical" for line in tiles[0].details)
+    assert any(line.text == "User: root" and line.severity == "critical" for line in tiles[0].details)
+    assert any(line.text == "Source: 10.0.0.8" and line.severity == "critical" for line in tiles[0].details)
+    assert any(line.text == "Port: 55123" and line.severity == "critical" for line in tiles[0].details)
+    assert any(
+        line.text == "Log: Failed publickey for root from 10.0.0.8 port 55123 ssh2"
+        and line.severity == "critical"
+        for line in tiles[0].details
+    )
+
+
+@pytest.mark.asyncio
 async def test_build_quick_status_tiles_history_uses_longest_status_duration_per_bucket(db_session):
     now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
     backend = MonitoredBackend(

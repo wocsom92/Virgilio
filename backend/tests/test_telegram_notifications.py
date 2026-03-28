@@ -395,6 +395,56 @@ async def test_transition_notification_includes_ssh_failure_details(db_session, 
 
 
 @pytest.mark.asyncio
+async def test_notification_center_event_includes_ssh_failure_details(db_session):
+    backend = await _create_backend(db_session)
+    ssh_item = QuickStatusItem(
+        backend_id=backend.id,
+        label="SSH failed login",
+        metric_key="ssh_last_unsuccessful_attempt",
+        warning_threshold=168,
+        critical_threshold=24,
+        display_order=0,
+        last_notified_status="ok",
+    )
+    db_session.add(ssh_item)
+    await db_session.commit()
+    await db_session.refresh(ssh_item)
+
+    snapshot = MetricSnapshot(
+        backend_id=backend.id,
+        reported_at=datetime.now(tz=timezone.utc),
+        raw_payload={
+            "ssh_last_unsuccessful_attempt_seconds": 3600,
+            "ssh_last_failure_auth_method": "publickey",
+            "ssh_last_failure_username": "root",
+            "ssh_last_failure_source_ip": "10.0.0.8",
+            "ssh_last_failure_port": 55123,
+            "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+        },
+    )
+    db_session.add(snapshot)
+    await db_session.commit()
+
+    await queue_quick_status_notifications(db_session, [ssh_item])
+
+    result = await db_session.execute(
+        select(NotificationEvent)
+        .where(NotificationEvent.category == "quick_status")
+        .order_by(NotificationEvent.id.desc())
+    )
+    event = result.scalars().first()
+
+    assert event is not None
+    assert "SSH failed login changed from normal to error (1h)" in event.body
+    assert "SSH Failure Details:" in event.body
+    assert "Method: publickey" in event.body
+    assert "User: root" in event.body
+    assert "Source: 10.0.0.8" in event.body
+    assert "Port: 55123" in event.body
+    assert "Log: Failed publickey for root from 10.0.0.8 port 55123 ssh2" in event.body
+
+
+@pytest.mark.asyncio
 async def test_successful_ssh_login_notification_includes_details(db_session, monkeypatch):
     backend = await _create_backend(db_session)
     await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)

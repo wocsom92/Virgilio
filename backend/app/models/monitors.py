@@ -142,3 +142,42 @@ class QuickStatusPingSample(TimestampMixin, Base):
     latency_ms: Mapped[float | None] = mapped_column(Float)
 
     item: Mapped[QuickStatusItem] = relationship("QuickStatusItem", back_populates="ping_samples")
+
+
+class SiteMonitor(TimestampMixin, Base):
+    __tablename__ = "site_monitors"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    check_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target: Mapped[str] = mapped_column(String(500), nullable=False)
+    expected_status_codes: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    expected_response_substring: Mapped[str | None] = mapped_column(Text, nullable=True)
+    timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=3000)
+    warning_consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    critical_consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    check_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=1800)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    samples: Mapped[list["SiteMonitorSample"]] = relationship(
+        "SiteMonitorSample",
+        back_populates="site_monitor",
+        cascade="all, delete-orphan",
+        order_by="SiteMonitorSample.checked_at",
+    )
+
+
+class SiteMonitorSample(TimestampMixin, Base):
+    __tablename__ = "site_monitor_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    site_monitor_id: Mapped[int] = mapped_column(ForeignKey("site_monitors.id"), nullable=False, index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    site_monitor: Mapped[SiteMonitor] = relationship("SiteMonitor", back_populates="samples")

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.0.1] - 2026-03-28
+
+### Added
+- Dedicated Site Monitoring navigation and admin configuration for ping and HTTP GET checks with timeout-based success criteria, consecutive-failure warning/error thresholds, and a live per-site status list.
+
+### Changed
+- Site Monitoring rows are now more compact and use 24 vertical hourly history rectangles per site instead of the original wider history strip.
+- Ping site checks now fall back to a backend-native TCP reachability probe when the host does not provide the `ping` binary or ICMP permission.
+- Legacy `site_monitors` threshold columns are now normalized during schema compatibility startup so upgraded databases no longer block site-monitor saves.
+- Root documentation now reflects the Site Monitoring feature set and hourly 24-hour history display.
+- Project version updated from `6.0.0` to `6.0.1` across backend, frontend, monitor, and displayed UI version constants.
+
 ## [6.0.0] - 2026-03-28
 
 ### Added

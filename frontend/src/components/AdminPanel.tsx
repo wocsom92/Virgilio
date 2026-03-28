@@ -40,6 +40,7 @@ import {
 } from '../api/client';
 import { DEFAULT_BACKEND_VERSION, DEFAULT_MONITOR_VERSION, FRONTEND_VERSION } from '../constants/versions';
 import { QuickStatusTileCard } from './QuickStatusTileCard';
+import { SiteMonitoringAdmin } from './SiteMonitoringAdmin';
 import { formatBinaryBytes } from '../utils/formatting';
 import { getUserFacingErrorMessage } from '../utils/errors';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
@@ -253,6 +254,11 @@ const ADMIN_SECTIONS = [
     id: 'quick-status',
     label: 'Quick status tiles',
     description: 'Configure the overview status tiles shown on the dashboard.',
+  },
+  {
+    id: 'site-monitoring',
+    label: 'Site monitoring',
+    description: 'Configure ping and HTTP checks for public sites.',
   },
   { id: 'telegram-bots', label: 'Telegram bots', description: 'Configure notifications and test commands.' },
   { id: 'administration', label: 'Administration', description: 'Access control and host-level controls.' },
@@ -1847,9 +1853,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   );
 
   return (
-    <div className="row g-4">
+    <div className="admin-panel row g-4">
       <div className="col-12 col-lg-3 order-lg-1">
-        <div className="card bg-dark border border-secondary position-sticky" style={{ top: '1rem' }}>
+        <div className="card bg-dark border border-secondary position-sticky admin-panel__menu" style={{ top: '1rem' }}>
           <div className="card-header border-secondary text-uppercase fw-semibold">Admin Menu</div>
           <div className="card-body d-flex flex-column gap-2">
             {ADMIN_SECTIONS.map((section) => {
@@ -1858,7 +1864,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <button
                   key={section.id}
                   type="button"
-                  className={`btn w-100 text-start ${isActive ? 'btn-light text-dark' : 'btn-outline-light'}`}
+                  className={`btn w-100 text-start admin-panel__nav-button ${isActive ? 'btn-light text-dark' : 'btn-outline-light'}`}
                   onClick={() => handleSectionChange(section.id)}
                 >
                   <div className="fw-semibold">{section.label}</div>
@@ -1877,7 +1883,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   <button
                     key={backend.id}
                     type="button"
-                    className={`btn w-100 text-start ${isActive ? 'btn-light text-dark' : 'btn-outline-light'}`}
+                    className={`btn w-100 text-start admin-panel__nav-button ${isActive ? 'btn-light text-dark' : 'btn-outline-light'}`}
                     onClick={() => handleSectionChange(sectionId)}
                   >
                     <div className="fw-semibold">{backend.name}</div>
@@ -2418,6 +2424,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             </div>
           </section>
         )}
+        {activeSection === 'site-monitoring' && <SiteMonitoringAdmin />}
         {activeSection === 'telegram-bots' && (
           <section id="telegram-bots" className="d-flex flex-column gap-3">
             <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">

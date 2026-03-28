@@ -91,6 +91,12 @@ function normalizeKnownErrorText(rawMessage: string, statusCode?: number): strin
   if (lower === 'quick status item not found') {
     return 'That quick tile no longer exists. Reload the page and try again.';
   }
+  if (lower === 'site monitor not found') {
+    return 'That site monitor no longer exists. Reload the page and try again.';
+  }
+  if (lower === 'a site monitor with this name already exists') {
+    return 'A site monitor with this name already exists.';
+  }
   if (lower === 'telegram integration disabled') {
     return 'Telegram notifications are disabled. Enable Telegram first.';
   }

@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import type { IconType } from 'react-icons';
-import { FiActivity, FiBarChart2, FiLogOut, FiMenu, FiMessageSquare, FiSettings, FiX } from 'react-icons/fi';
+import { FiActivity, FiBarChart2, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings, FiX } from 'react-icons/fi';
 import {
   AuthUser,
   NotificationEvent,
@@ -11,7 +11,7 @@ import {
 import { DEFAULT_BACKEND_VERSION, FRONTEND_VERSION } from '../constants/versions';
 import { formatNotificationDeliveryError, getUserFacingErrorMessage } from '../utils/errors';
 
-export type AppView = 'monitoring' | 'graphs' | 'admin';
+export type AppView = 'monitoring' | 'site-monitoring' | 'graphs' | 'admin';
 
 interface LayoutProps {
   activeView: AppView;
@@ -30,6 +30,12 @@ const VIEW_META: Record<
     description: 'Quick tiles and notifications for the current fleet state.',
     navDescription: 'Quick tiles',
     icon: FiActivity,
+  },
+  'site-monitoring': {
+    label: 'Site Monitoring',
+    description: 'Ping and HTTP checks for public sites and external services.',
+    navDescription: 'Sites and history',
+    icon: FiGlobe,
   },
   graphs: {
     label: 'Graphs',

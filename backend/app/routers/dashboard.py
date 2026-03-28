@@ -12,8 +12,14 @@ from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, QuickS
 from backend.app.schemas.backend import BackendWithLatestSnapshot
 from backend.app.schemas.metrics import MetricSeriesPoint, MetricSeriesResponse
 from backend.app.schemas.quick_status import QuickStatusTileRead
+from backend.app.schemas.site_monitoring import SiteMonitorStatusRead
 from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
 from backend.app.services.quick_status import build_quick_status_tiles
+from backend.app.services.site_monitoring import (
+    build_site_monitor_statuses,
+    list_site_monitors,
+    refresh_due_site_monitor_samples,
+)
 
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -70,6 +76,18 @@ async def fetch_quick_status_tiles(
     )
     await session.commit()
     return tiles
+
+
+@router.get("/site-monitors", response_model=list[SiteMonitorStatusRead])
+async def fetch_site_monitor_statuses(
+    _: object = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[SiteMonitorStatusRead]:
+    items = await list_site_monitors(session, only_active=True)
+    latest_samples = await refresh_due_site_monitor_samples(session, items)
+    statuses = await build_site_monitor_statuses(session, items, latest_samples=latest_samples)
+    await session.commit()
+    return statuses
 
 
 @router.get(

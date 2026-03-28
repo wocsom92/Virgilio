@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `6.0.0`
+Current version: `6.0.1`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -37,8 +37,10 @@ Component docs:
 - Time-range charts (`hourly`, `daily`, `weekly`) with previous/next window navigation.
 - Reboot markers on charts (detected from uptime resets).
 - Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
-- Quick status tiles now include a 24-hour history strip with 12 aggregated two-hour segments under each square tile.
+- Quick status tiles now include a 24-hour history strip with hourly segments under each square tile.
 - Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
+- Dedicated Site Monitoring view with ping and HTTP checks, 48 half-hour status rectangles per site for the last 24 hours, and admin-managed timeout and failure thresholds.
+- Site Monitoring checks support ping reachability or HTTP GET validation with expected status codes and optional response-text matching.
 - Quick status tile types include:
   - Mounted volume usage (%)
   - Mounted volume free space (`MiB` / `GiB` / `TiB`)

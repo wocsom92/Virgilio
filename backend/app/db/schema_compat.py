@@ -153,6 +153,105 @@ def ensure_schema_compat(connection: Connection) -> None:
             )
         )
 
+    if not inspector.has_table("site_monitors"):
+        connection.execute(
+            text(
+                """
+                CREATE TABLE site_monitors (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(120) NOT NULL UNIQUE,
+                    check_type VARCHAR(16) NOT NULL,
+                    target VARCHAR(500) NOT NULL,
+                    expected_status_codes JSON NULL,
+                    expected_response_substring TEXT NULL,
+                    timeout_ms INT NOT NULL DEFAULT 3000,
+                    warning_consecutive_failures INT NOT NULL DEFAULT 3,
+                    critical_consecutive_failures INT NOT NULL DEFAULT 5,
+                    check_interval_seconds INT NOT NULL DEFAULT 1800,
+                    display_order INT NOT NULL DEFAULT 0,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+    elif inspector.has_table("site_monitors"):
+        columns = {col["name"] for col in inspector.get_columns("site_monitors")}
+        if "timeout_ms" not in columns:
+            connection.execute(
+                text("ALTER TABLE site_monitors ADD COLUMN timeout_ms INT NOT NULL DEFAULT 3000")
+            )
+        if "warning_consecutive_failures" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE site_monitors "
+                    "ADD COLUMN warning_consecutive_failures INT NOT NULL DEFAULT 3"
+                )
+            )
+        if "critical_consecutive_failures" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE site_monitors "
+                    "ADD COLUMN critical_consecutive_failures INT NOT NULL DEFAULT 5"
+                )
+            )
+        if "warning_threshold_ms" in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE site_monitors "
+                    "MODIFY COLUMN warning_threshold_ms INT NOT NULL DEFAULT 0"
+                )
+            )
+        if "critical_threshold_ms" in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE site_monitors "
+                    "MODIFY COLUMN critical_threshold_ms INT NOT NULL DEFAULT 0"
+                )
+            )
+        if "check_interval_seconds" in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE site_monitors "
+                    "MODIFY COLUMN check_interval_seconds INT NOT NULL DEFAULT 1800"
+                )
+            )
+
+    if not inspector.has_table("site_monitor_samples"):
+        connection.execute(
+            text(
+                """
+                CREATE TABLE site_monitor_samples (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    site_monitor_id INT NOT NULL,
+                    checked_at DATETIME NOT NULL,
+                    success BOOLEAN NOT NULL DEFAULT FALSE,
+                    latency_ms FLOAT NULL,
+                    status_code INT NULL,
+                    detail TEXT NULL,
+                    consecutive_failures INT NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX ix_site_monitor_samples_site_monitor_id (site_monitor_id),
+                    INDEX ix_site_monitor_samples_checked_at (checked_at),
+                    CONSTRAINT fk_site_monitor_samples_site_monitor
+                        FOREIGN KEY (site_monitor_id) REFERENCES site_monitors(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+        )
+    elif inspector.has_table("site_monitor_samples"):
+        columns = {col["name"] for col in inspector.get_columns("site_monitor_samples")}
+        if "consecutive_failures" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE site_monitor_samples "
+                    "ADD COLUMN consecutive_failures INT NOT NULL DEFAULT 0"
+                )
+            )
+
     # Add auth_session_minutes to system_settings if missing (introduced in 2025-03).
     if inspector.has_table("system_settings"):
         columns = {col["name"] for col in inspector.get_columns("system_settings")}
