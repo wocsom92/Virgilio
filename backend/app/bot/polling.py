@@ -241,7 +241,10 @@ def build_application() -> Application:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
 
-    application = ApplicationBuilder().token(settings.telegram_bot_token).build()
+    builder = ApplicationBuilder().token(settings.telegram_bot_token)
+    if settings.telegram_proxy_url:
+        builder = builder.proxy(settings.telegram_proxy_url).get_updates_proxy(settings.telegram_proxy_url)
+    application = builder.build()
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CommandHandler("stats", with_session(handle_stats)))
     application.add_handler(CommandHandler("warn", with_session(handle_warn)))

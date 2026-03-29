@@ -15,7 +15,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.monitors import SiteMonitor, SiteMonitorSample
-from backend.app.schemas.site_monitoring import SiteMonitorCreate, SiteMonitorStatusRead
+from backend.app.schemas.site_monitoring import (
+    SiteMonitorCreate,
+    SiteMonitorStatusRead,
+    normalize_site_monitor_target,
+)
 from backend.app.services.http_clients import get_monitor_http_client
 from backend.app.services.system_settings import metric_retention_timedelta
 
@@ -276,13 +280,24 @@ async def _run_http_check(site_monitor: SiteMonitor, checked_at: datetime) -> Si
     client = get_monitor_http_client()
     started_at = time.perf_counter()
     try:
+        target = normalize_site_monitor_target("http", site_monitor.target)
+    except ValueError as exc:
+        return SiteCheckResult(
+            checked_at=checked_at,
+            success=False,
+            latency_ms=None,
+            status_code=None,
+            detail=f"invalid target: {exc}"[:500],
+        )
+
+    try:
         response = await client.get(
-            site_monitor.target,
+            target,
             follow_redirects=True,
             timeout=max(0.1, float(site_monitor.timeout_ms) / 1000),
         )
         latency_ms = max(0.0, (time.perf_counter() - started_at) * 1000)
-    except httpx.RequestError as exc:
+    except (httpx.RequestError, ValueError) as exc:
         return SiteCheckResult(
             checked_at=checked_at,
             success=False,

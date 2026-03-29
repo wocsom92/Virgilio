@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `6.0.2`
+Current version: `6.0.3`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -58,7 +58,9 @@ Component docs:
 - Telegram bot support (`/stats`, `/warn`, `/cpu <server>`, `/memory <server>`, reboot actions) with consistent warning output across `/stats` and `/warn`.
 - Telegram warning notifications for CPU and memory issues include the top 10 highest-usage processes.
 - SSH notifications include structured details for failed and successful login detection.
+- Telegram delivery can optionally use a dedicated outbound proxy, which is useful on hosts where the ISP path blocks Telegram but local Xray/VPN access is available.
 - In-app notification center with unread counter, paginated history, fallback visibility when Telegram delivery fails or is blocked, severity labels that mirror tile colors (`warn` orange, `critical` red), and expanded SSH failure details for quick-status alerts.
+- HTTP Site Monitoring targets without an explicit scheme are normalized to `https://...`, and malformed targets now fail as normal checks instead of crashing the backend poller.
 - Shared UI styling now uses one translucent panel language across navigation, dashboard, auth, site monitoring, and admin screens instead of separate flat dark sections.
 - Optional host reboot support (requires explicit enablement + container privileges).
 
@@ -88,6 +90,7 @@ Common optional values:
 
 - `SERVER_MONITOR_ALLOW_HOST_REBOOT`
 - `SERVER_MONITOR_REBOOT_COMMAND`
+- `SERVER_MONITOR_TELEGRAM_PROXY_URL`
 - `MONITOR_MOUNTED_POINTS`
 - `MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS`
 - `MONITOR_HOST_ROOT_SOURCE`
@@ -105,6 +108,8 @@ Notes:
 - `docker-compose.yml` currently passes `VITE_API_BASE_URL` build arg with default `http://localhost:28000`. Override it for your target deployment, preferably with `/api` for same-origin routing.
 - In development, frontend defaults to `http://localhost:8000`.
 - SSH quick status checks require host filesystem bind mount (set `MONITOR_HOST_ROOT_SOURCE=/` and keep `MONITOR_HOST_ROOT_TARGET=/hostfs`).
+- Set `SERVER_MONITOR_TELEGRAM_PROXY_URL` when Telegram should egress through a local HTTP proxy such as Xray on `http://host.docker.internal:10809`.
+- HTTP site-monitor targets entered as bare hostnames like `telegram.org` are stored as `https://telegram.org`.
 
 ### Monitor-only (`docker-compose.monitor.yml`)
 

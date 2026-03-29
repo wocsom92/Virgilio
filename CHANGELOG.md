@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [6.0.3] - 2026-03-29
+
+### Changed
+- Telegram delivery paths can now be routed through a dedicated proxy URL for both backend notifications and the polling bot, which fixes Raspberry Pi deployments where Telegram is blocked on the direct ISP path but reachable through local Xray/VPN egress.
+- Site Monitoring HTTP targets entered without a scheme are now normalized to `https://...`, and malformed targets now record a normal failed check result instead of crashing the backend polling loop.
+- Raspberry Pi deployment defaults now advertise the current monitor version and Telegram proxy wiring.
+- Project version updated from `6.0.2` to `6.0.3` across backend, frontend, monitor, deployment env, README, changelog, and displayed UI version constants.
+
 ## [6.0.2] - 2026-03-28
 
 ### Changed

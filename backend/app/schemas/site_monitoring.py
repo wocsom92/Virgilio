@@ -1,11 +1,26 @@
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, model_validator
 
 
 SiteMonitorCheckType = Literal["ping", "http"]
 SiteMonitorStatus = Literal["ok", "warn", "critical", "unknown"]
+
+
+def normalize_site_monitor_target(check_type: SiteMonitorCheckType, target: str) -> str:
+    normalized = target.strip()
+    if check_type != "http":
+        return normalized
+
+    candidate = normalized if "://" in normalized else f"https://{normalized}"
+    parsed = urlsplit(candidate)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("HTTP checks must use an http:// or https:// URL")
+    if not parsed.netloc:
+        raise ValueError("HTTP checks must include a valid host")
+    return candidate
 
 
 class SiteMonitorBase(BaseModel):
@@ -24,7 +39,7 @@ class SiteMonitorBase(BaseModel):
     @model_validator(mode="after")
     def validate_site_monitor(self) -> "SiteMonitorBase":
         self.name = self.name.strip()
-        self.target = self.target.strip()
+        self.target = normalize_site_monitor_target(self.check_type, self.target)
         self.expected_response_substring = (
             self.expected_response_substring.strip() if self.expected_response_substring else None
         )

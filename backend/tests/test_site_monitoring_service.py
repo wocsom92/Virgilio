@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.app.models.monitors import SiteMonitor, SiteMonitorSample
+from backend.app.schemas.site_monitoring import SiteMonitorCreate
 from backend.app.services import site_monitoring
 
 
@@ -228,3 +229,36 @@ async def test_refresh_due_site_monitor_samples_persists_new_results(db_session,
     assert statuses[0].display_value == "3 failures"
     assert statuses[0].consecutive_failures == 3
     assert len(statuses[0].history) == 48
+
+
+def test_site_monitor_create_normalizes_http_target_without_scheme():
+    payload = SiteMonitorCreate(
+        name="telegram",
+        check_type="http",
+        target="telegram.org",
+        expected_status_codes=[200],
+    )
+
+    assert payload.target == "https://telegram.org"
+
+
+@pytest.mark.asyncio
+async def test_run_http_check_invalid_target_returns_failed_result():
+    item = SiteMonitor(
+        name="broken",
+        check_type="http",
+        target="https:///broken",
+        expected_status_codes=[200],
+        timeout_ms=1000,
+        warning_consecutive_failures=3,
+        critical_consecutive_failures=5,
+        check_interval_seconds=1800,
+        display_order=0,
+        is_active=True,
+    )
+
+    result = await site_monitoring._run_http_check(item, datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc))
+
+    assert result.success is False
+    assert result.detail is not None
+    assert "invalid target" in result.detail

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # Telegram related configuration
     telegram_bot_token: str | None = None
     telegram_default_chat_id: str | None = None
+    telegram_proxy_url: str | None = None
     telegram_allowed_users: List[str] = Field(default_factory=list)
 
     # Host control

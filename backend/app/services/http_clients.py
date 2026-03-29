@@ -24,6 +24,7 @@ def get_telegram_http_client() -> httpx.AsyncClient:
     if _telegram_client is None:
         _telegram_client = httpx.AsyncClient(
             timeout=10,
+            proxy=settings.telegram_proxy_url,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
     return _telegram_client
