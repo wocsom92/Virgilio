@@ -1,9 +1,17 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 
-from backend.app.models.monitors import MonitoredBackend, MetricSnapshot, QuickStatusItem, QuickStatusPingSample
+from backend.app.models.monitors import (
+    MonitoredBackend,
+    MetricSnapshot,
+    Project,
+    QuickStatusItem,
+    QuickStatusPingSample,
+    QuickStatusPrometheusSample,
+)
+from backend.app.services.prometheus_client import PrometheusQueryValue
 from backend.app.services import quick_status
 
 
@@ -93,6 +101,89 @@ def test_resolve_status_for_swap_metric_is_informational_only():
     assert quick_status._resolve_status(None, 50, 80, "swap_used_percent") == "unknown"
     assert quick_status._resolve_status(0, 50, 80, "swap_used_percent") == "info"
     assert quick_status._resolve_status(95, 50, 80, "swap_used_percent") == "info"
+
+
+def test_resolve_status_for_prometheus_lower_thresholds():
+    assert quick_status._resolve_status(5, 10, 3, "prometheus_query", prometheus_threshold_direction="lower") == "warn"
+    assert quick_status._resolve_status(2, 10, 3, "prometheus_query", prometheus_threshold_direction="lower") == "critical"
+    assert quick_status._resolve_status(20, 10, 3, "prometheus_query", prometheus_threshold_direction="lower") == "ok"
+
+
+def test_resolve_status_for_temperature_band_thresholds():
+    assert (
+        quick_status._resolve_status(
+            17,
+            26,
+            28,
+            "prometheus_query",
+            lower_warning_threshold=18,
+            lower_critical_threshold=16,
+        )
+        == "warn"
+    )
+    assert (
+        quick_status._resolve_status(
+            15,
+            26,
+            28,
+            "prometheus_query",
+            lower_warning_threshold=18,
+            lower_critical_threshold=16,
+        )
+        == "critical"
+    )
+    assert (
+        quick_status._resolve_status(
+            27,
+            26,
+            28,
+            "prometheus_query",
+            lower_warning_threshold=18,
+            lower_critical_threshold=16,
+        )
+        == "warn"
+    )
+    assert (
+        quick_status._resolve_status(
+            29,
+            26,
+            28,
+            "prometheus_query",
+            lower_warning_threshold=18,
+            lower_critical_threshold=16,
+        )
+        == "critical"
+    )
+    assert (
+        quick_status._resolve_status(
+            22,
+            26,
+            28,
+            "prometheus_query",
+            lower_warning_threshold=18,
+            lower_critical_threshold=16,
+        )
+        == "ok"
+    )
+
+
+def test_is_prometheus_result_stale_after_thirty_minutes():
+    sampled_at = datetime(2026, 3, 30, 10, 0, tzinfo=timezone.utc)
+    result = quick_status.PrometheusCheckResult(
+        checked_at=sampled_at + timedelta(minutes=1),
+        sampled_at=sampled_at,
+        value=23.1,
+    )
+
+    assert quick_status._is_prometheus_result_stale(result, now=sampled_at + timedelta(minutes=30)) is False
+    assert quick_status._is_prometheus_result_stale(result, now=sampled_at + timedelta(minutes=31)) is True
+
+
+def test_reference_stale_after_thirty_minutes():
+    reported_at = datetime(2026, 3, 30, 10, 0, tzinfo=timezone.utc)
+
+    assert quick_status._is_reference_stale(reported_at, now=reported_at + timedelta(minutes=30)) is False
+    assert quick_status._is_reference_stale(reported_at, now=reported_at + timedelta(minutes=31)) is True
 
 
 @pytest.mark.asyncio
@@ -254,6 +345,48 @@ async def test_build_quick_status_tiles_include_ssh_failure_details(db_session):
         and line.severity == "critical"
         for line in tiles[0].details
     )
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_marks_metric_tiles_stale_when_snapshot_is_old(db_session):
+    now = datetime(2026, 3, 30, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    db_session.add(
+        MetricSnapshot(
+            backend_id=backend.id,
+            reported_at=now - timedelta(minutes=31),
+            raw_payload={},
+            ram_used_percent=91,
+        )
+    )
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="RAM",
+        metric_key="ram_used_percent",
+        warning_threshold=80,
+        critical_threshold=90,
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tiles(
+        db_session,
+        [item],
+        now=now,
+    )
+
+    assert tiles[0].status == "critical"
+    assert tiles[0].stale is True
+    assert tiles[0].reported_at == now - timedelta(minutes=31)
 
 
 @pytest.mark.asyncio
@@ -470,3 +603,230 @@ async def test_build_quick_status_tiles_persists_new_ping_samples(db_session, mo
     assert tiles[0].display_value == "NOK"
     assert len(samples) == 1
     assert samples[0].success is False
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_queries_prometheus_and_persists_history(db_session, monkeypatch):
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="5xx rate",
+        metric_key="prometheus_query",
+        warning_threshold=5,
+        critical_threshold=10,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query='sum(rate(http_requests_total{status=~"5.."}[5m]))',
+        prometheus_interval_seconds=300,
+        prometheus_threshold_direction="higher",
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    async def fake_fetch_prometheus_query_value(base_url: str, query: str):
+        assert base_url == "http://prometheus:9090"
+        assert query == 'sum(rate(http_requests_total{status=~"5.."}[5m]))'
+        return PrometheusQueryValue(
+            value=12.4,
+            sampled_at=datetime(2026, 3, 28, 11, 59, tzinfo=timezone.utc),
+        )
+
+    monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
+
+    tiles = await quick_status.build_quick_status_tiles(
+        db_session,
+        [item],
+        now=now,
+        persist_prometheus_history=True,
+    )
+
+    samples = (
+        await db_session.execute(
+            select(QuickStatusPrometheusSample)
+            .where(QuickStatusPrometheusSample.quick_status_item_id == item.id)
+            .order_by(QuickStatusPrometheusSample.checked_at.asc(), QuickStatusPrometheusSample.id.asc())
+        )
+    ).scalars().all()
+
+    assert tiles[0].status == "critical"
+    assert tiles[0].display_value == "12.4"
+    assert tiles[0].details is not None
+    assert any("Endpoint: http://prometheus:9090" == line.text for line in tiles[0].details)
+    assert any('Query: sum(rate(http_requests_total{status=~"5.."}[5m]))' == line.text for line in tiles[0].details)
+    assert len(samples) == 1
+    assert samples[0].value == pytest.approx(12.4)
+    assert samples[0].sampled_at == datetime(2026, 3, 28, 11, 59, tzinfo=timezone.utc)
+    assert samples[0].error_message is None
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_marks_stale_prometheus_metric_with_stale_flag(db_session, monkeypatch):
+    now = datetime(2026, 3, 30, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="Room temp",
+        metric_key="prometheus_query",
+        warning_threshold=26,
+        critical_threshold=28,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query='room_temperature_celsius{room="bedroom"}',
+        prometheus_interval_seconds=300,
+        prometheus_threshold_direction="higher",
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    async def fake_fetch_prometheus_query_value(base_url: str, query: str):
+        assert base_url == "http://prometheus:9090"
+        assert query == 'room_temperature_celsius{room="bedroom"}'
+        return PrometheusQueryValue(
+            value=23.4,
+            sampled_at=now - timedelta(minutes=31),
+        )
+
+    monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
+
+    tiles = await quick_status.build_quick_status_tiles(
+        db_session,
+        [item],
+        now=now,
+        persist_prometheus_history=True,
+    )
+
+    assert tiles[0].status == "ok"
+    assert tiles[0].stale is True
+    assert tiles[0].display_value == "23.4"
+    assert tiles[0].reported_at == now - timedelta(minutes=31)
+    assert tiles[0].details is not None
+    assert any(line.text == "Stale: no Prometheus update in the last 30 minutes" for line in tiles[0].details)
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_supports_project_prometheus_tile_without_backend(db_session, monkeypatch):
+    now = datetime(2026, 3, 30, 12, 0, tzinfo=timezone.utc)
+    project = Project(name="Home", display_order=2)
+    db_session.add(project)
+    await db_session.flush()
+    item = QuickStatusItem(
+        backend_id=None,
+        project_id=project.id,
+        project=project,
+        label="Room temp",
+        metric_key="prometheus_query",
+        warning_threshold=26,
+        critical_threshold=28,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query='room_temperature_celsius{room="bedroom"}',
+        prometheus_interval_seconds=300,
+        prometheus_threshold_direction="higher",
+        show_updated_age=True,
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    async def fake_fetch_prometheus_query_value(base_url: str, query: str):
+        return PrometheusQueryValue(
+            value=23.4,
+            sampled_at=now - timedelta(minutes=5),
+        )
+
+    monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
+
+    tiles = await quick_status.build_quick_status_tiles(
+        db_session,
+        [item],
+        now=now,
+        persist_prometheus_history=True,
+    )
+
+    assert tiles[0].backend_id is None
+    assert tiles[0].project_id == project.id
+    assert tiles[0].backend_name == "Home"
+    assert tiles[0].show_updated_age is True
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_aggregates_stored_prometheus_history(db_session):
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="Queue depth",
+        metric_key="prometheus_query",
+        warning_threshold=10,
+        critical_threshold=20,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query='queue_depth{queue="jobs"}',
+        prometheus_interval_seconds=7200,
+        prometheus_threshold_direction="higher",
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.flush()
+    db_session.add_all(
+        [
+            QuickStatusPrometheusSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(day=27, hour=11),
+                value=2,
+                error_message=None,
+            ),
+            QuickStatusPrometheusSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(hour=10, minute=0),
+                value=25,
+                error_message=None,
+            ),
+            QuickStatusPrometheusSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(hour=11, minute=0),
+                value=12,
+                error_message=None,
+            ),
+            QuickStatusPrometheusSample(
+                quick_status_item_id=item.id,
+                checked_at=now.replace(hour=11, minute=30),
+                value=4,
+                error_message=None,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tiles(
+        db_session,
+        [item],
+        now=now,
+    )
+
+    assert tiles[0].history == ["ok"] * 11 + ["critical"]
+    assert tiles[0].display_value == "4"
+    assert tiles[0].status == "ok"

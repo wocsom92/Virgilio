@@ -2,11 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Quick status tiles can now query Prometheus instant metrics through the Prometheus HTTP API, with configurable thresholds, threshold direction, refresh interval, and persisted 24-hour tile history.
+- Projects can now be created as separate sidebar tabs, and each project can have its own configured quick-status tile set independent from the main Monitoring tab.
+
 ## [6.0.3] - 2026-03-29
 
 ### Changed
 - Telegram delivery paths can now be routed through a dedicated proxy URL for both backend notifications and the polling bot, which fixes Raspberry Pi deployments where Telegram is blocked on the direct ISP path but reachable through local Xray/VPN egress.
 - Site Monitoring HTTP targets entered without a scheme are now normalized to `https://...`, and malformed targets now record a normal failed check result instead of crashing the backend polling loop.
+- Backend site-monitor polling now logs per-site check failures with monitor id/name/type/target context, so stalled history gaps are visible immediately in backend logs instead of looking silent.
 - Raspberry Pi deployment defaults now advertise the current monitor version and Telegram proxy wiring.
 - Project version updated from `6.0.2` to `6.0.3` across backend, frontend, monitor, deployment env, README, changelog, and displayed UI version constants.
 

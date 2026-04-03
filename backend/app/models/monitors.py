@@ -110,25 +110,40 @@ class QuickStatusItem(TimestampMixin, Base):
     __tablename__ = "quick_status_items"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backend_id: Mapped[int] = mapped_column(ForeignKey("monitored_backends.id"), nullable=False, index=True)
+    backend_id: Mapped[int | None] = mapped_column(ForeignKey("monitored_backends.id"), nullable=True, index=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
     mount_path: Mapped[str | None] = mapped_column(String(255))
+    lower_warning_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lower_critical_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     warning_threshold: Mapped[float] = mapped_column(Float, nullable=False)
     critical_threshold: Mapped[float] = mapped_column(Float, nullable=False)
     ping_endpoint: Mapped[str | None] = mapped_column(String(255))
     ping_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    prometheus_url: Mapped[str | None] = mapped_column(String(500))
+    prometheus_query: Mapped[str | None] = mapped_column(Text)
+    prometheus_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    prometheus_threshold_direction: Mapped[str] = mapped_column(String(16), nullable=False, default="higher")
+    show_updated_age: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_notified_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     pending_notification_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     pending_notification_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    backend: Mapped[MonitoredBackend] = relationship("MonitoredBackend")
+    backend: Mapped[MonitoredBackend | None] = relationship("MonitoredBackend")
+    project: Mapped["Project | None"] = relationship("Project", back_populates="quick_status_items")
     ping_samples: Mapped[list["QuickStatusPingSample"]] = relationship(
         "QuickStatusPingSample",
         back_populates="item",
         cascade="all, delete-orphan",
         order_by="QuickStatusPingSample.checked_at",
+    )
+    prometheus_samples: Mapped[list["QuickStatusPrometheusSample"]] = relationship(
+        "QuickStatusPrometheusSample",
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="QuickStatusPrometheusSample.checked_at",
     )
 
 
@@ -142,6 +157,34 @@ class QuickStatusPingSample(TimestampMixin, Base):
     latency_ms: Mapped[float | None] = mapped_column(Float)
 
     item: Mapped[QuickStatusItem] = relationship("QuickStatusItem", back_populates="ping_samples")
+
+
+class QuickStatusPrometheusSample(TimestampMixin, Base):
+    __tablename__ = "quick_status_prometheus_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    quick_status_item_id: Mapped[int] = mapped_column(ForeignKey("quick_status_items.id"), nullable=False, index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    sampled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    item: Mapped[QuickStatusItem] = relationship("QuickStatusItem", back_populates="prometheus_samples")
+
+
+class Project(TimestampMixin, Base):
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    quick_status_items: Mapped[list[QuickStatusItem]] = relationship(
+        "QuickStatusItem",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        order_by="QuickStatusItem.display_order",
+    )
 
 
 class SiteMonitor(TimestampMixin, Base):

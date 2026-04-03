@@ -4,13 +4,19 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 import asyncio
+import math
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import settings
-from backend.app.models.monitors import MetricSnapshot, QuickStatusItem, QuickStatusPingSample
+from backend.app.models.monitors import (
+    MetricSnapshot,
+    QuickStatusItem,
+    QuickStatusPingSample,
+    QuickStatusPrometheusSample,
+)
 from backend.app.schemas.quick_status import (
     QuickStatusDetailLine,
     QuickStatusItemCreate,
@@ -18,17 +24,20 @@ from backend.app.schemas.quick_status import (
     is_supported_quick_status_metric,
 )
 from backend.app.services.monitor_client import MonitorClientError, fetch_ping
+from backend.app.services.prometheus_client import PrometheusQueryError, fetch_prometheus_query_value
 from backend.app.services.system_settings import metric_retention_timedelta
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "swap_used_percent", "mount_used_percent"}
 _REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "mount_available_gb", "ssh_last_unsuccessful_attempt"}
 _PING_METRICS = {"ping_result", "ping_delay_ms"}
+_PROMETHEUS_METRICS = {"prometheus_query"}
 _INFO_ONLY_METRICS = {"swap_used_percent"}
 _ALERT_STATUSES = {"warn", "critical"}
 _HISTORY_SEGMENT_COUNT = 12
 _HISTORY_SEGMENT_DURATION = timedelta(hours=2)
 _HISTORY_WINDOW = _HISTORY_SEGMENT_DURATION * _HISTORY_SEGMENT_COUNT
+_TILE_STALE_AFTER = timedelta(minutes=30)
 _HISTORY_STATUS_PRIORITY = {
     "critical": 4,
     "warn": 3,
@@ -43,6 +52,14 @@ class PingCheckResult:
     checked_at: datetime
     success: bool
     latency_ms: float | None
+
+
+@dataclass(slots=True)
+class PrometheusCheckResult:
+    checked_at: datetime
+    value: float | None
+    sampled_at: datetime | None = None
+    error_message: str | None = None
 
 
 @dataclass(slots=True)
@@ -66,16 +83,19 @@ class QuickStatusEvaluation:
 
 _PING_CACHE: dict[int, PingCheckResult] = {}
 _PING_LOCK = asyncio.Lock()
+_PROMETHEUS_CACHE: dict[int, PrometheusCheckResult] = {}
+_PROMETHEUS_LOCK = asyncio.Lock()
 
 
 def _quick_status_item_sort_key(item: QuickStatusItem) -> tuple[int, str, int, int, int]:
     backend = getattr(item, "backend", None)
-    backend_order = backend.display_order if backend is not None else 0
-    backend_name = backend.name if backend is not None else ""
+    project = getattr(item, "project", None)
+    backend_order = backend.display_order if backend is not None else (project.display_order if project is not None else 0)
+    backend_name = backend.name if backend is not None else (project.name if project is not None else "")
     return (
         backend_order,
         backend_name.casefold(),
-        item.backend_id,
+        item.backend_id or 0,
         item.display_order,
         item.id,
     )
@@ -195,6 +215,15 @@ def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | N
     return None
 
 
+def _format_compact_number(value: float) -> str:
+    if math.isfinite(value) and float(value).is_integer():
+        return str(int(value))
+    absolute = abs(value)
+    if 0.01 <= absolute < 100:
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return format(value, ".4g")
+
+
 def _format_value(metric_key: str, value: float | None) -> str:
     if value is None:
         return "—"
@@ -220,6 +249,8 @@ def _format_value(metric_key: str, value: float | None) -> str:
         if level == 1:
             return "WARN"
         return "CRIT"
+    if metric_key in _PROMETHEUS_METRICS:
+        return _format_compact_number(value)
     return f"{value:.2f}"
 
 
@@ -247,7 +278,43 @@ def _build_detail_lines(
     snapshot: MetricSnapshot | None,
     *,
     status: str,
+    prometheus_result: PrometheusCheckResult | None = None,
+    now: datetime | None = None,
 ) -> list[QuickStatusDetailLine] | None:
+    if item.metric_key in _PROMETHEUS_METRICS:
+        lines: list[QuickStatusDetailLine] = []
+        severity = _detail_severity_for_status(status)
+        if item.prometheus_url:
+            lines.append(QuickStatusDetailLine(text=f"Endpoint: {item.prometheus_url}", severity=severity))
+        if item.prometheus_query:
+            lines.append(QuickStatusDetailLine(text=f"Query: {item.prometheus_query}", severity=severity))
+        if prometheus_result is not None and prometheus_result.sampled_at is not None:
+            is_stale = _is_prometheus_result_stale(prometheus_result, now=now)
+            lines.append(
+                QuickStatusDetailLine(
+                    text=(
+                        "Last update: "
+                        f"{prometheus_result.sampled_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+                    ),
+                    severity="warn" if is_stale else severity,
+                )
+            )
+            if is_stale:
+                lines.append(
+                    QuickStatusDetailLine(
+                        text="Stale: no Prometheus update in the last 30 minutes",
+                        severity="warn",
+                    )
+                )
+        if prometheus_result is not None and prometheus_result.error_message:
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"Error: {prometheus_result.error_message}",
+                    severity="warn" if status == "unknown" else severity,
+                )
+            )
+        return lines or None
+
     if snapshot is None:
         return None
     payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
@@ -404,6 +471,32 @@ def _ping_result_from_sample(sample: QuickStatusPingSample) -> PingCheckResult:
     )
 
 
+def _prometheus_result_from_sample(sample: QuickStatusPrometheusSample) -> PrometheusCheckResult:
+    return PrometheusCheckResult(
+        checked_at=_coerce_utc(sample.checked_at),
+        value=float(sample.value) if sample.value is not None else None,
+        sampled_at=_coerce_utc(sample.sampled_at) if sample.sampled_at is not None else None,
+        error_message=sample.error_message,
+    )
+
+
+def _is_prometheus_result_stale(
+    prometheus_result: PrometheusCheckResult | None,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    if prometheus_result is None:
+        return False
+    return _is_reference_stale(prometheus_result.sampled_at, now=now)
+
+
+def _is_reference_stale(reference_at: datetime | None, *, now: datetime | None = None) -> bool:
+    if reference_at is None:
+        return False
+    reference_now = _coerce_utc(now or datetime.now(tz=timezone.utc))
+    return reference_now - _coerce_utc(reference_at) > _TILE_STALE_AFTER
+
+
 def _evaluate_ping_result(item: QuickStatusItem, ping_result: PingCheckResult | None) -> QuickStatusEvaluation:
     if ping_result is None:
         return QuickStatusEvaluation(value=None, display_value="—", status="unknown")
@@ -418,12 +511,55 @@ def _evaluate_ping_result(item: QuickStatusItem, ping_result: PingCheckResult | 
         return QuickStatusEvaluation(
             value=value,
             display_value=_format_value(item.metric_key, value),
-            status=_resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key),
+            status=_resolve_status(
+                value,
+                item.warning_threshold,
+                item.critical_threshold,
+                item.metric_key,
+                lower_warning_threshold=item.lower_warning_threshold,
+                lower_critical_threshold=item.lower_critical_threshold,
+            ),
         )
     return QuickStatusEvaluation(value=None, display_value="timeout", status="critical")
 
 
-def _resolve_status(value: float | None, warning_threshold: float, critical_threshold: float, metric_key: str) -> str:
+def _evaluate_prometheus_result(
+    item: QuickStatusItem,
+    prometheus_result: PrometheusCheckResult | None,
+    *,
+    now: datetime | None = None,
+) -> QuickStatusEvaluation:
+    if prometheus_result is None:
+        return QuickStatusEvaluation(value=None, display_value="—", status="unknown")
+    if prometheus_result.value is None:
+        display_value = "ERR" if prometheus_result.error_message else "—"
+        return QuickStatusEvaluation(value=None, display_value=display_value, status="unknown")
+    value = prometheus_result.value
+    return QuickStatusEvaluation(
+        value=value,
+        display_value=_format_value(item.metric_key, value),
+        status=_resolve_status(
+            value,
+            item.warning_threshold,
+            item.critical_threshold,
+            item.metric_key,
+            prometheus_threshold_direction=item.prometheus_threshold_direction,
+            lower_warning_threshold=item.lower_warning_threshold,
+            lower_critical_threshold=item.lower_critical_threshold,
+        ),
+    )
+
+
+def _resolve_status(
+    value: float | None,
+    warning_threshold: float,
+    critical_threshold: float,
+    metric_key: str,
+    *,
+    prometheus_threshold_direction: str | None = None,
+    lower_warning_threshold: float | None = None,
+    lower_critical_threshold: float | None = None,
+) -> str:
     if value is None:
         return "unknown"
     if metric_key in _INFO_ONLY_METRICS:
@@ -440,6 +576,18 @@ def _resolve_status(value: float | None, warning_threshold: float, critical_thre
         if value >= 2:
             return "critical"
         if value >= 1:
+            return "warn"
+        return "ok"
+    if lower_warning_threshold is not None and lower_critical_threshold is not None:
+        if value <= lower_critical_threshold or value >= critical_threshold:
+            return "critical"
+        if value <= lower_warning_threshold or value >= warning_threshold:
+            return "warn"
+        return "ok"
+    if metric_key in _PROMETHEUS_METRICS and prometheus_threshold_direction == "lower":
+        if value <= critical_threshold:
+            return "critical"
+        if value <= warning_threshold:
             return "warn"
         return "ok"
     if metric_key in _REVERSE_THRESHOLD_METRICS:
@@ -462,7 +610,15 @@ def evaluate_quick_status_item(item: QuickStatusItem, snapshot: MetricSnapshot |
     return QuickStatusEvaluation(
         value=value,
         display_value=_format_value(item.metric_key, value),
-        status=_resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key),
+        status=_resolve_status(
+            value,
+            item.warning_threshold,
+            item.critical_threshold,
+            item.metric_key,
+            prometheus_threshold_direction=item.prometheus_threshold_direction,
+            lower_warning_threshold=item.lower_warning_threshold,
+            lower_critical_threshold=item.lower_critical_threshold,
+        ),
     )
 
 
@@ -472,7 +628,7 @@ def _build_item_history(
     window_start: datetime,
     window_end: datetime,
 ) -> list[str]:
-    if item.metric_key in _PING_METRICS:
+    if item.metric_key in _PING_METRICS or item.metric_key in _PROMETHEUS_METRICS:
         return _empty_history()
 
     bucket_ranges = _history_segment_ranges(window_start)
@@ -543,6 +699,60 @@ def _build_ping_history(
         _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, checked_at)
         current_status = _evaluate_ping_result(item, _ping_result_from_sample(sample)).status
         current_start = checked_at
+
+    _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, window_end)
+    return _finalize_history_buckets(buckets)
+
+
+def _build_prometheus_history(
+    item: QuickStatusItem,
+    samples: list[QuickStatusPrometheusSample],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[str]:
+    bucket_ranges = _history_segment_ranges(window_start)
+    buckets = [{} for _ in range(_HISTORY_SEGMENT_COUNT)]
+    ordered_samples = sorted(
+        samples,
+        key=lambda sample: (_coerce_utc(sample.checked_at), sample.id),
+    )
+
+    previous_sample = next(
+        (
+            sample
+            for sample in reversed(ordered_samples)
+            if _coerce_utc(sample.checked_at) < window_start
+        ),
+        None,
+    )
+    current_status = _evaluate_prometheus_result(
+        item,
+        _prometheus_result_from_sample(previous_sample) if previous_sample is not None else None,
+        now=window_start,
+    ).status
+    current_start = window_start
+
+    for sample in ordered_samples:
+        checked_at = _coerce_utc(sample.checked_at)
+        if checked_at < window_start:
+            continue
+        if checked_at > window_end:
+            break
+        _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, checked_at)
+        current_status = _evaluate_prometheus_result(
+            item,
+            _prometheus_result_from_sample(sample),
+            now=checked_at,
+        ).status
+        current_start = checked_at
+
+    latest_sample = ordered_samples[-1] if ordered_samples else previous_sample
+    latest_sampled_at = _coerce_utc(latest_sample.sampled_at) if latest_sample and latest_sample.sampled_at else None
+    stale_at = latest_sampled_at + _TILE_STALE_AFTER if latest_sampled_at is not None else None
+    if current_status != "unknown" and stale_at is not None and current_start < stale_at < window_end:
+        _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, stale_at)
+        current_status = "unknown"
+        current_start = stale_at
 
     _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, window_end)
     return _finalize_history_buckets(buckets)
@@ -683,6 +893,60 @@ async def _load_ping_history_samples(
     return samples_by_item
 
 
+async def _load_prometheus_history_samples(
+    session: AsyncSession,
+    item_ids: set[int],
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[int, list[QuickStatusPrometheusSample]]:
+    if not item_ids:
+        return {}
+
+    ranked_previous_samples = (
+        select(
+            QuickStatusPrometheusSample.id.label("sample_id"),
+            func.row_number().over(
+                partition_by=QuickStatusPrometheusSample.quick_status_item_id,
+                order_by=(QuickStatusPrometheusSample.checked_at.desc(), QuickStatusPrometheusSample.id.desc()),
+            ).label("row_number"),
+        )
+        .where(
+            QuickStatusPrometheusSample.quick_status_item_id.in_(item_ids),
+            QuickStatusPrometheusSample.checked_at < window_start,
+        )
+        .subquery()
+    )
+
+    previous_result = await session.execute(
+        select(QuickStatusPrometheusSample).join(
+            ranked_previous_samples,
+            QuickStatusPrometheusSample.id == ranked_previous_samples.c.sample_id,
+        ).where(ranked_previous_samples.c.row_number == 1)
+    )
+    current_result = await session.execute(
+        select(QuickStatusPrometheusSample)
+        .where(
+            QuickStatusPrometheusSample.quick_status_item_id.in_(item_ids),
+            QuickStatusPrometheusSample.checked_at >= window_start,
+            QuickStatusPrometheusSample.checked_at <= window_end,
+        )
+        .order_by(
+            QuickStatusPrometheusSample.quick_status_item_id,
+            QuickStatusPrometheusSample.checked_at,
+            QuickStatusPrometheusSample.id,
+        )
+    )
+
+    samples_by_item: dict[int, list[QuickStatusPrometheusSample]] = {item_id: [] for item_id in item_ids}
+    for sample in previous_result.scalars():
+        samples_by_item.setdefault(sample.quick_status_item_id, []).append(sample)
+    for sample in current_result.scalars():
+        samples_by_item.setdefault(sample.quick_status_item_id, []).append(sample)
+    for samples in samples_by_item.values():
+        samples.sort(key=lambda sample: (_coerce_utc(sample.checked_at), sample.id))
+    return samples_by_item
+
+
 async def _persist_ping_result(
     session: AsyncSession,
     item: QuickStatusItem,
@@ -704,6 +968,34 @@ async def _persist_ping_result(
         checked_at=ping_result.checked_at,
         success=ping_result.success,
         latency_ms=ping_result.latency_ms,
+    )
+    session.add(sample)
+    await session.flush()
+    return sample
+
+
+async def _persist_prometheus_result(
+    session: AsyncSession,
+    item: QuickStatusItem,
+    result: PrometheusCheckResult,
+    latest_sample: QuickStatusPrometheusSample | None,
+) -> QuickStatusPrometheusSample | None:
+    if latest_sample is not None and _coerce_utc(latest_sample.checked_at) >= result.checked_at:
+        return None
+
+    retention_window = await metric_retention_timedelta(session)
+    cutoff = result.checked_at - retention_window
+    await session.execute(
+        QuickStatusPrometheusSample.__table__.delete()
+        .where(QuickStatusPrometheusSample.checked_at < cutoff)
+        .execution_options(synchronize_session=False)
+    )
+    sample = QuickStatusPrometheusSample(
+        quick_status_item_id=item.id,
+        checked_at=result.checked_at,
+        sampled_at=result.sampled_at,
+        value=result.value,
+        error_message=result.error_message,
     )
     session.add(sample)
     await session.flush()
@@ -765,6 +1057,50 @@ async def _check_ping(
     return result, persisted_sample
 
 
+async def _check_prometheus(
+    session: AsyncSession,
+    item: QuickStatusItem,
+    *,
+    latest_sample: QuickStatusPrometheusSample | None = None,
+    persist_history: bool = False,
+    now: datetime | None = None,
+) -> tuple[PrometheusCheckResult | None, QuickStatusPrometheusSample | None]:
+    if not item.prometheus_url or not item.prometheus_query:
+        return None, None
+    interval = max(5, int(item.prometheus_interval_seconds or 60))
+    checked_at = _coerce_utc(now or datetime.now(tz=timezone.utc))
+    latest_result = _prometheus_result_from_sample(latest_sample) if latest_sample is not None else None
+    async with _PROMETHEUS_LOCK:
+        cached = _PROMETHEUS_CACHE.get(item.id)
+        if cached and checked_at - cached.checked_at < timedelta(seconds=interval):
+            if persist_history:
+                persisted_sample = await _persist_prometheus_result(session, item, cached, latest_sample)
+                return cached, persisted_sample
+            return cached, None
+    if latest_result is not None and checked_at - latest_result.checked_at < timedelta(seconds=interval):
+        async with _PROMETHEUS_LOCK:
+            _PROMETHEUS_CACHE[item.id] = latest_result
+        return latest_result, None
+
+    try:
+        response = await fetch_prometheus_query_value(item.prometheus_url, item.prometheus_query)
+        result = PrometheusCheckResult(
+            checked_at=checked_at,
+            sampled_at=response.sampled_at,
+            value=response.value,
+        )
+    except (PrometheusQueryError, Exception) as exc:
+        message = str(exc).strip() or "Prometheus query failed"
+        result = PrometheusCheckResult(checked_at=checked_at, value=None, error_message=message)
+
+    async with _PROMETHEUS_LOCK:
+        _PROMETHEUS_CACHE[item.id] = result
+    persisted_sample = None
+    if persist_history:
+        persisted_sample = await _persist_prometheus_result(session, item, result, latest_sample)
+    return result, persisted_sample
+
+
 async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem]:
     result = await session.execute(
         select(QuickStatusItem)
@@ -791,6 +1127,7 @@ async def build_quick_status_tiles(
     backends: Iterable[object] | None = None,
     now: datetime | None = None,
     persist_ping_history: bool = False,
+    persist_prometheus_history: bool = False,
 ) -> list[QuickStatusTileRead]:
     items_list = sorted(
         [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))],
@@ -799,7 +1136,7 @@ async def build_quick_status_tiles(
     backend_by_id: dict[int, object] = {}
     for item in items_list:
         backend = getattr(item, "backend", None)
-        if backend is not None:
+        if backend is not None and item.backend_id is not None:
             backend_by_id[item.backend_id] = backend
     for backend in backends or []:
         backend_id = getattr(backend, "id", None)
@@ -809,7 +1146,7 @@ async def build_quick_status_tiles(
     if not items_list and not (include_heartbeat_tiles and backend_by_id):
         return []
 
-    backend_ids = set(backend_by_id) | {item.backend_id for item in items_list}
+    backend_ids = set(backend_by_id) | {item.backend_id for item in items_list if item.backend_id is not None}
     window_start, window_end = _history_window_bounds(now)
     ping_history_by_item = await _load_ping_history_samples(
         session,
@@ -817,9 +1154,32 @@ async def build_quick_status_tiles(
         window_start,
         window_end,
     )
+    prometheus_history_by_item = await _load_prometheus_history_samples(
+        session,
+        {item.id for item in items_list if item.metric_key in _PROMETHEUS_METRICS},
+        window_start,
+        window_end,
+    )
     ping_results_by_item: dict[int, PingCheckResult | None] = {}
+    prometheus_results_by_item: dict[int, PrometheusCheckResult | None] = {}
     for item in items_list:
         if item.metric_key not in _PING_METRICS:
+            if item.metric_key not in _PROMETHEUS_METRICS:
+                continue
+            latest_sample = (
+                prometheus_history_by_item.get(item.id, [])[-1] if prometheus_history_by_item.get(item.id) else None
+            )
+            prometheus_result, persisted_sample = await _check_prometheus(
+                session,
+                item,
+                latest_sample=latest_sample,
+                persist_history=persist_prometheus_history,
+                now=window_end,
+            )
+            prometheus_results_by_item[item.id] = prometheus_result
+            if persisted_sample is not None:
+                prometheus_history_by_item.setdefault(item.id, []).append(persisted_sample)
+                prometheus_history_by_item[item.id].sort(key=lambda sample: (_coerce_utc(sample.checked_at), sample.id))
             continue
         latest_sample = ping_history_by_item.get(item.id, [])[-1] if ping_history_by_item.get(item.id) else None
         ping_result, persisted_sample = await _check_ping(
@@ -856,10 +1216,12 @@ async def build_quick_status_tiles(
             reference_at = getattr(backend, "last_seen_at", None) or getattr(latest_snapshot, "reported_at", None)
             reference_date = _coerce_utc(reference_at) if isinstance(reference_at, datetime) else None
             is_fresh = reference_date is not None and (window_end - reference_date).total_seconds() <= freshness_seconds
+            is_stale = _is_reference_stale(reference_date, now=window_end)
             tiles.append(
                 QuickStatusTileRead(
                     id=-backend_id,
                     backend_id=backend_id,
+                    project_id=None,
                     backend_display_order=getattr(backend, "display_order", 0),
                     backend_name=getattr(backend, "name", f"Backend #{backend_id}"),
                     label="HB",
@@ -867,6 +1229,7 @@ async def build_quick_status_tiles(
                     value=1.0 if is_fresh else (0.0 if reference_date is not None else None),
                     display_value="Now" if is_fresh else ("Late" if reference_date is not None else "—"),
                     status="ok" if is_fresh else ("critical" if reference_date is not None else "unknown"),
+                    stale=is_stale,
                     history=_build_heartbeat_history(
                         backend,
                         history_snapshots_by_backend.get(backend_id, []),
@@ -891,10 +1254,20 @@ async def build_quick_status_tiles(
 
     for item in items_list:
         backend = getattr(item, "backend", None)
-        snapshot = latest_snapshots.get(item.backend_id)
+        project = getattr(item, "project", None)
+        snapshot = latest_snapshots.get(item.backend_id) if item.backend_id is not None else None
         ping_result = ping_results_by_item.get(item.id) if item.metric_key in _PING_METRICS else None
+        prometheus_result = (
+            prometheus_results_by_item.get(item.id) if item.metric_key in _PROMETHEUS_METRICS else None
+        )
         value = _metric_value(snapshot, item.metric_key, item.mount_path) if snapshot else None
-        status = _resolve_status(value, item.warning_threshold, item.critical_threshold, item.metric_key)
+        status = _resolve_status(
+            value,
+            item.warning_threshold,
+            item.critical_threshold,
+            item.metric_key,
+            prometheus_threshold_direction=item.prometheus_threshold_direction,
+        )
         display_value = _format_value(item.metric_key, value)
         reported_at = snapshot.reported_at if snapshot else None
         if item.metric_key in _PING_METRICS:
@@ -903,29 +1276,58 @@ async def build_quick_status_tiles(
             display_value = ping_evaluation.display_value
             status = ping_evaluation.status
             reported_at = ping_result.checked_at if ping_result is not None else None
+        elif item.metric_key in _PROMETHEUS_METRICS:
+            prometheus_evaluation = _evaluate_prometheus_result(item, prometheus_result, now=window_end)
+            value = prometheus_evaluation.value
+            display_value = prometheus_evaluation.display_value
+            status = prometheus_evaluation.status
+            reported_at = (
+                prometheus_result.sampled_at
+                if prometheus_result is not None and prometheus_result.sampled_at is not None
+                else (prometheus_result.checked_at if prometheus_result is not None else None)
+            )
+        stale = _is_reference_stale(reported_at, now=window_end)
         tiles.append(
             QuickStatusTileRead(
                 id=item.id,
                 backend_id=item.backend_id,
-                backend_display_order=backend.display_order if backend else 0,
-                backend_name=backend.name if backend else "Unknown",
+                project_id=item.project_id,
+                backend_display_order=backend.display_order if backend else (project.display_order if project else 0),
+                backend_name=backend.name if backend else (project.name if project else "Project"),
                 label=item.label,
                 metric_key=item.metric_key,
                 value=value,
                 display_value=display_value,
                 status=status,
+                stale=stale,
+                show_updated_age=item.show_updated_age,
                 history=(
                     _build_ping_history(item, ping_history_by_item.get(item.id, []), window_start, window_end)
                     if item.metric_key in _PING_METRICS
-                    else _build_item_history(
-                        item,
-                        history_snapshots_by_backend.get(item.backend_id, []),
-                        window_start,
-                        window_end,
+                    else (
+                        _build_prometheus_history(
+                            item,
+                            prometheus_history_by_item.get(item.id, []),
+                            window_start,
+                            window_end,
+                        )
+                        if item.metric_key in _PROMETHEUS_METRICS
+                        else _build_item_history(
+                            item,
+                            history_snapshots_by_backend.get(item.backend_id, []) if item.backend_id is not None else [],
+                            window_start,
+                            window_end,
+                        )
                     )
                 ),
                 reported_at=reported_at,
-                details=_build_detail_lines(item, snapshot, status=status),
+                details=_build_detail_lines(
+                    item,
+                    snapshot,
+                    status=status,
+                    prometheus_result=prometheus_result,
+                    now=window_end,
+                ),
             )
         )
     return tiles
@@ -941,7 +1343,7 @@ def detect_quick_status_transitions_for_snapshot(
     for item in items:
         if not is_supported_quick_status_metric(getattr(item, "metric_key", None)):
             continue
-        if item.metric_key in _PING_METRICS:
+        if item.metric_key in _PING_METRICS or item.metric_key in _PROMETHEUS_METRICS:
             continue
         previous_value = _metric_value(previous_snapshot, item.metric_key, item.mount_path) if previous_snapshot else None
         previous_status = _resolve_status(
@@ -949,6 +1351,9 @@ def detect_quick_status_transitions_for_snapshot(
             item.warning_threshold,
             item.critical_threshold,
             item.metric_key,
+            prometheus_threshold_direction=item.prometheus_threshold_direction,
+            lower_warning_threshold=item.lower_warning_threshold,
+            lower_critical_threshold=item.lower_critical_threshold,
         )
         current_value = _metric_value(current_snapshot, item.metric_key, item.mount_path)
         current_status = _resolve_status(
@@ -956,6 +1361,9 @@ def detect_quick_status_transitions_for_snapshot(
             item.warning_threshold,
             item.critical_threshold,
             item.metric_key,
+            prometheus_threshold_direction=item.prometheus_threshold_direction,
+            lower_warning_threshold=item.lower_warning_threshold,
+            lower_critical_threshold=item.lower_critical_threshold,
         )
         if current_status in _ALERT_STATUSES and current_status != previous_status:
             transitions.append(
@@ -976,13 +1384,21 @@ def detect_quick_status_transitions_for_snapshot(
 async def create_quick_status_item(session: AsyncSession, payload: QuickStatusItemCreate) -> QuickStatusItem:
     item = QuickStatusItem(
         backend_id=payload.backend_id,
+        project_id=payload.project_id,
         label=payload.label,
         metric_key=payload.metric_key,
         mount_path=payload.mount_path,
+        lower_warning_threshold=payload.lower_warning_threshold,
+        lower_critical_threshold=payload.lower_critical_threshold,
         warning_threshold=payload.warning_threshold,
         critical_threshold=payload.critical_threshold,
         ping_endpoint=payload.ping_endpoint,
         ping_interval_seconds=payload.ping_interval_seconds,
+        prometheus_url=payload.prometheus_url,
+        prometheus_query=payload.prometheus_query,
+        prometheus_interval_seconds=payload.prometheus_interval_seconds,
+        prometheus_threshold_direction=payload.prometheus_threshold_direction,
+        show_updated_age=payload.show_updated_age,
         display_order=payload.display_order,
     )
     session.add(item)
@@ -997,13 +1413,21 @@ async def update_quick_status_item(
     payload: QuickStatusItemCreate,
 ) -> QuickStatusItem:
     item.backend_id = payload.backend_id
+    item.project_id = payload.project_id
     item.label = payload.label
     item.metric_key = payload.metric_key
     item.mount_path = payload.mount_path
+    item.lower_warning_threshold = payload.lower_warning_threshold
+    item.lower_critical_threshold = payload.lower_critical_threshold
     item.warning_threshold = payload.warning_threshold
     item.critical_threshold = payload.critical_threshold
     item.ping_endpoint = payload.ping_endpoint
     item.ping_interval_seconds = payload.ping_interval_seconds
+    item.prometheus_url = payload.prometheus_url
+    item.prometheus_query = payload.prometheus_query
+    item.prometheus_interval_seconds = payload.prometheus_interval_seconds
+    item.prometheus_threshold_direction = payload.prometheus_threshold_direction
+    item.show_updated_age = payload.show_updated_age
     item.display_order = payload.display_order
     session.add(item)
     await session.commit()

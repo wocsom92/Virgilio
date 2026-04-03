@@ -11,7 +11,7 @@ import {
 } from './api/client';
 import { Dashboard } from './components/Dashboard';
 import { AdminPanel } from './components/AdminPanel';
-import { AppView, Layout } from './components/Layout';
+import { AppView, Layout, getProjectViewId } from './components/Layout';
 import { SiteMonitoring } from './components/SiteMonitoring';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { getUserFacingErrorMessage } from './utils/errors';
@@ -132,6 +132,7 @@ export default function App() {
     () => (needsBootstrap ? 'Create admin account' : 'Sign in'),
     [needsBootstrap]
   );
+  const activeProjectId = getProjectViewId(view);
 
   if (authLoading) {
     return (
@@ -204,7 +205,7 @@ export default function App() {
       ) : view === 'site-monitoring' ? (
         <SiteMonitoring />
       ) : (
-        <Dashboard canRefresh={currentUser.role === 'admin'} mode={view} />
+        <Dashboard canRefresh={currentUser.role === 'admin'} mode={view === 'graphs' ? 'graphs' : 'monitoring'} projectId={activeProjectId} />
       )}
     </Layout>
   );

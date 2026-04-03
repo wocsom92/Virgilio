@@ -199,6 +199,14 @@ export interface AuthSessionSettings {
   auth_session_minutes: number;
 }
 
+export interface Project {
+  id: number;
+  name: string;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export type StatusLevel = 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
 
 export type SiteMonitorCheckType = 'ping' | 'http';
@@ -253,18 +261,29 @@ export type QuickStatusMetricKey =
   | 'ping_delay_ms'
   | 'ssh_last_successful_login'
   | 'ssh_last_unsuccessful_attempt'
-  | 'ssh_status';
+  | 'ssh_status'
+  | 'prometheus_query';
+
+export type PrometheusThresholdDirection = 'higher' | 'lower';
 
 export interface QuickStatusItem {
   id: number;
-  backend_id: number;
+  backend_id?: number | null;
+  project_id?: number | null;
   label: string;
   metric_key: QuickStatusMetricKey;
   mount_path?: string | null;
+  lower_warning_threshold?: number | null;
+  lower_critical_threshold?: number | null;
   warning_threshold: number;
   critical_threshold: number;
   ping_endpoint?: string | null;
   ping_interval_seconds?: number | null;
+  prometheus_url?: string | null;
+  prometheus_query?: string | null;
+  prometheus_interval_seconds?: number | null;
+  prometheus_threshold_direction?: PrometheusThresholdDirection | null;
+  show_updated_age?: boolean;
   display_order: number;
 }
 
@@ -275,7 +294,8 @@ export interface QuickStatusDetailLine {
 
 export interface QuickStatusTile {
   id: number;
-  backend_id: number;
+  backend_id?: number | null;
+  project_id?: number | null;
   backend_display_order: number;
   backend_name: string;
   label: string;
@@ -283,6 +303,8 @@ export interface QuickStatusTile {
   value?: number | null;
   display_value: string;
   status: StatusLevel;
+  stale?: boolean;
+  show_updated_age?: boolean;
   history: StatusLevel[];
   reported_at?: string | null;
   details?: QuickStatusDetailLine[] | null;
@@ -324,8 +346,15 @@ export async function fetchDashboard(): Promise<MonitoredBackend[]> {
   return data;
 }
 
-export async function fetchQuickStatusTiles(): Promise<QuickStatusTile[]> {
-  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status');
+export async function fetchQuickStatusTiles(projectId?: number | null): Promise<QuickStatusTile[]> {
+  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status', {
+    params: projectId ? { project_id: projectId } : undefined,
+  });
+  return data;
+}
+
+export async function fetchProjects(): Promise<Project[]> {
+  const { data } = await api.get<Project[]>('/dashboard/projects');
   return data;
 }
 
@@ -458,6 +487,25 @@ export async function updateQuickStatusItem(id: number, payload: Omit<QuickStatu
 
 export async function deleteQuickStatusItem(id: number) {
   await api.delete(`/system/quick-status/${id}`);
+}
+
+export async function listProjects() {
+  const { data } = await api.get<Project[]>('/system/projects');
+  return data;
+}
+
+export async function createProject(payload: Pick<Project, 'name' | 'display_order'>) {
+  const { data } = await api.post<Project>('/system/projects', payload);
+  return data;
+}
+
+export async function updateProject(id: number, payload: Partial<Pick<Project, 'name' | 'display_order'>>) {
+  const { data } = await api.put<Project>(`/system/projects/${id}`, payload);
+  return data;
+}
+
+export async function deleteProject(id: number) {
+  await api.delete(`/system/projects/${id}`);
 }
 
 export async function listSiteMonitors() {

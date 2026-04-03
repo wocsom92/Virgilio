@@ -37,8 +37,10 @@ Component docs:
 - Time-range charts (`hourly`, `daily`, `weekly`) with previous/next window navigation.
 - Reboot markers on charts (detected from uptime resets).
 - Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
+- Projects can expose separate sidebar tabs, each with its own project-scoped quick tiles.
 - Quick status tiles now include a 24-hour history strip with hourly segments under each square tile.
 - Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
+- Prometheus quick-status tiles can query any Prometheus instant expression that returns exactly one numeric sample, with configurable refresh cadence and higher-is-worse or lower-is-worse thresholds.
 - Dedicated Site Monitoring view with ping and HTTP checks, 48 half-hour status rectangles per site for the last 24 hours, and admin-managed timeout and failure thresholds.
 - Site Monitoring checks support ping reachability or HTTP GET validation with expected status codes and optional response-text matching.
 - Site Monitoring rows are compact by default for mobile/iPhone layouts and reveal check type, target, status text, response value, and last-check details on click.
@@ -46,11 +48,13 @@ Component docs:
   - Mounted volume usage (%)
   - Mounted volume free space (`MiB` / `GiB` / `TiB`)
   - SSH login age and SSH posture
+  - Prometheus instant-query values
 - SSH quick status support:
   - Last successful SSH login (compact elapsed time such as `5d 23h`, always `ok`)
   - Last failed SSH attempt (elapsed age with configurable warn/critical thresholds)
   - SSH posture (`PubkeyAuthentication` and `PermitRootLogin`) mapped to `ok`/`warn`/`critical`
 - Admin quick status management supports a separate Overview-style preview section plus search inside the paginated Existing Tiles list.
+- Admin project management lets you create ordered project tabs and assign quick tiles to either the main Monitoring tab or a specific project tab.
 - Quick status preview reordering is server-scoped and includes touch-friendly arrow controls for iPhone Safari.
 - Role-based auth (`admin`, `viewer`) with bootstrap flow for first admin user.
 - Persistent login sessions across browser restarts, with a 48-hour default auth session duration for new logins.

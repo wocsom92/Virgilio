@@ -185,7 +185,7 @@ async def send_compiled_message(
 
 async def _load_quick_status_tiles(session: AsyncSession) -> list[QuickStatusTileRead]:
     items = await list_quick_status_items(session)
-    return await build_quick_status_tiles(session, items)
+    return await build_quick_status_tiles(session, items, persist_prometheus_history=True)
 
 
 def _build_warn_message_from_tiles(
@@ -523,7 +523,7 @@ async def queue_quick_status_notifications(
     due_at = now + timedelta(seconds=batch_window_seconds)
 
     # Use the latest persisted snapshots to evaluate the current tile state after ingest.
-    tiles = await build_quick_status_tiles(session, items)
+    tiles = await build_quick_status_tiles(session, items, persist_prometheus_history=True)
     tiles_by_id = {tile.id: tile for tile in tiles}
 
     changed = False
@@ -609,7 +609,7 @@ async def dispatch_due_quick_status_notifications(
     )
     items = list(result.scalars())
 
-    tiles = await build_quick_status_tiles(session, items)
+    tiles = await build_quick_status_tiles(session, items, persist_prometheus_history=True)
     tiles_by_id = {tile.id: tile for tile in tiles}
     events: list[QuickStatusNotificationEvent] = []
     changed = False

@@ -11,6 +11,21 @@ def ensure_schema_compat(connection: Connection) -> None:
     """Lightweight, safe migrations for small schema deltas."""
     inspector = inspect(connection)
 
+    if not inspector.has_table("projects"):
+        connection.execute(
+            text(
+                """
+                CREATE TABLE projects (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(120) NOT NULL UNIQUE,
+                    display_order INT NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+
     # Add backend_version column if missing (introduced in 2025-02, stores monitor version).
     if inspector.has_table("metric_snapshots"):
         columns = {col["name"] for col in inspector.get_columns("metric_snapshots")}
@@ -31,7 +46,17 @@ def ensure_schema_compat(connection: Connection) -> None:
 
     # Add ping fields to quick status items if missing (introduced in 2025-03).
     if inspector.has_table("quick_status_items"):
-        columns = {col["name"] for col in inspector.get_columns("quick_status_items")}
+        quick_status_columns = {col["name"]: col for col in inspector.get_columns("quick_status_items")}
+        columns = set(quick_status_columns)
+        if "project_id" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN project_id INT NULL"))
+        backend_column = quick_status_columns.get("backend_id")
+        if backend_column is not None and backend_column.get("nullable") is False:
+            connection.execute(text("ALTER TABLE quick_status_items MODIFY COLUMN backend_id INT NULL"))
+        if "lower_warning_threshold" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN lower_warning_threshold FLOAT NULL"))
+        if "lower_critical_threshold" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN lower_critical_threshold FLOAT NULL"))
         if "ping_endpoint" not in columns:
             connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN ping_endpoint VARCHAR(255) NULL"))
         if "ping_interval_seconds" not in columns:
@@ -47,6 +72,31 @@ def ensure_schema_compat(connection: Connection) -> None:
             connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN pending_notification_status VARCHAR(16) NULL"))
         if "pending_notification_due_at" not in columns:
             connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN pending_notification_due_at DATETIME NULL"))
+        if "prometheus_url" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN prometheus_url VARCHAR(500) NULL"))
+        if "prometheus_query" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN prometheus_query TEXT NULL"))
+        if "prometheus_interval_seconds" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE quick_status_items "
+                    "ADD COLUMN prometheus_interval_seconds INT NOT NULL DEFAULT 60"
+                )
+            )
+        if "prometheus_threshold_direction" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE quick_status_items "
+                    "ADD COLUMN prometheus_threshold_direction VARCHAR(16) NOT NULL DEFAULT 'higher'"
+                )
+            )
+        if "show_updated_age" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE quick_status_items "
+                    "ADD COLUMN show_updated_age BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
     if not inspector.has_table("quick_status_ping_samples"):
         connection.execute(
             text(
@@ -68,6 +118,32 @@ def ensure_schema_compat(connection: Connection) -> None:
                 """
             )
         )
+    if not inspector.has_table("quick_status_prometheus_samples"):
+        connection.execute(
+            text(
+                """
+                CREATE TABLE quick_status_prometheus_samples (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    quick_status_item_id INT NOT NULL,
+                    checked_at DATETIME NOT NULL,
+                    sampled_at DATETIME NULL,
+                    value FLOAT NULL,
+                    error_message TEXT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX ix_quick_status_prometheus_samples_quick_status_item_id (quick_status_item_id),
+                    INDEX ix_quick_status_prometheus_samples_checked_at (checked_at),
+                    CONSTRAINT fk_quick_status_prometheus_samples_item
+                        FOREIGN KEY (quick_status_item_id) REFERENCES quick_status_items(id)
+                        ON DELETE CASCADE
+                )
+                """
+            )
+        )
+    else:
+        columns = {col["name"] for col in inspector.get_columns("quick_status_prometheus_samples")}
+        if "sampled_at" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_prometheus_samples ADD COLUMN sampled_at DATETIME NULL"))
 
     if inspector.has_table("telegram_settings"):
         columns = {col["name"] for col in inspector.get_columns("telegram_settings")}

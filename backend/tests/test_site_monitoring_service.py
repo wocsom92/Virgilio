@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import logging
 
 import pytest
 from sqlalchemy import select
@@ -229,6 +230,73 @@ async def test_refresh_due_site_monitor_samples_persists_new_results(db_session,
     assert statuses[0].display_value == "3 failures"
     assert statuses[0].consecutive_failures == 3
     assert len(statuses[0].history) == 48
+
+
+@pytest.mark.asyncio
+async def test_refresh_due_site_monitor_samples_logs_and_continues_after_site_failure(db_session, monkeypatch, caplog):
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    broken = SiteMonitor(
+        name="broken",
+        check_type="http",
+        target="https://broken.example/healthz",
+        expected_status_codes=[200],
+        timeout_ms=3000,
+        warning_consecutive_failures=3,
+        critical_consecutive_failures=5,
+        check_interval_seconds=1800,
+        display_order=0,
+        is_active=True,
+    )
+    healthy = SiteMonitor(
+        name="healthy",
+        check_type="http",
+        target="https://healthy.example/healthz",
+        expected_status_codes=[200],
+        timeout_ms=3000,
+        warning_consecutive_failures=3,
+        critical_consecutive_failures=5,
+        check_interval_seconds=1800,
+        display_order=1,
+        is_active=True,
+    )
+    db_session.add_all([broken, healthy])
+    await db_session.commit()
+    await db_session.refresh(broken)
+    await db_session.refresh(healthy)
+
+    async def fake_run_site_check(site_monitor, checked_at):
+        if site_monitor.id == broken.id:
+            raise RuntimeError("boom")
+        return site_monitoring.SiteCheckResult(
+            checked_at=checked_at,
+            success=True,
+            latency_ms=25,
+            status_code=200,
+            detail=None,
+        )
+
+    monkeypatch.setattr(site_monitoring, "_run_site_check", fake_run_site_check)
+
+    with caplog.at_level(logging.ERROR):
+        latest_samples = await site_monitoring.refresh_due_site_monitor_samples(
+            db_session,
+            [broken, healthy],
+            now=now,
+            force=True,
+        )
+    await db_session.commit()
+
+    stored_samples = (
+        await db_session.execute(
+            select(SiteMonitorSample).order_by(SiteMonitorSample.site_monitor_id, SiteMonitorSample.checked_at)
+        )
+    ).scalars().all()
+    assert [sample.site_monitor_id for sample in stored_samples] == [healthy.id]
+    assert broken.id not in latest_samples
+    assert latest_samples[healthy.id].status_code == 200
+    assert "Site monitor check failed during polling tick" in caplog.text
+    assert f"id={broken.id}" in caplog.text
+    assert "broken.example/healthz" in caplog.text
 
 
 def test_site_monitor_create_normalizes_http_target_without_scheme():

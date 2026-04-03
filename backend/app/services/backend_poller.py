@@ -117,7 +117,12 @@ class BackendPoller:
                 self._next_run[backend_id] = next_due
 
         async with self._session_factory() as session:
-            await run_due_site_monitor_checks(session, now=now)
+            try:
+                await run_due_site_monitor_checks(session, now=now)
+            except Exception:
+                await session.rollback()
+                logger.exception("Site monitor polling tick failed at %s", now.isoformat())
+                raise
             await dispatch_due_quick_status_notifications(session)
 
     async def _load_schedules(self) -> list[BackendSchedule]:

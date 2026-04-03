@@ -8,9 +8,10 @@ import { QuickStatusTileCard } from './QuickStatusTileCard';
 interface DashboardProps {
   canRefresh: boolean;
   mode: 'monitoring' | 'graphs';
+  projectId?: number | null;
 }
 
-export function Dashboard({ canRefresh, mode }: DashboardProps) {
+export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps) {
   const [backends, setBackends] = useState<MonitoredBackend[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +30,7 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
     isQuickStatusFetchingRef.current = true;
     setQuickStatusError(null);
     try {
-      const tiles = await fetchQuickStatusTiles();
+      const tiles = await fetchQuickStatusTiles(projectId);
       setQuickStatusTiles(tiles);
     } catch (err) {
       setQuickStatusTiles([]);
@@ -39,7 +40,7 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
     } finally {
       isQuickStatusFetchingRef.current = false;
     }
-  }, []);
+  }, [projectId]);
 
   const loadData = useCallback(
     async (options: { showSpinner?: boolean } = {}) => {
@@ -131,43 +132,38 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
   );
 
   const quickStatusGroups = useMemo(() => {
-    const grouped = new Map<number, QuickStatusTile[]>();
+    const grouped = new Map<string, { key: string; backendId: number | null; backendName: string; displayOrder: number; items: QuickStatusTile[] }>();
     for (const tile of quickStatusTiles) {
-      const current = grouped.get(tile.backend_id) ?? [];
-      current.push(tile);
-      grouped.set(tile.backend_id, current);
+      const groupKey =
+        tile.backend_id !== null && tile.backend_id !== undefined
+          ? `backend:${tile.backend_id}`
+          : tile.project_id !== null && tile.project_id !== undefined
+            ? `project:${tile.project_id}`
+            : `tile:${tile.id}`;
+      const current = grouped.get(groupKey) ?? {
+        key: groupKey,
+        backendId: tile.backend_id ?? null,
+        backendName: tile.backend_name,
+        displayOrder: tile.backend_display_order ?? 0,
+        items: [],
+      };
+      current.items.push(tile);
+      grouped.set(groupKey, current);
     }
-    const backendMeta = new Map(backends.map((backend) => [backend.id, backend] as const));
-    const orderedGroups = backends
-      .filter((backend) => grouped.has(backend.id))
-      .map((backend) => ({
-        backendId: backend.id,
-        backendName: backend.name,
-        displayOrder: backend.display_order,
-        items: grouped.get(backend.id) ?? [],
-      }));
-    const fallbackGroups = Array.from(grouped.entries())
-      .filter(([backendId]) => !backendMeta.has(backendId))
-      .map(([backendId, items]) => ({
-        backendId,
-        backendName: items[0]?.backend_name ?? `Backend #${backendId}`,
-        displayOrder: items[0]?.backend_display_order ?? 0,
-        items,
-      }))
-      .sort((a, b) => {
-        if (a.displayOrder !== b.displayOrder) {
-          return a.displayOrder - b.displayOrder;
-        }
-        const byName = a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
-        if (byName !== 0) {
-          return byName;
-        }
-        return a.backendId - b.backendId;
-      });
-    return [...orderedGroups, ...fallbackGroups];
-  }, [backends, quickStatusTiles]);
+    return Array.from(grouped.values()).sort((a, b) => {
+      if (a.displayOrder !== b.displayOrder) {
+        return a.displayOrder - b.displayOrder;
+      }
+      const byName = a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
+      if (byName !== 0) {
+        return byName;
+      }
+      return a.key.localeCompare(b.key);
+    });
+  }, [quickStatusTiles]);
 
   const isMonitoringView = mode === 'monitoring';
+  const isProjectView = isMonitoringView && projectId !== null;
   const shouldShowDashboardError = !isMonitoringView || quickStatusGroups.length === 0;
 
   return (
@@ -177,7 +173,9 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
           <h2 className="fw-semibold text-uppercase mb-1">{isMonitoringView ? 'Quick Tiles' : 'All Graphs'}</h2>
           <p className="text-secondary small mb-0">
             {isMonitoringView
-              ? 'Server quick tiles and drill-down status details.'
+              ? isProjectView
+                ? 'Project quick tiles and drill-down status details.'
+                : 'Server quick tiles and drill-down status details.'
               : 'Historical metrics, snapshots, and warning states for every backend.'}
           </p>
         </div>
@@ -197,7 +195,7 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
           {quickStatusGroups.length > 0 ? (
             <div className="quick-status-sections">
               {quickStatusGroups.map((group) => (
-                <section className="quick-status-section" key={group.backendId}>
+                <section className="quick-status-section" key={group.key}>
                   <div className="quick-status-section__header">
                     <h3 className="quick-status-section__title">{group.backendName}</h3>
                     <span className="quick-status-section__count">
@@ -266,7 +264,11 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
               <div className="card-panel rounded-4 p-4">
                 <div className="fw-semibold mb-1">No quick tiles configured</div>
                 <div className="text-secondary small">
-                  {loading ? 'Loading current monitoring state…' : 'Add quick tiles from Administration to populate this view.'}
+                  {loading
+                    ? 'Loading current monitoring state…'
+                    : isProjectView
+                      ? 'Assign quick tiles to this project from Administration to populate this view.'
+                      : 'Add quick tiles from Administration to populate this view.'}
                 </div>
               </div>
             )

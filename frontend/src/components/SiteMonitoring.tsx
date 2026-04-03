@@ -24,7 +24,13 @@ function formatCheckedAt(value: string | null): string {
   if (!value) {
     return 'No samples yet';
   }
-  return new Date(value).toLocaleString([], {
+  const hasTimezone = /[zZ]|[+-]\d{2}:\d{2}$/.test(value);
+  const normalized = hasTimezone ? value : `${value}Z`;
+  const timestamp = Date.parse(normalized);
+  if (Number.isNaN(timestamp)) {
+    return 'Invalid date';
+  }
+  return new Date(timestamp).toLocaleString([], {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -166,20 +172,22 @@ export function SiteMonitoring() {
                 <div className="site-monitor-row__summary">
                   <div className="site-monitor-row__content">
                     <div className="site-monitor-row__identity">
-                      <span className="site-monitor-row__title">{site.name}</span>
+                      <span className="site-monitor-row__title" title={site.name}>
+                        {site.name}
+                      </span>
                     </div>
                   </div>
-                </div>
-                <div
-                  className="site-monitor-row__history quick-status-history"
-                  aria-label="48 half-hour check results across the last 24 hours"
-                >
-                  {site.history.map((status, index) => (
-                    <span
-                      key={`${site.id}:${index}`}
-                      className={classNames('quick-status-history__segment', getStatusClass(status))}
-                    />
-                  ))}
+                  <div
+                    className="site-monitor-row__history quick-status-history"
+                    aria-label="48 half-hour check results across the last 24 hours"
+                  >
+                    {site.history.map((status, index) => (
+                      <span
+                        key={`${site.id}:${index}`}
+                        className={classNames('quick-status-history__segment', getStatusClass(status))}
+                      />
+                    ))}
+                  </div>
                 </div>
                 {expandedSiteId === site.id && (
                   <div className="site-monitor-row__details">

@@ -8,9 +8,10 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.core.security import get_current_user
 from backend.app.db.session import get_session
-from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, QuickStatusItem
+from backend.app.models.monitors import MetricSnapshot, MonitoredBackend, Project, QuickStatusItem
 from backend.app.schemas.backend import BackendWithLatestSnapshot
 from backend.app.schemas.metrics import MetricSeriesPoint, MetricSeriesResponse
+from backend.app.schemas.project import ProjectRead
 from backend.app.schemas.quick_status import QuickStatusTileRead
 from backend.app.schemas.site_monitoring import SiteMonitorStatusRead
 from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
@@ -42,37 +43,49 @@ async def fetch_dashboard_data(
     )
 
 
+@router.get("/projects", response_model=list[ProjectRead])
+async def fetch_dashboard_projects(
+    _: object = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[ProjectRead]:
+    result = await session.execute(select(Project).order_by(Project.display_order, Project.name, Project.id))
+    return [ProjectRead.model_validate(item) for item in result.scalars()]
+
+
 @router.get("/quick-status", response_model=list[QuickStatusTileRead])
 async def fetch_quick_status_tiles(
+    project_id: int | None = Query(default=None, ge=1),
     _: object = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[QuickStatusTileRead]:
+    if project_id is not None:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
     backends_result = await session.execute(
         select(MonitoredBackend)
         .where(MonitoredBackend.is_active.is_(True))
         .order_by(MonitoredBackend.display_order, MonitoredBackend.name, MonitoredBackend.id)
     )
-    item_result = await session.execute(
-        select(QuickStatusItem)
-        .join(MonitoredBackend, QuickStatusItem.backend_id == MonitoredBackend.id)
-        .where(MonitoredBackend.is_active.is_(True))
-        .options(selectinload(QuickStatusItem.backend))
-        .order_by(
-            MonitoredBackend.display_order,
-            MonitoredBackend.name,
-            MonitoredBackend.id,
-            QuickStatusItem.display_order,
-            QuickStatusItem.id,
-        )
-    )
-    items = list(item_result.scalars())
+    item_query = select(QuickStatusItem).options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
+    if project_id is None:
+        item_query = item_query.where(QuickStatusItem.project_id.is_(None))
+    else:
+        item_query = item_query.where(QuickStatusItem.project_id == project_id)
+    item_result = await session.execute(item_query.order_by(QuickStatusItem.display_order, QuickStatusItem.id))
+    items = [
+        item
+        for item in item_result.scalars()
+        if item.backend_id is None or (item.backend is not None and item.backend.is_active)
+    ]
     backends = list(backends_result.scalars())
     tiles = await build_quick_status_tiles(
         session,
         items,
-        include_heartbeat_tiles=True,
+        include_heartbeat_tiles=project_id is None,
         backends=backends,
         persist_ping_history=True,
+        persist_prometheus_history=True,
     )
     await session.commit()
     return tiles

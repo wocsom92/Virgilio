@@ -4,10 +4,12 @@ import {
   MountDisplayEntry,
   MountMetricSelection,
   MonitoredBackend,
+  Project,
   SelectedMetrics,
   TelegramSettings,
   AuthUser,
   AuthRole,
+  PrometheusThresholdDirection,
   QuickStatusItem,
   QuickStatusMetricKey,
   QuickStatusTile,
@@ -16,9 +18,11 @@ import {
   fetchQuickStatusTiles,
   createQuickStatusItem,
   createBackend,
+  createProject,
   createUser,
   deleteQuickStatusItem,
   deleteBackend,
+  deleteProject,
   deleteUser,
   fetchBackendMounts,
   fetchAuthSessionSettings,
@@ -27,11 +31,13 @@ import {
   listQuickStatusItems,
   listBackends,
   listBackendsWithLatest,
+  listProjects,
   listUsers,
   sendTelegramStats,
   sendTelegramWarnings,
   updateAuthSessionSettings,
   updateBackend,
+  updateProject,
   updateQuickStatusItem,
   updateTelegramSettings,
   updateSystemSettings,
@@ -73,6 +79,8 @@ const quickStatusMetricOptions: Array<{
   requiresThresholds: boolean;
   thresholdDirection: 'higher' | 'lower' | 'range';
   requiresPing: boolean;
+  requiresPrometheus: boolean;
+  supportsMinMaxBand: boolean;
 }> = [
   {
     key: 'disk_usage_percent',
@@ -83,6 +91,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'ram_used_percent',
@@ -93,6 +103,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'memory_available_gb',
@@ -103,6 +115,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'lower',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'swap_used_percent',
@@ -113,6 +127,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: false,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'docker_container_count',
@@ -123,6 +139,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'range',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'cpu_temperature_c',
@@ -133,6 +151,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: true,
   },
   {
     key: 'cpu_load_one',
@@ -143,6 +163,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'cpu_load_five',
@@ -153,6 +175,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'cpu_load_fifteen',
@@ -163,6 +187,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'mount_used_percent',
@@ -173,6 +199,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'mount_available_gb',
@@ -183,6 +211,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'lower',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'last_restart',
@@ -193,6 +223,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'lower',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'ping_result',
@@ -203,6 +235,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: false,
     thresholdDirection: 'higher',
     requiresPing: true,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'ping_delay_ms',
@@ -213,6 +247,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'higher',
     requiresPing: true,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'ssh_last_successful_login',
@@ -223,6 +259,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: false,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'ssh_last_unsuccessful_attempt',
@@ -233,6 +271,8 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: true,
     thresholdDirection: 'lower',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
   },
   {
     key: 'ssh_status',
@@ -243,6 +283,20 @@ const quickStatusMetricOptions: Array<{
     requiresThresholds: false,
     thresholdDirection: 'higher',
     requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
+  },
+  {
+    key: 'prometheus_query',
+    label: 'Prometheus query',
+    defaultWarning: 80,
+    defaultCritical: 90,
+    helper: 'Instant Prometheus API query returning exactly one numeric sample. Threshold direction is configurable.',
+    requiresThresholds: true,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+    requiresPrometheus: true,
+    supportsMinMaxBand: true,
   },
 ];
 
@@ -250,6 +304,7 @@ const metricOptionKeys = new Set(metricOptions.map((option) => option.key));
 const extraSelectedKeys = ['network_interfaces'];
 const ADMIN_SECTIONS = [
   { id: 'manage-backends', label: 'Manage backends', description: 'Create, edit, and order monitored servers.' },
+  { id: 'projects', label: 'Projects', description: 'Create project tabs and assign custom quick tiles.' },
   {
     id: 'quick-status',
     label: 'Quick status tiles',
@@ -402,15 +457,28 @@ type BackendFormState = Omit<BackendCreatePayload, 'display_order'> & {
   selected_metrics: SelectedMetrics;
 };
 
+type ProjectFormState = {
+  name: string;
+  display_order: number | '';
+};
+
 type QuickStatusFormState = {
   backend_id: number | '';
+  project_id: number | '';
   label: string;
   metric_key: QuickStatusMetricKey;
   mount_path: string;
+  lower_warning_threshold: number | '';
+  lower_critical_threshold: number | '';
   warning_threshold: number | '';
   critical_threshold: number | '';
   ping_endpoint: string;
   ping_interval_seconds: number | '';
+  prometheus_url: string;
+  prometheus_query: string;
+  prometheus_interval_seconds: number | '';
+  prometheus_threshold_direction: PrometheusThresholdDirection;
+  show_updated_age: boolean;
   display_order: number | '';
 };
 
@@ -423,6 +491,17 @@ const defaultQuickStatusThresholds = (metric: QuickStatusMetricKey) => {
 
 const defaultQuickStatusLabel = (metric: QuickStatusMetricKey): string =>
   quickStatusMetricOptions.find((option) => option.key === metric)?.label ?? metric;
+
+const getQuickStatusThresholdDirection = (
+  metric: QuickStatusMetricKey,
+  metaThresholdDirection: 'higher' | 'lower' | 'range' | undefined,
+  prometheusThresholdDirection: PrometheusThresholdDirection
+): 'higher' | 'lower' | 'range' => {
+  if (metric === 'prometheus_query') {
+    return prometheusThresholdDirection;
+  }
+  return metaThresholdDirection ?? 'higher';
+};
 
 const sortBackends = (items: MonitoredBackend[]): MonitoredBackend[] =>
   [...items].sort((a, b) => {
@@ -456,15 +535,46 @@ const createQuickStatusForm = (): QuickStatusFormState => {
   const defaults = defaultQuickStatusThresholds(metricKey);
   return {
     backend_id: '',
+    project_id: '',
     label: defaultQuickStatusLabel(metricKey),
     metric_key: metricKey,
     mount_path: '',
+    lower_warning_threshold: '',
+    lower_critical_threshold: '',
     warning_threshold: defaults.warning,
     critical_threshold: defaults.critical,
     ping_endpoint: '',
     ping_interval_seconds: 60,
+    prometheus_url: '',
+    prometheus_query: '',
+    prometheus_interval_seconds: 60,
+    prometheus_threshold_direction: 'higher',
+    show_updated_age: false,
     display_order: 0,
   };
+};
+
+const createProjectForm = (): ProjectFormState => ({
+  name: '',
+  display_order: 0,
+});
+
+const sortProjects = (items: Project[]): Project[] =>
+  [...items].sort((a, b) => {
+    if (a.display_order !== b.display_order) {
+      return a.display_order - b.display_order;
+    }
+    return a.name.localeCompare(b.name);
+  });
+
+const getQuickStatusGroupKey = (item: Pick<QuickStatusItem, 'backend_id' | 'project_id'>): string => {
+  if (item.backend_id !== null && item.backend_id !== undefined) {
+    return `backend:${item.backend_id}`;
+  }
+  if (item.project_id !== null && item.project_id !== undefined) {
+    return `project:${item.project_id}`;
+  }
+  return 'ungrouped';
 };
 
 export function AdminPanel({ currentUser }: AdminPanelProps) {
@@ -488,6 +598,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [retentionStatus, setRetentionStatus] = useState<string | null>(null);
   const [authSessionMinutes, setAuthSessionMinutes] = useState<number | ''>('');
   const [authSessionStatus, setAuthSessionStatus] = useState<string | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectForm, setProjectForm] = useState<ProjectFormState>(() => createProjectForm());
+  const [projectEditingId, setProjectEditingId] = useState<number | null>(null);
+  const [projectStatus, setProjectStatus] = useState<string | null>(null);
   const [mountOptions, setMountOptions] = useState<string[]>([]);
   const [loadingMountOptions, setLoadingMountOptions] = useState(false);
   const [mountOptionsError, setMountOptionsError] = useState<string | null>(null);
@@ -503,11 +617,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [quickStatusDraggingId, setQuickStatusDraggingId] = useState<number | null>(null);
   const [quickStatusDetailId, setQuickStatusDetailId] = useState<number | null>(null);
   const [quickStatusOrdering, setQuickStatusOrdering] = useState(false);
-  const [quickStatusOrderingBackendId, setQuickStatusOrderingBackendId] = useState<number | null>(null);
+  const [quickStatusOrderingBackendId, setQuickStatusOrderingBackendId] = useState<string | null>(null);
   const [quickStatusSelectedMoveId, setQuickStatusSelectedMoveId] = useState<number | null>(null);
   const [quickStatusListSearch, setQuickStatusListSearch] = useState('');
-  const [quickStatusCollapsedByBackend, setQuickStatusCollapsedByBackend] = useState<Record<number, boolean>>({});
-  const [quickStatusPageByBackend, setQuickStatusPageByBackend] = useState<Record<number, number>>({});
+  const [quickStatusCollapsedByBackend, setQuickStatusCollapsedByBackend] = useState<Record<string, boolean>>({});
+  const [quickStatusPageByBackend, setQuickStatusPageByBackend] = useState<Record<string, number>>({});
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [userStatus, setUserStatus] = useState<string | null>(null);
   const [userForm, setUserForm] = useState<{ username: string; password: string; role: AuthRole }>({
@@ -535,6 +649,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     });
   };
 
+  const loadProjects = async () => {
+    const data = await listProjects();
+    setProjects(sortProjects(data));
+  };
+
   const loadMountOptions = async (backendId: number) => {
     setLoadingMountOptions(true);
     setMountOptionsError(null);
@@ -558,6 +677,76 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       );
     } finally {
       setLoadingMountOptions(false);
+    }
+  };
+
+  const resetProjectForm = () => {
+    setProjectForm(createProjectForm());
+    setProjectEditingId(null);
+    setProjectStatus(null);
+  };
+
+  const handleProjectSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!isAdmin) {
+      return;
+    }
+    if (!projectForm.name.trim()) {
+      setProjectStatus('Enter a project name.');
+      return;
+    }
+    const payload = {
+      name: projectForm.name.trim(),
+      display_order: Number(projectForm.display_order) || 0,
+    };
+    try {
+      if (projectEditingId) {
+        const updated = await updateProject(projectEditingId, payload);
+        setProjects((prev) => sortProjects(prev.map((item) => (item.id === updated.id ? updated : item))));
+        setProjectStatus('Project updated.');
+      } else {
+        const created = await createProject(payload);
+        setProjects((prev) => sortProjects([...prev, created]));
+        setProjectStatus('Project created.');
+      }
+      window.dispatchEvent(new Event('projects-updated'));
+      setProjectForm(createProjectForm());
+      setProjectEditingId(null);
+    } catch (err) {
+      setProjectStatus(extractErrorMessage(err, 'Could not save the project. Review the form and try again.'));
+    }
+  };
+
+  const handleProjectEdit = (project: Project) => {
+    setProjectEditingId(project.id);
+    setProjectForm({
+      name: project.name,
+      display_order: project.display_order,
+    });
+    setProjectStatus(null);
+    setActiveSection('projects');
+  };
+
+  const handleProjectDelete = async (project: Project) => {
+    if (!isAdmin) {
+      return;
+    }
+    if (!window.confirm(`Remove project ${project.name}? This also removes its quick tiles.`)) {
+      return;
+    }
+    try {
+      await deleteProject(project.id);
+      setProjects((prev) => prev.filter((item) => item.id !== project.id));
+      setQuickStatusItems((prev) => prev.filter((item) => item.project_id !== project.id));
+      setQuickStatusTiles((prev) => prev.filter((item) => item.project_id !== project.id));
+      setProjectStatus(`Removed ${project.name}.`);
+      setQuickStatusForm((prev) => (prev.project_id === project.id ? { ...prev, project_id: '' } : prev));
+      window.dispatchEvent(new Event('projects-updated'));
+      if (projectEditingId === project.id) {
+        resetProjectForm();
+      }
+    } catch (err) {
+      setProjectStatus(extractErrorMessage(err, 'Could not delete the project. Try again.'));
     }
   };
 
@@ -619,6 +808,21 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       } catch (err) {
         setTelegram(null);
         setTelegramStatus(extractErrorMessage(err, 'Could not load Telegram settings. Check your admin access and try again.'));
+      }
+    })();
+  }, [isAdmin]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setProjects([]);
+      return;
+    }
+    void (async () => {
+      try {
+        await loadProjects();
+      } catch (err) {
+        setProjects([]);
+        setProjectStatus(extractErrorMessage(err, 'Could not load projects. Check the API connection and try again.'));
       }
     })();
   }, [isAdmin]);
@@ -868,10 +1072,16 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         label: shouldAutoFillLabel ? nextDefaultLabel : prev.label,
         metric_key: metric,
         mount_path: '',
+        lower_warning_threshold: option?.supportsMinMaxBand ? prev.lower_warning_threshold : '',
+        lower_critical_threshold: option?.supportsMinMaxBand ? prev.lower_critical_threshold : '',
         warning_threshold: defaults.warning,
         critical_threshold: defaults.critical,
         ping_endpoint: option?.requiresPing ? prev.ping_endpoint : '',
         ping_interval_seconds: option?.requiresPing ? prev.ping_interval_seconds : 60,
+        prometheus_url: option?.requiresPrometheus ? prev.prometheus_url : '',
+        prometheus_query: option?.requiresPrometheus ? prev.prometheus_query : '',
+        prometheus_interval_seconds: option?.requiresPrometheus ? prev.prometheus_interval_seconds : 60,
+        prometheus_threshold_direction: option?.requiresPrometheus ? prev.prometheus_threshold_direction : 'higher',
       };
     });
   };
@@ -881,13 +1091,24 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (!isAdmin) return;
 
     const metricMeta = quickStatusMetricOptions.find((option) => option.key === quickStatusForm.metric_key);
+    const thresholdDirection = getQuickStatusThresholdDirection(
+      quickStatusForm.metric_key,
+      metricMeta?.thresholdDirection,
+      quickStatusForm.prometheus_threshold_direction
+    );
+    const hasLowerBandThresholds =
+      quickStatusForm.lower_warning_threshold !== '' || quickStatusForm.lower_critical_threshold !== '';
 
-    if (quickStatusForm.backend_id === '') {
-      setQuickStatusStatus('Select a backend.');
-      return;
-    }
     if (!quickStatusForm.label.trim()) {
       setQuickStatusStatus('Enter a label.');
+      return;
+    }
+    if (quickStatusForm.backend_id === '' && quickStatusForm.project_id === '') {
+      setQuickStatusStatus('Select a backend or assign the tile to a project.');
+      return;
+    }
+    if (quickStatusForm.backend_id === '' && quickStatusForm.metric_key !== 'prometheus_query') {
+      setQuickStatusStatus('Backend-free tiles are supported only for Prometheus tiles.');
       return;
     }
     if (metricMeta?.requiresThresholds) {
@@ -895,12 +1116,22 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setQuickStatusStatus('Enter both warning and critical thresholds.');
         return;
       }
-      if (metricMeta.thresholdDirection === 'range') {
+      if (metricMeta?.supportsMinMaxBand && hasLowerBandThresholds) {
+        if (quickStatusForm.lower_warning_threshold === '' || quickStatusForm.lower_critical_threshold === '') {
+          setQuickStatusStatus('Enter both minimum warning and minimum critical thresholds.');
+          return;
+        }
+        if (Number(quickStatusForm.lower_warning_threshold) <= Number(quickStatusForm.lower_critical_threshold)) {
+          setQuickStatusStatus('Minimum warning threshold must be greater than minimum critical threshold.');
+          return;
+        }
+      }
+      if (thresholdDirection === 'range') {
         if (Number(quickStatusForm.warning_threshold) > Number(quickStatusForm.critical_threshold)) {
           setQuickStatusStatus('Minimum containers must be less than or equal to maximum containers.');
           return;
         }
-      } else if (metricMeta.thresholdDirection === 'lower') {
+      } else if (thresholdDirection === 'lower') {
         if (Number(quickStatusForm.warning_threshold) <= Number(quickStatusForm.critical_threshold)) {
           setQuickStatusStatus('Warning threshold must be greater than critical threshold.');
           return;
@@ -925,19 +1156,49 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setQuickStatusStatus('Enter a ping interval.');
       return;
     }
+    if (metricMeta?.requiresPrometheus && !quickStatusForm.prometheus_url.trim()) {
+      setQuickStatusStatus('Enter a Prometheus base URL.');
+      return;
+    }
+    if (metricMeta?.requiresPrometheus && !quickStatusForm.prometheus_query.trim()) {
+      setQuickStatusStatus('Enter a Prometheus query.');
+      return;
+    }
+    if (metricMeta?.requiresPrometheus && quickStatusForm.prometheus_interval_seconds === '') {
+      setQuickStatusStatus('Enter a Prometheus refresh interval.');
+      return;
+    }
 
     const payload = {
-      backend_id: Number(quickStatusForm.backend_id),
+      backend_id: quickStatusForm.backend_id === '' ? null : Number(quickStatusForm.backend_id),
+      project_id: quickStatusForm.project_id === '' ? null : Number(quickStatusForm.project_id),
       label: quickStatusForm.label.trim(),
       metric_key: quickStatusForm.metric_key,
       mount_path:
         quickStatusForm.metric_key === 'mount_used_percent' || quickStatusForm.metric_key === 'mount_available_gb'
           ? quickStatusForm.mount_path.trim()
           : null,
+      lower_warning_threshold:
+        metricMeta?.supportsMinMaxBand && quickStatusForm.lower_warning_threshold !== ''
+          ? Number(quickStatusForm.lower_warning_threshold)
+          : null,
+      lower_critical_threshold:
+        metricMeta?.supportsMinMaxBand && quickStatusForm.lower_critical_threshold !== ''
+          ? Number(quickStatusForm.lower_critical_threshold)
+          : null,
       warning_threshold: Number(quickStatusForm.warning_threshold || 0),
       critical_threshold: Number(quickStatusForm.critical_threshold || 0),
       ping_endpoint: metricMeta?.requiresPing ? quickStatusForm.ping_endpoint.trim() : null,
       ping_interval_seconds: metricMeta?.requiresPing ? Number(quickStatusForm.ping_interval_seconds || 60) : 60,
+      prometheus_url: metricMeta?.requiresPrometheus ? quickStatusForm.prometheus_url.trim() : null,
+      prometheus_query: metricMeta?.requiresPrometheus ? quickStatusForm.prometheus_query.trim() : null,
+      prometheus_interval_seconds: metricMeta?.requiresPrometheus
+        ? Number(quickStatusForm.prometheus_interval_seconds || 60)
+        : 60,
+      prometheus_threshold_direction: metricMeta?.requiresPrometheus
+        ? quickStatusForm.prometheus_threshold_direction
+        : 'higher',
+      show_updated_age: quickStatusForm.show_updated_age,
       display_order: Number(quickStatusForm.display_order) || 0,
     };
 
@@ -963,14 +1224,22 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const handleQuickStatusEdit = (item: QuickStatusItem) => {
     setQuickStatusEditingId(item.id);
     setQuickStatusForm({
-      backend_id: item.backend_id,
+      backend_id: item.backend_id ?? '',
+      project_id: item.project_id ?? '',
       label: item.label,
       metric_key: item.metric_key,
       mount_path: item.mount_path ?? '',
+      lower_warning_threshold: item.lower_warning_threshold ?? '',
+      lower_critical_threshold: item.lower_critical_threshold ?? '',
       warning_threshold: item.warning_threshold,
       critical_threshold: item.critical_threshold,
       ping_endpoint: item.ping_endpoint ?? '',
       ping_interval_seconds: item.ping_interval_seconds ?? 60,
+      prometheus_url: item.prometheus_url ?? '',
+      prometheus_query: item.prometheus_query ?? '',
+      prometheus_interval_seconds: item.prometheus_interval_seconds ?? 60,
+      prometheus_threshold_direction: item.prometheus_threshold_direction ?? 'higher',
+      show_updated_age: item.show_updated_age ?? false,
       display_order: item.display_order,
     });
     setQuickStatusStatus(null);
@@ -994,13 +1263,21 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
 
   const toQuickStatusPayload = (item: QuickStatusItem): Omit<QuickStatusItem, 'id'> => ({
     backend_id: item.backend_id,
+    project_id: item.project_id,
     label: item.label,
     metric_key: item.metric_key,
     mount_path: item.mount_path,
+    lower_warning_threshold: item.lower_warning_threshold,
+    lower_critical_threshold: item.lower_critical_threshold,
     warning_threshold: item.warning_threshold,
     critical_threshold: item.critical_threshold,
     ping_endpoint: item.ping_endpoint,
     ping_interval_seconds: item.ping_interval_seconds,
+    prometheus_url: item.prometheus_url,
+    prometheus_query: item.prometheus_query,
+    prometheus_interval_seconds: item.prometheus_interval_seconds,
+    prometheus_threshold_direction: item.prometheus_threshold_direction,
+    show_updated_age: item.show_updated_age ?? false,
     display_order: item.display_order,
   });
 
@@ -1015,21 +1292,22 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       return items;
     }
     const sourceItem = items[sourceIndex];
-    const backendItems = items.filter((item) => item.backend_id === sourceItem.backend_id);
-    const backendSourceIndex = backendItems.findIndex((item) => item.id === sourceId);
-    const backendTargetIndex = backendItems.findIndex((item) => item.id === targetId);
-    if (backendSourceIndex === -1 || backendTargetIndex === -1 || backendSourceIndex === backendTargetIndex) {
+    const groupKey = getQuickStatusGroupKey(sourceItem);
+    const groupedItems = items.filter((item) => getQuickStatusGroupKey(item) === groupKey);
+    const groupedSourceIndex = groupedItems.findIndex((item) => item.id === sourceId);
+    const groupedTargetIndex = groupedItems.findIndex((item) => item.id === targetId);
+    if (groupedSourceIndex === -1 || groupedTargetIndex === -1 || groupedSourceIndex === groupedTargetIndex) {
       return items;
     }
-    const reorderedBackendItems = [...backendItems];
-    const [moved] = reorderedBackendItems.splice(backendSourceIndex, 1);
-    reorderedBackendItems.splice(backendTargetIndex, 0, moved);
-    const reindexedBackendItems = reorderedBackendItems.map((item, idx) => ({ ...item, display_order: idx }));
+    const reorderedGroupedItems = [...groupedItems];
+    const [moved] = reorderedGroupedItems.splice(groupedSourceIndex, 1);
+    reorderedGroupedItems.splice(groupedTargetIndex, 0, moved);
+    const reindexedBackendItems = reorderedGroupedItems.map((item, idx) => ({ ...item, display_order: idx }));
     const byId = new Map(reindexedBackendItems.map((item) => [item.id, item]));
     return items.map((item) => byId.get(item.id) ?? item);
   };
 
-  const persistQuickStatusOrder = async (backendId: number, sourceId: number, targetId: number) => {
+  const persistQuickStatusOrder = async (backendId: string, sourceId: number, targetId: number) => {
     if (!isAdmin || quickStatusOrdering) {
       setQuickStatusDraggingId(null);
       return;
@@ -1043,12 +1321,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (!sourceItem || !targetItem) {
       return;
     }
-    if (sourceItem.backend_id !== targetItem.backend_id) {
-      setQuickStatusStatus('Reordering is limited to tiles from the same backend.');
+    if (getQuickStatusGroupKey(sourceItem) !== getQuickStatusGroupKey(targetItem)) {
+      setQuickStatusStatus('Reordering is limited to tiles from the same group.');
       return;
     }
-    if (sourceItem.backend_id !== backendId || targetItem.backend_id !== backendId) {
-      setQuickStatusStatus('Finish reordering the active server section first.');
+    if (getQuickStatusGroupKey(sourceItem) !== backendId || getQuickStatusGroupKey(targetItem) !== backendId) {
+      setQuickStatusStatus('Finish reordering the active tile group first.');
       return;
     }
     const previous = quickStatusItems;
@@ -1062,7 +1340,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     try {
       await Promise.all(
         reordered
-          .filter((item) => item.backend_id === backendId)
+          .filter((item) => getQuickStatusGroupKey(item) === backendId)
           .map((item) => updateQuickStatusItem(item.id, toQuickStatusPayload(item)))
       );
       const [refreshed, tiles] = await Promise.all([listQuickStatusItems(), fetchQuickStatusTiles()]);
@@ -1077,11 +1355,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     }
   };
 
-  const handleQuickStatusDrop = async (backendId: number, targetId: number) => {
+  const handleQuickStatusDrop = async (backendId: string, targetId: number) => {
     await persistQuickStatusOrder(backendId, quickStatusDraggingId, targetId);
   };
 
-  const handleQuickStatusTileTap = async (backendId: number, item: QuickStatusItem, tile: QuickStatusTile) => {
+  const handleQuickStatusTileTap = async (backendId: string, item: QuickStatusItem, tile: QuickStatusTile) => {
     if (quickStatusOrderingBackendId === backendId) {
       if (quickStatusSelectedMoveId === null) {
         setQuickStatusSelectedMoveId(item.id);
@@ -1102,7 +1380,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   };
 
   const handleQuickStatusShift = async (
-    backendId: number,
+    backendId: string,
     items: Array<{ item: QuickStatusItem; tile: QuickStatusTile }>,
     index: number,
     direction: 'earlier' | 'later'
@@ -1519,30 +1797,37 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     () => new Map(backends.map((backend) => [backend.id, backend.name])),
     [backends]
   );
+  const projectNameById = useMemo(
+    () => new Map(projects.map((project) => [project.id, project.name])),
+    [projects]
+  );
+  const getQuickStatusGroupName = (item: Pick<QuickStatusItem, 'backend_id' | 'project_id'>): string => {
+    if (item.backend_id !== null && item.backend_id !== undefined) {
+      return backendNameById.get(item.backend_id) ?? `Backend #${item.backend_id}`;
+    }
+    if (item.project_id !== null && item.project_id !== undefined) {
+      return projectNameById.get(item.project_id) ?? `Project #${item.project_id}`;
+    }
+    return 'Ungrouped';
+  };
 
   const quickStatusPreviewGroups = useMemo(() => {
-    const grouped = new Map<number, QuickStatusItem[]>();
+    const grouped = new Map<string, QuickStatusItem[]>();
     for (const item of quickStatusItems) {
-      const current = grouped.get(item.backend_id) ?? [];
+      const groupKey = getQuickStatusGroupKey(item);
+      const current = grouped.get(groupKey) ?? [];
       current.push(item);
-      grouped.set(item.backend_id, current);
+      grouped.set(groupKey, current);
     }
-    const orderedBackendIds = backends
-      .map((backend) => backend.id)
-      .filter((backendId) => grouped.has(backendId));
-    const extraBackendIds = Array.from(grouped.keys())
-      .filter((backendId) => !backendNameById.has(backendId))
-      .sort((a, b) => a - b);
-    return [...orderedBackendIds, ...extraBackendIds]
-      .map((backendId) => {
-        const backendName = backendNameById.get(backendId) ?? `Backend #${backendId}`;
-        const allItems = grouped.get(backendId) ?? [];
+    return Array.from(grouped.entries())
+      .map(([groupKey, allItems]) => {
         if (allItems.length === 0) {
           return null;
         }
+        const backendName = getQuickStatusGroupName(allItems[0]);
         const tileById = new Map(quickStatusTiles.map((tile) => [tile.id, tile]));
         return {
-          backendId,
+          backendId: groupKey,
           backendName,
           allItemsCount: allItems.length,
           filteredItemsCount: allItems.length,
@@ -1553,6 +1838,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               ({
                 id: item.id,
                 backend_id: item.backend_id,
+                project_id: item.project_id,
                 backend_display_order: 0,
                 backend_name: backendName,
                 label: item.label,
@@ -1560,33 +1846,35 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 value: null,
                 display_value: '—',
                 status: 'unknown',
+                stale: false,
+                show_updated_age: item.show_updated_age ?? false,
                 history: Array.from({ length: 12 }, () => 'unknown' as const),
                 details: null,
               } satisfies QuickStatusTile),
           })),
         };
       })
+      .sort((a, b) => {
+        if (!a || !b) {
+          return 0;
+        }
+        return a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
+      })
       .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [backends, backendNameById, quickStatusItems, quickStatusTiles]);
+  }, [backendNameById, projectNameById, quickStatusItems, quickStatusTiles]);
 
   const quickStatusListGroups = useMemo(() => {
     const search = quickStatusListSearch.trim().toLocaleLowerCase();
-    const grouped = new Map<number, QuickStatusItem[]>();
+    const grouped = new Map<string, QuickStatusItem[]>();
     for (const item of quickStatusItems) {
-      const current = grouped.get(item.backend_id) ?? [];
+      const groupKey = getQuickStatusGroupKey(item);
+      const current = grouped.get(groupKey) ?? [];
       current.push(item);
-      grouped.set(item.backend_id, current);
+      grouped.set(groupKey, current);
     }
-    const orderedBackendIds = backends
-      .map((backend) => backend.id)
-      .filter((backendId) => grouped.has(backendId));
-    const extraBackendIds = Array.from(grouped.keys())
-      .filter((backendId) => !backendNameById.has(backendId))
-      .sort((a, b) => a - b);
-    return [...orderedBackendIds, ...extraBackendIds]
-      .map((backendId) => {
-        const backendName = backendNameById.get(backendId) ?? `Backend #${backendId}`;
-        const allItems = grouped.get(backendId) ?? [];
+    return Array.from(grouped.entries())
+      .map(([groupKey, allItems]) => {
+        const backendName = allItems[0] ? getQuickStatusGroupName(allItems[0]) : 'Ungrouped';
         const matchesBackend = search.length > 0 && backendName.toLocaleLowerCase().includes(search);
         const filteredItems =
           search.length === 0 || matchesBackend
@@ -1595,7 +1883,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 const metricLabel =
                   quickStatusMetricOptions.find((option) => option.key === item.metric_key)?.label.toLocaleLowerCase() ??
                   item.metric_key.toLocaleLowerCase();
-                const haystack = [item.label, metricLabel, item.mount_path ?? '', item.ping_endpoint ?? '']
+                const haystack = [
+                  item.label,
+                  metricLabel,
+                  item.mount_path ?? '',
+                  item.ping_endpoint ?? '',
+                  item.prometheus_url ?? '',
+                  item.prometheus_query ?? '',
+                  item.project_id ? projectNameById.get(item.project_id) ?? '' : '',
+                ]
                   .join(' ')
                   .toLocaleLowerCase();
                 return haystack.includes(search);
@@ -1604,10 +1900,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
           return null;
         }
         const totalPages = Math.max(1, Math.ceil(filteredItems.length / QUICK_STATUS_PAGE_SIZE));
-        const currentPage = Math.min(quickStatusPageByBackend[backendId] ?? 1, totalPages);
+        const currentPage = Math.min(quickStatusPageByBackend[groupKey] ?? 1, totalPages);
         const start = (currentPage - 1) * QUICK_STATUS_PAGE_SIZE;
         return {
-          backendId,
+          backendId: groupKey,
           backendName,
           allItemsCount: allItems.length,
           filteredItemsCount: filteredItems.length,
@@ -1616,11 +1912,22 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
           items: filteredItems.slice(start, start + QUICK_STATUS_PAGE_SIZE),
         };
       })
+      .sort((a, b) => {
+        if (!a || !b) {
+          return 0;
+        }
+        return a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
+      })
       .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [backends, backendNameById, quickStatusItems, quickStatusListSearch, quickStatusPageByBackend]);
+  }, [backendNameById, projectNameById, quickStatusItems, quickStatusListSearch, quickStatusPageByBackend]);
 
   const quickStatusMetricMeta = quickStatusMetricOptions.find(
     (option) => option.key === quickStatusForm.metric_key
+  );
+  const quickStatusThresholdDirection = getQuickStatusThresholdDirection(
+    quickStatusForm.metric_key,
+    quickStatusMetricMeta?.thresholdDirection,
+    quickStatusForm.prometheus_threshold_direction
   );
 
   const quickStatusThresholdUnit = useMemo(() => {
@@ -1638,6 +1945,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     }
     if (quickStatusForm.metric_key === 'docker_container_count') {
       return 'count';
+    }
+    if (quickStatusForm.metric_key === 'prometheus_query') {
+      return '';
     }
     if (quickStatusForm.metric_key.endsWith('percent')) {
       return '%';
@@ -1941,6 +2251,102 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             </div>
           </section>
         )}
+        {activeSection === 'projects' && (
+          <section id="projects" className="d-flex flex-column gap-3">
+            <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <div>
+                <h5 className="mb-0">Projects</h5>
+                <p className="text-secondary small mb-0">Create menu tabs that hold their own custom quick tiles.</p>
+              </div>
+              {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
+            </div>
+            <div className="card bg-dark border border-secondary">
+              <div className="card-header border-secondary text-uppercase fw-semibold">Existing Projects</div>
+              <div className="card-body d-flex flex-column gap-3">
+                {projects.length === 0 ? (
+                  <div className="text-secondary small">No projects configured yet.</div>
+                ) : (
+                  projects.map((project) => {
+                    const tileCount = quickStatusItems.filter((item) => item.project_id === project.id).length;
+                    return (
+                      <div className="card-panel rounded-3 p-3 d-flex justify-content-between align-items-center gap-3 flex-wrap" key={project.id}>
+                        <div>
+                          <div className="fw-semibold">{project.name}</div>
+                          <div className="text-secondary small">
+                            Order {project.display_order} · {tileCount} {tileCount === 1 ? 'tile' : 'tiles'}
+                          </div>
+                        </div>
+                        <div className="d-flex gap-2">
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-light"
+                            onClick={() => handleProjectEdit(project)}
+                            disabled={!isAdmin}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-outline-danger"
+                            onClick={() => void handleProjectDelete(project)}
+                            disabled={!isAdmin}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+            <div className="card bg-dark border border-secondary">
+              <div className="card-header border-secondary text-uppercase fw-semibold">
+                {projectEditingId ? 'Edit project' : 'Add project'}
+              </div>
+              <div className="card-body">
+                <form className="d-flex flex-column gap-3" onSubmit={handleProjectSubmit}>
+                  <div className="row g-3">
+                    <div className="col-md-8">
+                      <label className="form-label">Project name</label>
+                      <input
+                        className="form-control bg-dark text-light border-secondary"
+                        value={projectForm.name}
+                        onChange={(event) => setProjectForm((prev) => ({ ...prev, name: event.target.value }))}
+                        placeholder="Infrastructure"
+                        required
+                      />
+                    </div>
+                    <div className="col-md-4">
+                      <label className="form-label">Display order</label>
+                      <input
+                        type="number"
+                        className="form-control bg-dark text-light border-secondary"
+                        value={projectForm.display_order}
+                        onChange={(event) =>
+                          setProjectForm((prev) => ({
+                            ...prev,
+                            display_order: event.target.value === '' ? '' : Number(event.target.value),
+                          }))
+                        }
+                        min={0}
+                      />
+                    </div>
+                  </div>
+                  <div className="d-flex gap-2 flex-wrap">
+                    <button className="btn btn-light text-dark" type="submit" disabled={!isAdmin}>
+                      {projectEditingId ? 'Save project' : 'Add project'}
+                    </button>
+                    <button className="btn btn-outline-light" type="button" onClick={resetProjectForm}>
+                      Reset
+                    </button>
+                    {projectStatus && <span className="text-secondary align-self-center">{projectStatus}</span>}
+                  </div>
+                </form>
+              </div>
+            </div>
+          </section>
+        )}
         {activeBackend &&
           renderBackendSection({
             title: `Backend settings: ${activeBackend.name}`,
@@ -2143,20 +2549,40 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         <>
                           {group.items.map((item) => {
                             const meta = quickStatusMetricOptions.find((option) => option.key === item.metric_key);
+                            const thresholdDirection = getQuickStatusThresholdDirection(
+                              item.metric_key,
+                              meta?.thresholdDirection,
+                              item.prometheus_threshold_direction ?? 'higher'
+                            );
                             const thresholdLabel =
                               meta?.requiresThresholds
-                                ? meta.thresholdDirection === 'range'
+                                ? meta?.supportsMinMaxBand &&
+                                  item.lower_warning_threshold !== null &&
+                                  item.lower_warning_threshold !== undefined &&
+                                  item.lower_critical_threshold !== null &&
+                                  item.lower_critical_threshold !== undefined
+                                  ? `Warn ≤ ${item.lower_warning_threshold} or ≥ ${item.warning_threshold} / Critical ≤ ${item.lower_critical_threshold} or ≥ ${item.critical_threshold}`
+                                  : thresholdDirection === 'range'
                                   ? item.warning_threshold === item.critical_threshold
                                     ? `Target containers: ${item.warning_threshold} (critical outside target)`
                                     : `Target containers: ${item.warning_threshold}-${item.critical_threshold} (critical outside range)`
-                                  : meta.thresholdDirection === 'lower'
+                                  : thresholdDirection === 'lower'
                                     ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
                                     : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
                                 : 'Status OK/Failed';
                             return (
                               <div className="d-flex flex-column gap-2" key={item.id}>
                                 <div className="card-panel rounded-3 p-3">
-                                  <div className="fw-semibold">{item.label}</div>
+                                  <div className="d-flex flex-wrap align-items-center gap-2">
+                                    <div className="fw-semibold">{item.label}</div>
+                                    {item.project_id ? (
+                                      <span className="badge bg-secondary-subtle text-secondary border border-secondary">
+                                        {projectNameById.get(item.project_id) ?? `Project #${item.project_id}`}
+                                      </span>
+                                    ) : (
+                                      <span className="badge bg-dark-subtle text-secondary border border-secondary">Global</span>
+                                    )}
+                                  </div>
                                   <div className="text-secondary small">{getQuickStatusMetricLabel(item.metric_key)}</div>
                                   <div className="text-secondary small">
                                     {thresholdLabel}
@@ -2164,10 +2590,18 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                     item.mount_path
                                       ? ` · ${item.mount_path}`
                                       : ''}
+                                    {item.backend_id == null ? ' · project-only tile' : ''}
                                     {meta?.requiresPing
                                       ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
                                       : ''}
+                                    {meta?.requiresPrometheus
+                                      ? ` · ${item.prometheus_url ?? 'URL missing'} · ${item.prometheus_interval_seconds ?? 60}s · ${item.prometheus_threshold_direction ?? 'higher'}`
+                                      : ''}
+                                    {item.show_updated_age ? ' · shows update age' : ''}
                                   </div>
+                                  {meta?.requiresPrometheus && item.prometheus_query ? (
+                                    <div className="text-secondary small text-break">{item.prometheus_query}</div>
+                                  ) : null}
                                 </div>
                                 <div className="d-flex gap-2">
                                   <button
@@ -2250,12 +2684,34 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             backend_id: event.target.value === '' ? '' : Number(event.target.value),
                           }))
                         }
-                        required
                       >
-                        <option value="">Select backend...</option>
+                        <option value="">No backend (project-only Prometheus tile)</option>
                         {backends.map((backend) => (
                           <option key={backend.id} value={backend.id}>
                             {backend.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="form-text text-secondary small">
+                        Required for monitor-backed metrics. Leave empty only for project-level Prometheus tiles.
+                      </div>
+                    </div>
+                    <div className="col-md-6">
+                      <label className="form-label">Project tab</label>
+                      <select
+                        className="form-select bg-dark text-light border-secondary"
+                        value={quickStatusForm.project_id}
+                        onChange={(event) =>
+                          setQuickStatusForm((prev) => ({
+                            ...prev,
+                            project_id: event.target.value === '' ? '' : Number(event.target.value),
+                          }))
+                        }
+                      >
+                        <option value="">Main Monitoring tab</option>
+                        {projects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {project.name}
                           </option>
                         ))}
                       </select>
@@ -2332,6 +2788,71 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         </div>
                       </>
                     )}
+                    {quickStatusMetricMeta?.requiresPrometheus && (
+                      <>
+                        <div className="col-12">
+                          <label className="form-label">Prometheus base URL</label>
+                          <input
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.prometheus_url}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({ ...prev, prometheus_url: event.target.value }))
+                            }
+                            placeholder="http://prometheus:9090"
+                            required
+                          />
+                          <div className="form-text text-secondary small">
+                            Base URL or full `/api/v1/query` endpoint. The query must return exactly one numeric value.
+                          </div>
+                        </div>
+                        <div className="col-12">
+                          <label className="form-label">Prometheus query</label>
+                          <textarea
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.prometheus_query}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({ ...prev, prometheus_query: event.target.value }))
+                            }
+                            rows={3}
+                            placeholder={'sum(rate(http_requests_total[5m]))'}
+                            required
+                          />
+                        </div>
+                        <div className="col-md-3">
+                          <label className="form-label">Threshold direction</label>
+                          <select
+                            className="form-select bg-dark text-light border-secondary"
+                            value={quickStatusForm.prometheus_threshold_direction}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({
+                                ...prev,
+                                prometheus_threshold_direction: event.target.value as PrometheusThresholdDirection,
+                              }))
+                            }
+                          >
+                            <option value="higher">Higher is worse</option>
+                            <option value="lower">Lower is worse</option>
+                          </select>
+                        </div>
+                        <div className="col-md-3">
+                          <label className="form-label">Refresh interval (sec)</label>
+                          <input
+                            type="number"
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.prometheus_interval_seconds}
+                            onChange={(event) =>
+                              setQuickStatusForm((prev) => ({
+                                ...prev,
+                                prometheus_interval_seconds: event.target.value === '' ? '' : Number(event.target.value),
+                              }))
+                            }
+                            min={5}
+                            required
+                          />
+                          <div className="form-text text-secondary small">Minimum 5 seconds.</div>
+                        </div>
+                      </>
+                    )}
                     <div className="col-md-6">
                       <label className="form-label">Label</label>
                       <input
@@ -2346,9 +2867,51 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     </div>
                     {quickStatusMetricMeta?.requiresThresholds && (
                       <>
+                        {quickStatusMetricMeta.supportsMinMaxBand && (
+                          <>
+                            <div className="col-md-3">
+                              <label className="form-label">
+                                Minimum warning{quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}
+                              </label>
+                              <input
+                                type="number"
+                                className="form-control bg-dark text-light border-secondary"
+                                value={quickStatusForm.lower_warning_threshold}
+                                onChange={(event) =>
+                                  setQuickStatusForm((prev) => ({
+                                    ...prev,
+                                    lower_warning_threshold: event.target.value === '' ? '' : Number(event.target.value),
+                                  }))
+                                }
+                                min={0}
+                                step="any"
+                              />
+                            </div>
+                            <div className="col-md-3">
+                              <label className="form-label">
+                                Minimum critical{quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}
+                              </label>
+                              <input
+                                type="number"
+                                className="form-control bg-dark text-light border-secondary"
+                                value={quickStatusForm.lower_critical_threshold}
+                                onChange={(event) =>
+                                  setQuickStatusForm((prev) => ({
+                                    ...prev,
+                                    lower_critical_threshold: event.target.value === '' ? '' : Number(event.target.value),
+                                  }))
+                                }
+                                min={0}
+                                step="any"
+                              />
+                            </div>
+                          </>
+                        )}
                         <div className="col-md-3">
                           <label className="form-label">
-                            {quickStatusMetricMeta.thresholdDirection === 'range'
+                            {quickStatusMetricMeta.supportsMinMaxBand
+                              ? `Maximum warning${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
+                              : quickStatusThresholdDirection === 'range'
                               ? `Minimum containers${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
                               : `Warning threshold${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`}
                           </label>
@@ -2369,7 +2932,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         </div>
                         <div className="col-md-3">
                           <label className="form-label">
-                            {quickStatusMetricMeta.thresholdDirection === 'range'
+                            {quickStatusMetricMeta.supportsMinMaxBand
+                              ? `Maximum critical${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
+                              : quickStatusThresholdDirection === 'range'
                               ? `Maximum containers${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
                               : `Critical threshold${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`}
                           </label>
@@ -2388,6 +2953,13 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             required
                           />
                         </div>
+                        {quickStatusMetricMeta.supportsMinMaxBand && (
+                          <div className="col-12">
+                            <div className="form-text text-secondary small">
+                              Leave the minimum fields empty for high-only alerts. Fill all four fields to alert when a temperature is too low or too high.
+                            </div>
+                          </div>
+                        )}
                       </>
                     )}
                     <div className="col-md-3">
@@ -2408,6 +2980,28 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         }}
                         min={0}
                       />
+                    </div>
+                    <div className="col-md-5 d-flex align-items-end">
+                      <div className="form-check">
+                        <input
+                          id="quick-status-show-updated"
+                          className="form-check-input"
+                          type="checkbox"
+                          checked={quickStatusForm.show_updated_age}
+                          onChange={(event) =>
+                            setQuickStatusForm((prev) => ({
+                              ...prev,
+                              show_updated_age: event.target.checked,
+                            }))
+                          }
+                        />
+                        <label className="form-check-label" htmlFor="quick-status-show-updated">
+                          Show last update age on the tile
+                        </label>
+                        <div className="form-text text-secondary small">
+                          Adds text like <code>upd: 12 minutes ago</code>. Off by default.
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <div className="d-flex gap-2 flex-wrap">

@@ -171,6 +171,40 @@ describe('Dashboard', () => {
     });
   });
 
+  it('requests project-scoped quick tiles when a project tab is active', async () => {
+    vi.mocked(fetchDashboard).mockResolvedValue([makeBackend({ id: 1, name: 'Alpha', display_order: 1 })]);
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({ id: 10, backend_id: 1, backend_display_order: 1, backend_name: 'Alpha' }),
+    ]);
+
+    render(<Dashboard canRefresh={false} mode="monitoring" projectId={7} />);
+
+    await waitFor(() => {
+      expect(fetchQuickStatusTiles).toHaveBeenCalledWith(7);
+    });
+  });
+
+  it('renders project-only quick tile groups without a backend assignment', async () => {
+    vi.mocked(fetchDashboard).mockResolvedValue([]);
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({
+        id: 10,
+        backend_id: null,
+        project_id: 7,
+        backend_name: 'Home',
+      }),
+    ]);
+
+    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" projectId={7} />);
+
+    await waitFor(() => {
+      const titles = Array.from(container.querySelectorAll('.quick-status-section__title')).map(
+        (node) => node.textContent
+      );
+      expect(titles).toEqual(['Home']);
+    });
+  });
+
   it('shows backend cards only in graphs view', async () => {
     vi.mocked(fetchDashboard).mockResolvedValue([makeBackend({ id: 1, name: 'Alpha', display_order: 1 })]);
     vi.mocked(fetchQuickStatusTiles).mockResolvedValue([

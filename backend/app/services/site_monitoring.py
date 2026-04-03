@@ -5,6 +5,7 @@ from contextlib import suppress
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import logging
 import re
 import time
 from typing import Iterable
@@ -23,6 +24,8 @@ from backend.app.schemas.site_monitoring import (
 from backend.app.services.http_clients import get_monitor_http_client
 from backend.app.services.system_settings import metric_retention_timedelta
 
+
+logger = logging.getLogger(__name__)
 
 _HISTORY_SEGMENT_COUNT = 48
 _HISTORY_SEGMENT_DURATION = timedelta(minutes=30)
@@ -498,8 +501,19 @@ async def refresh_due_site_monitor_samples(
         latest_sample = latest_samples.get(item.id)
         if not force and not _is_due(item, latest_sample, check_time):
             continue
-        result = await _run_site_check(item, check_time)
-        persisted_sample = await _persist_site_sample(session, item, result, latest_sample)
+        try:
+            result = await _run_site_check(item, check_time)
+            persisted_sample = await _persist_site_sample(session, item, result, latest_sample)
+        except Exception:
+            await session.rollback()
+            logger.exception(
+                "Site monitor check failed during polling tick: id=%s name=%r check_type=%s target=%r",
+                item.id,
+                item.name,
+                item.check_type,
+                item.target,
+            )
+            continue
         if persisted_sample is not None:
             latest_samples[item.id] = persisted_sample
     return latest_samples
