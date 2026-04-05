@@ -11,6 +11,7 @@ from telegram.ext import Application, ApplicationBuilder, CommandHandler, Contex
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
+from backend.app.core.logging import configure_logging
 from backend.app.db.session import async_session_factory
 from backend.app.services.monitor_client import MonitorClientError, request_monitor_reboot
 from backend.app.services.reboot_service import request_reboot
@@ -257,6 +258,7 @@ def build_application() -> Application:
 
 
 def main() -> None:
+    configure_logging(service_name="telegram-bot", level=settings.log_level)
     app = build_application()
     app.run_polling()
 

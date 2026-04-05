@@ -51,14 +51,20 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
   return {
     id: overrides.id ?? 1,
     backend_id: overrides.backend_id ?? 1,
+    project_id: overrides.project_id ?? null,
     backend_display_order: overrides.backend_display_order ?? 1,
     backend_name: overrides.backend_name ?? 'Backend',
     label: overrides.label ?? 'Disk',
     metric_key: overrides.metric_key ?? 'disk_usage_percent',
+    display_variant: overrides.display_variant ?? 'tile',
     value: overrides.value ?? 42,
     display_value: overrides.display_value ?? '42%',
     status: overrides.status ?? 'ok',
     history: overrides.history ?? Array.from({ length: 12 }, () => 'ok' as const),
+    series: overrides.series ?? [],
+    series_summary: overrides.series_summary ?? null,
+    highlights: overrides.highlights ?? [],
+    breakdown: overrides.breakdown ?? [],
     reported_at: overrides.reported_at ?? '2024-01-01T00:00:00Z',
   };
 }
@@ -222,6 +228,50 @@ describe('Dashboard', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('backend-card')).toBeInTheDocument();
+    });
+  });
+
+  it('renders wide grid items for Prometheus graph cards in monitoring view', async () => {
+    vi.mocked(fetchDashboard).mockResolvedValue([]);
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({
+        id: 15,
+        backend_id: null,
+        project_id: 7,
+        backend_name: 'Home',
+        metric_key: 'prometheus_query',
+        display_variant: 'graph',
+        series: [
+          { recorded_at: '2024-01-01T00:00:00Z', value: 10 },
+          { recorded_at: '2024-01-01T12:00:00Z', value: 14 },
+        ],
+        series_summary: {
+          min_value: 10,
+          max_value: 14,
+          average_value: 12,
+          delta_value: 4,
+        },
+      }),
+      makeQuickStatusTile({
+        id: 16,
+        backend_id: null,
+        project_id: 7,
+        backend_name: 'Home',
+        metric_key: 'prometheus_query',
+        display_variant: 'self_monitoring',
+        display_value: '2.4k req/h',
+        series: [
+          { recorded_at: '2024-01-01T00:00:00Z', value: 1200 },
+          { recorded_at: '2024-01-01T12:00:00Z', value: 2400 },
+        ],
+        highlights: [{ label: 'Backend', value: '1.7k req/h', severity: 'info' }],
+      }),
+    ]);
+
+    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" projectId={7} />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll('.quick-status-grid__item--wide')).toHaveLength(2);
     });
   });
 });

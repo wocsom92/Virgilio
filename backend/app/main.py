@@ -1,19 +1,22 @@
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.config import settings
+from backend.app.core.logging import bind_request_handler, bind_request_user_id, reset_request_handler, reset_request_user_id
 from backend.app.db.session import async_session_factory, engine
 from backend.app.models.base import Base
 from backend.app.routers import auth, backends, dashboard, metrics, notifications, telegram
 from backend.app.routers import system
 from backend.app.services.backend_poller import BackendPoller
+from backend.app.services.http_metrics import install_http_metrics
 from backend.app.services.http_clients import close_http_clients
 from backend.app.version import BACKEND_VERSION
 from backend.app.services.reboot_service import notify_reboot_recovery
 from backend.app.db.schema_compat import ensure_schema_compat
+from backend.app.services.self_monitoring import ensure_self_monitoring_project
 
 
 poller = BackendPoller(async_session_factory)
@@ -26,6 +29,11 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_schema_compat)
+    async with async_session_factory() as session:
+        try:
+            await ensure_self_monitoring_project(session)
+        except Exception as exc:  # pragma: no cover - startup resilience
+            logger.warning("Self-monitoring project bootstrap failed during startup: %s", exc)
     await poller.start()
     async with async_session_factory() as session:
         try:
@@ -41,6 +49,17 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     application = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+    install_http_metrics(application, service_name="backend")
+
+    @application.middleware("http")
+    async def bind_log_handler(request: Request, call_next):
+        handler_token = bind_request_handler(f"{request.method} {request.url.path}")
+        user_id_token = bind_request_user_id(None)
+        try:
+            return await call_next(request)
+        finally:
+            reset_request_user_id(user_id_token)
+            reset_request_handler(handler_token)
 
     allow_origins = settings.cors_allow_origins
     if allow_origins:

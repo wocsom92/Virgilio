@@ -78,6 +78,34 @@ def test_format_value_for_mount_available_gb():
     assert quick_status._format_value("mount_available_gb", 0.25) == "256 MiB"
 
 
+def test_format_item_value_for_prometheus_units_and_humidity_variant():
+    humidity_item = QuickStatusItem(
+        label="Humidity",
+        metric_key="prometheus_query",
+        warning_threshold=55,
+        critical_threshold=60,
+        lower_warning_threshold=40,
+        lower_critical_threshold=35,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query="room_humidity_percent",
+        display_variant="humidity",
+        display_unit="%",
+    )
+    graph_item = QuickStatusItem(
+        label="Latency",
+        metric_key="prometheus_query",
+        warning_threshold=150,
+        critical_threshold=300,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query="http_latency_ms",
+        display_variant="graph",
+        display_unit="ms",
+    )
+
+    assert quick_status._format_item_value(humidity_item, 48.6) == "49%"
+    assert quick_status._format_item_value(graph_item, 123.4) == "123.4ms"
+
+
 def test_resolve_status_for_ssh_metrics():
     assert quick_status._resolve_status(None, 0, 0, "ssh_last_successful_login") == "unknown"
     assert quick_status._resolve_status(0, 0, 0, "ssh_last_successful_login") == "ok"
@@ -184,6 +212,54 @@ def test_reference_stale_after_thirty_minutes():
 
     assert quick_status._is_reference_stale(reported_at, now=reported_at + timedelta(minutes=30)) is False
     assert quick_status._is_reference_stale(reported_at, now=reported_at + timedelta(minutes=31)) is True
+
+
+def test_build_prometheus_series_points_pads_window_and_marks_gaps():
+    window_start = datetime(2026, 4, 2, 12, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=24)
+    samples = [
+        QuickStatusPrometheusSample(
+            quick_status_item_id=1,
+            checked_at=window_start + timedelta(hours=1),
+            sampled_at=window_start + timedelta(hours=1),
+            value=45.0,
+        ),
+        QuickStatusPrometheusSample(
+            quick_status_item_id=1,
+            checked_at=window_start + timedelta(hours=2),
+            sampled_at=window_start + timedelta(hours=2),
+            value=46.0,
+        ),
+        QuickStatusPrometheusSample(
+            quick_status_item_id=1,
+            checked_at=window_start + timedelta(hours=6),
+            sampled_at=window_start + timedelta(hours=6),
+            value=49.0,
+        ),
+    ]
+
+    points = quick_status._build_prometheus_series_points(
+        samples,
+        window_start,
+        window_end,
+        interval_seconds=3600,
+    )
+
+    assert [(point.recorded_at, point.value) for point in points] == [
+        (window_start, None),
+        (window_start + timedelta(hours=1), 45.0),
+        (window_start + timedelta(hours=2), 46.0),
+        (window_start + timedelta(hours=6), None),
+        (window_start + timedelta(hours=6), 49.0),
+        (window_end, None),
+    ]
+
+    summary = quick_status._build_prometheus_series_summary(points)
+    assert summary is not None
+    assert summary.min_value == 45.0
+    assert summary.max_value == 49.0
+    assert summary.average_value == pytest.approx((45.0 + 46.0 + 49.0) / 3)
+    assert summary.delta_value == pytest.approx(4.0)
 
 
 @pytest.mark.asyncio
@@ -664,7 +740,7 @@ async def test_build_quick_status_tiles_queries_prometheus_and_persists_history(
     assert any('Query: sum(rate(http_requests_total{status=~"5.."}[5m]))' == line.text for line in tiles[0].details)
     assert len(samples) == 1
     assert samples[0].value == pytest.approx(12.4)
-    assert samples[0].sampled_at == datetime(2026, 3, 28, 11, 59, tzinfo=timezone.utc)
+    assert quick_status._coerce_utc(samples[0].sampled_at) == datetime(2026, 3, 28, 11, 59, tzinfo=timezone.utc)
     assert samples[0].error_message is None
 
 
@@ -830,3 +906,66 @@ async def test_build_quick_status_tiles_aggregates_stored_prometheus_history(db_
     assert tiles[0].history == ["ok"] * 11 + ["critical"]
     assert tiles[0].display_value == "4"
     assert tiles[0].status == "ok"
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tiles_includes_prometheus_series_for_temperature_items(db_session, monkeypatch):
+    item = QuickStatusItem(
+        label="Room temperature",
+        metric_key="prometheus_query",
+        display_variant="temperature",
+        lower_warning_threshold=18,
+        lower_critical_threshold=16,
+        warning_threshold=26,
+        critical_threshold=28,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query="room_temperature_celsius",
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.flush()
+
+    now = datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc)
+    db_session.add_all(
+        [
+            QuickStatusPrometheusSample(
+                quick_status_item_id=item.id,
+                checked_at=now - timedelta(hours=3),
+                sampled_at=now - timedelta(hours=3),
+                value=21.5,
+            ),
+            QuickStatusPrometheusSample(
+                quick_status_item_id=item.id,
+                checked_at=now - timedelta(hours=1),
+                sampled_at=now - timedelta(hours=1),
+                value=23.0,
+            ),
+        ]
+    )
+    await db_session.flush()
+
+    async def fake_check_prometheus(*args, **kwargs):
+        return (
+            quick_status.PrometheusCheckResult(
+                checked_at=now,
+                sampled_at=now,
+                value=22.4,
+            ),
+            None,
+        )
+
+    monkeypatch.setattr(quick_status, "_check_prometheus", fake_check_prometheus)
+
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
+
+    assert len(tiles) == 1
+    tile = tiles[0]
+    assert tile.display_variant == "temperature"
+    assert tile.display_value == "22.4 °C"
+    assert tile.series[0].recorded_at == now - timedelta(hours=24)
+    assert tile.series[0].value is None
+    assert [point.value for point in tile.series if point.value is not None] == [21.5, 23.0, 22.4]
+    assert tile.series_summary is not None
+    assert tile.series_summary.min_value == 21.5
+    assert tile.series_summary.max_value == 23.0
+    assert tile.series_summary.delta_value == pytest.approx(0.9)

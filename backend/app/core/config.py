@@ -18,6 +18,8 @@ class Settings(BaseSettings):
 
     app_name: str = "Server Monitor API"
     debug: bool = False
+    log_level: str = "INFO"
+    log_service: str = "backend"
 
     # MySQL connection options
     db_user: str = "root"

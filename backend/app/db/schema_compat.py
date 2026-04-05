@@ -97,6 +97,15 @@ def ensure_schema_compat(connection: Connection) -> None:
                     "ADD COLUMN show_updated_age BOOLEAN NOT NULL DEFAULT FALSE"
                 )
             )
+        if "display_variant" not in columns:
+            connection.execute(
+                text(
+                    "ALTER TABLE quick_status_items "
+                    "ADD COLUMN display_variant VARCHAR(24) NOT NULL DEFAULT 'tile'"
+                )
+            )
+        if "display_unit" not in columns:
+            connection.execute(text("ALTER TABLE quick_status_items ADD COLUMN display_unit VARCHAR(16) NULL"))
     if not inspector.has_table("quick_status_ping_samples"):
         connection.execute(
             text(

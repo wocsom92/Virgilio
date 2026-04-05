@@ -3,10 +3,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import hmac
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 
+from monitor.app.http_metrics import install_http_metrics
 from monitor.app import metrics, ping
 from monitor.app.config import settings
+from monitor.app.logging import bind_request_handler, reset_request_handler
 from monitor.app.schemas import MetricPayload, MetricResponse, PingResponse
 from monitor.app.storage import repository
 
@@ -28,6 +30,15 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     application = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+    install_http_metrics(application, service_name="monitor")
+
+    @application.middleware("http")
+    async def bind_log_handler(request: Request, call_next):
+        token = bind_request_handler(f"{request.method} {request.url.path}")
+        try:
+            return await call_next(request)
+        finally:
+            reset_request_handler(token)
 
     @application.get("/healthz", tags=["meta"])
     async def health() -> dict[str, str]:  # pragma: no cover - simple endpoint

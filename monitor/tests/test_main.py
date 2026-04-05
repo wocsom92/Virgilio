@@ -126,3 +126,17 @@ def test_ping_endpoint_returns_payload(monkeypatch, client):
     assert payload["target"] == "1.1.1.1"
     assert payload["success"] is True
     assert payload["latency_ms"] == 12.5
+
+
+def test_prometheus_endpoint_exposes_monitor_request_counter(client):
+    test_client, _ = client
+
+    health_response = test_client.get("/healthz")
+    metrics_response = test_client.get("/prometheus")
+
+    assert health_response.status_code == 200
+    assert metrics_response.status_code == 200
+    assert (
+        'server_monitor_http_requests_total{handler="/healthz",method="GET",service="monitor",status_class="2xx",status_code="200"}'
+        in metrics_response.text
+    )

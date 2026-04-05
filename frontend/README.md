@@ -6,6 +6,7 @@ React + Vite dashboard for the monitoring suite. It handles bootstrap/login, bac
 
 - Auth flow for bootstrap admin, login, and persistent current-session state.
 - Dashboard views for backend health, metrics charts, warnings, and quick status tiles.
+- Temperature/humidity graph cards remain visible for flat or sparse 24-hour Prometheus series instead of appearing blank.
 - Admin UI for monitored backends, users, Telegram settings, notification history, and retention/session settings.
 - Notification center with unread counter, Telegram delivery fallback inbox, and severity badges aligned with tile colors.
 - Responsive quick-tile layout, including the `HB` heartbeat freshness tile, a 12-segment 24-hour history strip under each overview tile, and tighter sizing on desktop without changing the mobile/iPhone presentation.

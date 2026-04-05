@@ -92,6 +92,11 @@ if [[ -z "${monitor_port}" ]]; then
 fi
 monitor_token="$(read_env_value "${ENV_FILE}" "MONITOR_API_TOKEN" || true)"
 monitor_token="${monitor_token:-monitor-token}"
+compose_profiles="$(read_env_value "${ENV_FILE}" "COMPOSE_PROFILES" || true)"
+elasticsearch_port="$(read_env_value "${ENV_FILE}" "ELASTICSEARCH_PORT" || true)"
+elasticsearch_port="${elasticsearch_port:-9200}"
+kibana_port="$(read_env_value "${ENV_FILE}" "KIBANA_PORT" || true)"
+kibana_port="${kibana_port:-5601}"
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
@@ -146,6 +151,10 @@ if [[ "${PROFILE}" == "full" ]]; then
   http_check "backend-auth-status" "http://127.0.0.1:${backend_port}/auth/status" "200"
   http_check "frontend-root" "http://127.0.0.1:5173/" "200"
   http_check "frontend-api-health" "http://127.0.0.1:5173/api/healthz" "200"
+  if [[ ",${compose_profiles}," == *",logs,"* ]]; then
+    http_check "elasticsearch-health" "http://127.0.0.1:${elasticsearch_port}/_cluster/health?wait_for_status=yellow&timeout=1s" "200"
+    http_check "kibana-status" "http://127.0.0.1:${kibana_port}/status" "200"
+  fi
 fi
 
 http_check "monitor-health" "http://127.0.0.1:${monitor_port}/healthz" "200"

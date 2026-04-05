@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: mysql:8.0
@@ -30,6 +28,7 @@ services:
         condition: service_healthy
     environment:
       SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG}
+      SERVER_MONITOR_LOG_LEVEL: ${SERVER_MONITOR_LOG_LEVEL:-INFO}
       SERVER_MONITOR_DB_USER: ${SERVER_MONITOR_DB_USER}
       SERVER_MONITOR_DB_PASSWORD: ${SERVER_MONITOR_DB_PASSWORD}
       SERVER_MONITOR_DB_HOST: ${SERVER_MONITOR_DB_HOST}
@@ -47,6 +46,8 @@ services:
       SERVER_MONITOR_REBOOT_COMMAND: "${SERVER_MONITOR_REBOOT_COMMAND:-/sbin/shutdown -r now}"
     ports:
       - "${SERVER_MONITOR_PORT:-28000}:8000"
+    labels:
+      co.elastic.logs/enabled: "true"
     volumes:
       - type: bind
         source: ${MONITOR_HOST_ROOT_SOURCE:-./docker/monitor/host-root-placeholder}
@@ -64,6 +65,7 @@ services:
     restart: unless-stopped
     environment:
       MONITOR_DEBUG: ${MONITOR_DEBUG}
+      MONITOR_LOG_LEVEL: ${MONITOR_LOG_LEVEL:-INFO}
       MONITOR_API_TOKEN: ${MONITOR_API_TOKEN}
       MONITOR_MOUNTED_POINTS: '${MONITOR_MOUNTED_POINTS:-["auto"]}'
       MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS: ${MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS:-false}
@@ -75,6 +77,8 @@ services:
       MONITOR_REBOOT_COMMAND: "${MONITOR_REBOOT_COMMAND:-/sbin/shutdown -r now}"
     ports:
       - "${MONITOR_PORT:-29000}:9000"
+    labels:
+      co.elastic.logs/enabled: "true"
     volumes:
       - type: bind
         source: ${MONITOR_HOST_ROOT_SOURCE:-./docker/monitor/host-root-placeholder}
@@ -93,6 +97,8 @@ services:
       - backend
     ports:
       - "5173:80"
+    labels:
+      co.elastic.logs/enabled: "true"
 
   telegram-bot:
     build:
@@ -107,6 +113,7 @@ services:
     command: ["python", "-m", "backend.app.bot.polling"]
     environment:
       SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG}
+      SERVER_MONITOR_LOG_LEVEL: ${SERVER_MONITOR_LOG_LEVEL:-INFO}
       SERVER_MONITOR_DB_USER: ${SERVER_MONITOR_DB_USER}
       SERVER_MONITOR_DB_PASSWORD: ${SERVER_MONITOR_DB_PASSWORD}
       SERVER_MONITOR_DB_HOST: ${SERVER_MONITOR_DB_HOST}
@@ -116,8 +123,72 @@ services:
       SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID: ${SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID}
       SERVER_MONITOR_TELEGRAM_PROXY_URL: ${SERVER_MONITOR_TELEGRAM_PROXY_URL:-}
       SERVER_MONITOR_TELEGRAM_ALLOWED_USERS: ${SERVER_MONITOR_TELEGRAM_ALLOWED_USERS}
+    labels:
+      co.elastic.logs/enabled: "true"
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: server-monitor-prometheus
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - monitor
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_STACK_VERSION:-9.3.1}
+    container_name: server-monitor-elasticsearch
+    profiles: ["logs"]
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      ES_JAVA_OPTS: "${ELASTICSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}"
+    ports:
+      - "${ELASTICSEARCH_PORT:-9200}:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_STACK_VERSION:-9.3.1}
+    container_name: server-monitor-kibana
+    profiles: ["logs"]
+    restart: unless-stopped
+    depends_on:
+      - elasticsearch
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      NODE_OPTIONS: "${KIBANA_NODE_OPTIONS:---max-old-space-size=384}"
+      XPACK_SECURITY_ENABLED: "false"
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_ENCRYPTION_KEY:-server-monitor-kibana-key-32chars}
+    ports:
+      - "${KIBANA_PORT:-5601}:5601"
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:${ELASTIC_STACK_VERSION:-9.3.1}
+    container_name: server-monitor-filebeat
+    user: root
+    profiles: ["logs"]
+    restart: unless-stopped
+    depends_on:
+      - elasticsearch
+    command: ["filebeat", "-e", "--strict.perms=false"]
+    volumes:
+      - ./docker/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - filebeat-data:/usr/share/filebeat/data
+
 volumes:
   mysql-data:
+  prometheus-data:
+  elasticsearch-data:
+  filebeat-data:

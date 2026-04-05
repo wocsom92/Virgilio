@@ -26,6 +26,7 @@ QuickStatusMetricKey = Literal[
 ]
 
 PrometheusThresholdDirection = Literal["higher", "lower"]
+QuickStatusDisplayVariant = Literal["tile", "graph", "temperature", "humidity", "self_monitoring"]
 
 SUPPORTED_QUICK_STATUS_METRIC_KEYS: set[str] = {
     "disk_usage_percent",
@@ -77,6 +78,8 @@ class QuickStatusItemBase(BaseModel):
     prometheus_query: str | None = Field(default=None, min_length=1)
     prometheus_interval_seconds: int = Field(default=60, ge=5, le=86_400)
     prometheus_threshold_direction: PrometheusThresholdDirection = "higher"
+    display_variant: QuickStatusDisplayVariant = "tile"
+    display_unit: str | None = Field(default=None, max_length=16)
     show_updated_age: bool = False
     display_order: int = Field(default=0, ge=0)
 
@@ -106,6 +109,13 @@ class QuickStatusItemBase(BaseModel):
             self.prometheus_query = None
             self.prometheus_interval_seconds = 60
             self.prometheus_threshold_direction = "higher"
+
+        if self.display_variant != "tile" and self.metric_key not in _PROMETHEUS_METRICS:
+            raise ValueError("graph, temperature, humidity, and self-monitoring items are supported only for Prometheus metrics")
+        if self.display_unit is not None:
+            self.display_unit = self.display_unit.strip() or None
+        if self.display_variant == "humidity" and not self.display_unit:
+            self.display_unit = "%"
 
         if self.metric_key in _BAND_THRESHOLD_METRICS:
             has_lower_thresholds = self.lower_warning_threshold is not None or self.lower_critical_threshold is not None
@@ -167,6 +177,24 @@ class QuickStatusDetailLine(BaseModel):
     severity: Literal["ok", "warn", "critical"]
 
 
+class QuickStatusSeriesPoint(BaseModel):
+    recorded_at: datetime
+    value: float | None = None
+
+
+class QuickStatusSeriesSummary(BaseModel):
+    min_value: float | None = None
+    max_value: float | None = None
+    average_value: float | None = None
+    delta_value: float | None = None
+
+
+class QuickStatusCardDatum(BaseModel):
+    label: str = Field(..., min_length=1, max_length=120)
+    value: str = Field(..., min_length=1, max_length=120)
+    severity: Literal["ok", "info", "warn", "critical"] = "ok"
+
+
 class QuickStatusTileRead(BaseModel):
     id: int
     backend_id: int | None = None
@@ -175,11 +203,17 @@ class QuickStatusTileRead(BaseModel):
     backend_name: str
     label: str
     metric_key: QuickStatusMetricKey
+    display_variant: QuickStatusDisplayVariant = "tile"
+    display_unit: str | None = None
     value: float | None
     display_value: str
     status: Literal["ok", "info", "warn", "critical", "unknown"]
     stale: bool = False
     show_updated_age: bool = False
     history: list[Literal["ok", "info", "warn", "critical", "unknown"]] = Field(default_factory=list)
+    series: list[QuickStatusSeriesPoint] = Field(default_factory=list)
+    series_summary: QuickStatusSeriesSummary | None = None
+    highlights: list[QuickStatusCardDatum] = Field(default_factory=list)
+    breakdown: list[QuickStatusCardDatum] = Field(default_factory=list)
     reported_at: datetime | None = None
     details: list[QuickStatusDetailLine] | None = None

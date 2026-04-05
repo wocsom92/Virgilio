@@ -125,6 +125,8 @@ class QuickStatusItem(TimestampMixin, Base):
     prometheus_query: Mapped[str | None] = mapped_column(Text)
     prometheus_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     prometheus_threshold_direction: Mapped[str] = mapped_column(String(16), nullable=False, default="higher")
+    display_variant: Mapped[str] = mapped_column(String(24), nullable=False, default="tile")
+    display_unit: Mapped[str | None] = mapped_column(String(16), nullable=True)
     show_updated_age: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_notified_status: Mapped[str | None] = mapped_column(String(16), nullable=True)

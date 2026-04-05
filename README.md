@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `6.0.3`
+Current version: `7.0.1`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -37,10 +37,13 @@ Component docs:
 - Time-range charts (`hourly`, `daily`, `weekly`) with previous/next window navigation.
 - Reboot markers on charts (detected from uptime resets).
 - Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
+- Temperature and humidity graph cards stay visible even when Prometheus sensor history is flat or only has isolated samples, which fixes Raspberry Pi climate cards that previously looked empty.
 - Projects can expose separate sidebar tabs, each with its own project-scoped quick tiles.
 - Quick status tiles now include a 24-hour history strip with hourly segments under each square tile.
 - Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
 - Prometheus quick-status tiles can query any Prometheus instant expression that returns exactly one numeric sample, with configurable refresh cadence and higher-is-worse or lower-is-worse thresholds.
+- Full-stack Compose now includes an internal Prometheus service that scrapes the `backend` and `monitor` APIs at `/prometheus`.
+- A default `Self-monitoring` project tab is auto-created on startup and shows backend/monitor API call totals plus last-hour `200`, `4xx`, and `5xx` response counts.
 - Dedicated Site Monitoring view with ping and HTTP checks, 48 half-hour status rectangles per site for the last 24 hours, and admin-managed timeout and failure thresholds.
 - Site Monitoring checks support ping reachability or HTTP GET validation with expected status codes and optional response-text matching.
 - Site Monitoring rows are compact by default for mobile/iPhone layouts and reveal check type, target, status text, response value, and last-check details on click.
@@ -94,6 +97,7 @@ Common optional values:
 
 - `SERVER_MONITOR_ALLOW_HOST_REBOOT`
 - `SERVER_MONITOR_REBOOT_COMMAND`
+- `SERVER_MONITOR_LOG_LEVEL`
 - `SERVER_MONITOR_TELEGRAM_PROXY_URL`
 - `MONITOR_MOUNTED_POINTS`
 - `MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS`
@@ -103,6 +107,7 @@ Common optional values:
 - `MONITOR_HISTORY_MAX_ENTRIES`
 - `MONITOR_ALLOW_HOST_REBOOT`
 - `MONITOR_REBOOT_COMMAND`
+- `MONITOR_LOG_LEVEL`
 - `VITE_API_BASE_URL`
 
 Notes:
@@ -114,6 +119,27 @@ Notes:
 - SSH quick status checks require host filesystem bind mount (set `MONITOR_HOST_ROOT_SOURCE=/` and keep `MONITOR_HOST_ROOT_TARGET=/hostfs`).
 - Set `SERVER_MONITOR_TELEGRAM_PROXY_URL` when Telegram should egress through a local HTTP proxy such as Xray on `http://host.docker.internal:10809`.
 - HTTP site-monitor targets entered as bare hostnames like `telegram.org` are stored as `https://telegram.org`.
+- The full-stack deployment now includes Prometheus automatically. Self-monitoring project cards query it through the internal Compose URL `http://prometheus:9090`.
+- Backend, monitor, and Telegram bot containers now emit structured JSON logs to stdout. Frontend Nginx access logs are also written as JSON.
+
+### Raspberry Pi log stack
+
+To enable Elasticsearch + Kibana + Filebeat on the Raspberry Pi target, set these values in the deployed env file:
+
+- `COMPOSE_PROFILES=logs`
+- `ELASTIC_STACK_VERSION=9.3.1`
+- `ELASTICSEARCH_PORT=9200`
+- `ELASTICSEARCH_LOG_RETENTION_DAYS=7`
+- `KIBANA_PORT=5601`
+- `ELASTICSEARCH_JAVA_OPTS=-Xms512m -Xmx512m`
+- `KIBANA_NODE_OPTIONS=--max-old-space-size=384`
+
+Behavior:
+
+- Filebeat only harvests containers labeled with `co.elastic.logs/enabled=true`.
+- Those logs are stored in a dedicated daily Elasticsearch index family: `server-monitor-logs-*`.
+- Deploys apply an Elasticsearch ILM policy that deletes server-monitor log backing indices after `ELASTICSEARCH_LOG_RETENTION_DAYS` days.
+- In Kibana, create a data view for `server-monitor-logs-*` and use `@timestamp` as the time field.
 
 ### Monitor-only (`docker-compose.monitor.yml`)
 
@@ -196,6 +222,7 @@ Behavior summary:
 
 - `full` profile deploys backend + frontend + monitor + compose files.
 - `monitor-only` profile deploys monitor + monitor compose files.
+- If the target env file includes `COMPOSE_PROFILES=logs`, the full deployment also starts Elasticsearch, Kibana, and Filebeat.
 - `managed` purge mode removes only managed files in deploy path.
 - `full` purge mode removes entire deploy path before upload.
 - After a successful deployment, the script runs `sudo docker system prune -f` on the remote host.

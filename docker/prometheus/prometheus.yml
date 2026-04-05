@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: server-monitor-backend
+    metrics_path: /prometheus
+    static_configs:
+      - targets:
+          - backend:8000
+        labels:
+          service: backend
+
+  - job_name: server-monitor-monitor
+    metrics_path: /prometheus
+    static_configs:
+      - targets:
+          - monitor:9000
+        labels:
+          service: monitor

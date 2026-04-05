@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
+from backend.app.core.logging import set_request_user_id
 from backend.app.db.session import get_session
 from backend.app.models.users import User, UserRole
 
@@ -62,11 +63,15 @@ async def _get_current_user(token: str, session: AsyncSession) -> User:
 
 
 async def get_current_user(
+    request: Request,
     token: str = Depends(oauth2_scheme),
     session: AsyncSession = Depends(get_session),
 ) -> User:
     """Return the authenticated user or raise 401."""
-    return await _get_current_user(token, session)
+    user = await _get_current_user(token, session)
+    request.state.authenticated_user_id = user.id
+    set_request_user_id(user.id)
+    return user
 
 
 async def require_admin_user(current_user: User = Depends(get_current_user)) -> User:

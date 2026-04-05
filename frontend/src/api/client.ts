@@ -265,6 +265,7 @@ export type QuickStatusMetricKey =
   | 'prometheus_query';
 
 export type PrometheusThresholdDirection = 'higher' | 'lower';
+export type QuickStatusDisplayVariant = 'tile' | 'graph' | 'temperature' | 'humidity' | 'self_monitoring';
 
 export interface QuickStatusItem {
   id: number;
@@ -283,6 +284,8 @@ export interface QuickStatusItem {
   prometheus_query?: string | null;
   prometheus_interval_seconds?: number | null;
   prometheus_threshold_direction?: PrometheusThresholdDirection | null;
+  display_variant?: QuickStatusDisplayVariant;
+  display_unit?: string | null;
   show_updated_age?: boolean;
   display_order: number;
 }
@@ -290,6 +293,24 @@ export interface QuickStatusItem {
 export interface QuickStatusDetailLine {
   text: string;
   severity: 'ok' | 'warn' | 'critical';
+}
+
+export interface QuickStatusSeriesPoint {
+  recorded_at: string;
+  value: number | null;
+}
+
+export interface QuickStatusSeriesSummary {
+  min_value?: number | null;
+  max_value?: number | null;
+  average_value?: number | null;
+  delta_value?: number | null;
+}
+
+export interface QuickStatusCardDatum {
+  label: string;
+  value: string;
+  severity: 'ok' | 'info' | 'warn' | 'critical';
 }
 
 export interface QuickStatusTile {
@@ -300,12 +321,18 @@ export interface QuickStatusTile {
   backend_name: string;
   label: string;
   metric_key: QuickStatusMetricKey;
+  display_variant?: QuickStatusDisplayVariant;
+  display_unit?: string | null;
   value?: number | null;
   display_value: string;
   status: StatusLevel;
   stale?: boolean;
   show_updated_age?: boolean;
   history: StatusLevel[];
+  series?: QuickStatusSeriesPoint[];
+  series_summary?: QuickStatusSeriesSummary | null;
+  highlights?: QuickStatusCardDatum[];
+  breakdown?: QuickStatusCardDatum[];
   reported_at?: string | null;
   details?: QuickStatusDetailLine[] | null;
 }

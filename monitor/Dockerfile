@@ -27,4 +27,4 @@ COPY monitor/app /app/monitor/app
 
 EXPOSE 9000
 
-CMD ["uvicorn", "monitor.app.main:app", "--host", "0.0.0.0", "--port", "9000"]
+CMD ["python", "-m", "monitor.app.run"]

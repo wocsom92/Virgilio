@@ -3,7 +3,7 @@ import { fetchDashboard, fetchQuickStatusTiles, MonitoredBackend, QuickStatusTil
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { getUserFacingErrorMessage } from '../utils/errors';
 import { BackendCard } from './BackendCard';
-import { QuickStatusTileCard } from './QuickStatusTileCard';
+import { QuickStatusItemCard } from './QuickStatusItemCard';
 
 interface DashboardProps {
   canRefresh: boolean;
@@ -165,6 +165,10 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
   const isMonitoringView = mode === 'monitoring';
   const isProjectView = isMonitoringView && projectId !== null;
   const shouldShowDashboardError = !isMonitoringView || quickStatusGroups.length === 0;
+  const getGridItemClassName = (variant: QuickStatusTile['display_variant']) =>
+    variant === 'graph' || variant === 'temperature' || variant === 'humidity' || variant === 'self_monitoring'
+      ? 'quick-status-grid__item quick-status-grid__item--wide'
+      : 'quick-status-grid__item';
 
   return (
     <div className="d-flex flex-column gap-4">
@@ -199,13 +203,13 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
                   <div className="quick-status-section__header">
                     <h3 className="quick-status-section__title">{group.backendName}</h3>
                     <span className="quick-status-section__count">
-                      {group.items.length} {group.items.length === 1 ? 'tile' : 'tiles'}
+                      {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
                     </span>
                   </div>
                   <div className="quick-status-grid">
                     {group.items.map((tile) => (
-                      <div className="quick-status-grid__item" key={tile.id}>
-                        <QuickStatusTileCard
+                      <div className={getGridItemClassName(tile.display_variant)} key={tile.id}>
+                        <QuickStatusItemCard
                           tile={tile}
                           onClick={
                             tile.details && tile.details.length > 0

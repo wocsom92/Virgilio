@@ -275,6 +275,7 @@ if [[ "${PROFILE}" == "full" ]]; then
     backend
     frontend
     monitor
+    scripts/configure_logs_retention.sh
     scripts/post_deploy_check.sh
     docker
     docker-compose.yml
@@ -285,6 +286,7 @@ if [[ "${PROFILE}" == "full" ]]; then
 else
   profile_items=(
     monitor
+    scripts/configure_logs_retention.sh
     scripts/post_deploy_check.sh
     docker
     docker-compose.monitor.yml
@@ -463,6 +465,11 @@ if [[ "${TARGET_SMOKE_CHECK}" == "true" ]]; then
   run_ssh "cd \"${DEPLOY_PATH}\" && chmod +x scripts/post_deploy_check.sh && ./scripts/post_deploy_check.sh --profile \"${PROFILE}\" --env-file \"${TARGET_REMOTE_ENV_NAME}\""
 else
   log "Skipping post-deploy smoke checks (TARGET_${TARGET}_SMOKE_CHECK=false)."
+fi
+
+if [[ "${PROFILE}" == "full" ]]; then
+  log "Configuring Elasticsearch log retention on remote host..."
+  run_ssh "cd \"${DEPLOY_PATH}\" && chmod +x scripts/configure_logs_retention.sh && ./scripts/configure_logs_retention.sh --env-file \"${TARGET_REMOTE_ENV_NAME}\""
 fi
 
 log "Pruning unused Docker resources on remote host..."

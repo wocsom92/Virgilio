@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- Added built-in Prometheus scraping for the local `backend` and `monitor` services, including exported HTTP request counters by service, route, status code, and status class.
+- Added an auto-seeded `Self-monitoring` project tab with graph cards for backend/monitor API call volume and last-hour `200`, `4xx`, and `5xx` response totals.
+
+### Changed
+- Prometheus dashboard cards now support explicit display units such as `%`, including a dedicated humidity-card style and visible low/high/current value labels on the embedded 24-hour graphs.
+
+## [7.0.1] - 2026-04-05
+
+### Fixed
+- Temperature and humidity quick-status graph cards now stay visible when the 24-hour series is flat or contains only isolated samples, which fixes Raspberry Pi sensor cards that looked empty despite valid Prometheus data.
+
+### Changed
+- Project version updated from `7.0.0` to `7.0.1` across backend, frontend, monitor, README, package metadata, changelog, and displayed UI version constants.
+
+## [7.0.0] - 2026-04-03
+
+### Added
+- Monitoring and project dashboards now support mixed overview items in one grid, combining `1x1` quick tiles with wide `4x2` Prometheus graph cards in the same backend or project section.
+- Prometheus overview items now expose persisted 24-hour series data, summary statistics, and a dedicated temperature-card variant tuned for room/apartment climate tracking.
+
+### Changed
+- Admin quick-status configuration now lets Prometheus items choose between quick-tile, graph-card, and temperature-card display styles instead of treating all overview items as square tiles.
+- Prometheus cache keys now include endpoint/query identity, and heartbeat-history aggregation now models freshness windows correctly instead of overstating stale time.
+- Project version updated from `6.0.3` to `7.0.0` across backend, frontend, monitor, deployment env, README, package metadata, changelog, and displayed UI version constants.
+
+### Added
 - Quick status tiles can now query Prometheus instant metrics through the Prometheus HTTP API, with configurable thresholds, threshold direction, refresh interval, and persisted 24-hour tile history.
 - Projects can now be created as separate sidebar tabs, and each project can have its own configured quick-status tile set independent from the main Monitoring tab.
 

@@ -10,6 +10,7 @@ import {
   AuthUser,
   AuthRole,
   PrometheusThresholdDirection,
+  QuickStatusDisplayVariant,
   QuickStatusItem,
   QuickStatusMetricKey,
   QuickStatusTile,
@@ -45,7 +46,7 @@ import {
   rebootBackendHost,
 } from '../api/client';
 import { DEFAULT_BACKEND_VERSION, DEFAULT_MONITOR_VERSION, FRONTEND_VERSION } from '../constants/versions';
-import { QuickStatusTileCard } from './QuickStatusTileCard';
+import { QuickStatusItemCard } from './QuickStatusItemCard';
 import { SiteMonitoringAdmin } from './SiteMonitoringAdmin';
 import { formatBinaryBytes } from '../utils/formatting';
 import { getUserFacingErrorMessage } from '../utils/errors';
@@ -304,11 +305,11 @@ const metricOptionKeys = new Set(metricOptions.map((option) => option.key));
 const extraSelectedKeys = ['network_interfaces'];
 const ADMIN_SECTIONS = [
   { id: 'manage-backends', label: 'Manage backends', description: 'Create, edit, and order monitored servers.' },
-  { id: 'projects', label: 'Projects', description: 'Create project tabs and assign custom quick tiles.' },
+  { id: 'projects', label: 'Projects', description: 'Create project tabs and assign custom dashboard items.' },
   {
     id: 'quick-status',
-    label: 'Quick status tiles',
-    description: 'Configure the overview status tiles shown on the dashboard.',
+    label: 'Dashboard items',
+    description: 'Configure square quick tiles and Prometheus graph cards shown on the dashboard.',
   },
   {
     id: 'site-monitoring',
@@ -467,6 +468,8 @@ type QuickStatusFormState = {
   project_id: number | '';
   label: string;
   metric_key: QuickStatusMetricKey;
+  display_variant: QuickStatusDisplayVariant;
+  display_unit: string;
   mount_path: string;
   lower_warning_threshold: number | '';
   lower_critical_threshold: number | '';
@@ -482,15 +485,50 @@ type QuickStatusFormState = {
   display_order: number | '';
 };
 
-const defaultQuickStatusThresholds = (metric: QuickStatusMetricKey) => {
+const defaultQuickStatusThresholds = (
+  metric: QuickStatusMetricKey,
+  displayVariant: QuickStatusDisplayVariant = 'tile'
+) => {
+  if (metric === 'prometheus_query' && displayVariant === 'temperature') {
+    return {
+      warning: 26,
+      critical: 28,
+      lowerWarning: 18,
+      lowerCritical: 16,
+    };
+  }
+  if (metric === 'prometheus_query' && displayVariant === 'humidity') {
+    return {
+      warning: 55,
+      critical: 60,
+      lowerWarning: 40,
+      lowerCritical: 35,
+    };
+  }
   const match = quickStatusMetricOptions.find((option) => option.key === metric);
   return match
-    ? { warning: match.defaultWarning, critical: match.defaultCritical }
-    : { warning: 80, critical: 90 };
+    ? { warning: match.defaultWarning, critical: match.defaultCritical, lowerWarning: null, lowerCritical: null }
+    : { warning: 80, critical: 90, lowerWarning: null, lowerCritical: null };
 };
 
-const defaultQuickStatusLabel = (metric: QuickStatusMetricKey): string =>
-  quickStatusMetricOptions.find((option) => option.key === metric)?.label ?? metric;
+const defaultQuickStatusLabel = (
+  metric: QuickStatusMetricKey,
+  displayVariant: QuickStatusDisplayVariant = 'tile'
+): string => {
+  if (metric === 'prometheus_query' && displayVariant === 'temperature') {
+    return 'Room temperature';
+  }
+  if (metric === 'prometheus_query' && displayVariant === 'humidity') {
+    return 'Room humidity';
+  }
+  if (metric === 'prometheus_query' && displayVariant === 'graph') {
+    return 'Prometheus graph';
+  }
+  if (metric === 'prometheus_query' && displayVariant === 'self_monitoring') {
+    return 'Self-monitoring card';
+  }
+  return quickStatusMetricOptions.find((option) => option.key === metric)?.label ?? metric;
+};
 
 const getQuickStatusThresholdDirection = (
   metric: QuickStatusMetricKey,
@@ -536,11 +574,13 @@ const createQuickStatusForm = (): QuickStatusFormState => {
   return {
     backend_id: '',
     project_id: '',
-    label: defaultQuickStatusLabel(metricKey),
+    label: defaultQuickStatusLabel(metricKey, 'tile'),
     metric_key: metricKey,
+    display_variant: 'tile',
+    display_unit: '',
     mount_path: '',
-    lower_warning_threshold: '',
-    lower_critical_threshold: '',
+    lower_warning_threshold: defaults.lowerWarning ?? '',
+    lower_critical_threshold: defaults.lowerCritical ?? '',
     warning_threshold: defaults.warning,
     critical_threshold: defaults.critical,
     ping_endpoint: '',
@@ -1061,19 +1101,39 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   };
 
   const handleQuickStatusMetricChange = (metric: QuickStatusMetricKey) => {
-    const defaults = defaultQuickStatusThresholds(metric);
     const option = quickStatusMetricOptions.find((item) => item.key === metric);
     setQuickStatusForm((prev) => {
-      const previousDefaultLabel = defaultQuickStatusLabel(prev.metric_key);
-      const nextDefaultLabel = defaultQuickStatusLabel(metric);
+      const nextDisplayVariant = option?.requiresPrometheus ? prev.display_variant : 'tile';
+      const defaults = defaultQuickStatusThresholds(metric, nextDisplayVariant);
+      const previousDefaultLabel = defaultQuickStatusLabel(prev.metric_key, prev.display_variant);
+      const nextDefaultLabel = defaultQuickStatusLabel(metric, nextDisplayVariant);
       const shouldAutoFillLabel = !prev.label.trim() || prev.label === previousDefaultLabel;
       return {
         ...prev,
         label: shouldAutoFillLabel ? nextDefaultLabel : prev.label,
         metric_key: metric,
+        display_variant: nextDisplayVariant,
+        display_unit:
+          metric === 'prometheus_query'
+            ? nextDisplayVariant === 'temperature'
+              ? '°C'
+              : nextDisplayVariant === 'humidity'
+                ? '%'
+                : prev.display_unit
+            : '',
         mount_path: '',
-        lower_warning_threshold: option?.supportsMinMaxBand ? prev.lower_warning_threshold : '',
-        lower_critical_threshold: option?.supportsMinMaxBand ? prev.lower_critical_threshold : '',
+        lower_warning_threshold:
+          option?.supportsMinMaxBand && nextDisplayVariant === 'temperature'
+            ? defaults.lowerWarning ?? ''
+            : option?.supportsMinMaxBand
+              ? prev.lower_warning_threshold
+              : '',
+        lower_critical_threshold:
+          option?.supportsMinMaxBand && nextDisplayVariant === 'temperature'
+            ? defaults.lowerCritical ?? ''
+            : option?.supportsMinMaxBand
+              ? prev.lower_critical_threshold
+              : '',
         warning_threshold: defaults.warning,
         critical_threshold: defaults.critical,
         ping_endpoint: option?.requiresPing ? prev.ping_endpoint : '',
@@ -1082,6 +1142,34 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         prometheus_query: option?.requiresPrometheus ? prev.prometheus_query : '',
         prometheus_interval_seconds: option?.requiresPrometheus ? prev.prometheus_interval_seconds : 60,
         prometheus_threshold_direction: option?.requiresPrometheus ? prev.prometheus_threshold_direction : 'higher',
+      };
+    });
+  };
+
+  const handleQuickStatusDisplayVariantChange = (displayVariant: QuickStatusDisplayVariant) => {
+    setQuickStatusForm((prev) => {
+      const nextDisplayVariant = prev.metric_key === 'prometheus_query' ? displayVariant : 'tile';
+      const defaults = defaultQuickStatusThresholds(prev.metric_key, nextDisplayVariant);
+      const previousDefaultLabel = defaultQuickStatusLabel(prev.metric_key, prev.display_variant);
+      const nextDefaultLabel = defaultQuickStatusLabel(prev.metric_key, nextDisplayVariant);
+      const shouldAutoFillLabel = !prev.label.trim() || prev.label === previousDefaultLabel;
+      return {
+        ...prev,
+        label: shouldAutoFillLabel ? nextDefaultLabel : prev.label,
+        display_variant: nextDisplayVariant,
+        display_unit:
+          nextDisplayVariant === 'temperature'
+            ? '°C'
+            : nextDisplayVariant === 'humidity'
+              ? '%'
+              : prev.display_unit,
+        prometheus_threshold_direction: nextDisplayVariant === 'temperature' ? 'higher' : prev.prometheus_threshold_direction,
+        lower_warning_threshold:
+          nextDisplayVariant === 'temperature' ? defaults.lowerWarning ?? '' : '',
+        lower_critical_threshold:
+          nextDisplayVariant === 'temperature' ? defaults.lowerCritical ?? '' : '',
+        warning_threshold: defaults.warning,
+        critical_threshold: defaults.critical,
       };
     });
   };
@@ -1104,11 +1192,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       return;
     }
     if (quickStatusForm.backend_id === '' && quickStatusForm.project_id === '') {
-      setQuickStatusStatus('Select a backend or assign the tile to a project.');
+      setQuickStatusStatus('Select a backend or assign the item to a project.');
       return;
     }
     if (quickStatusForm.backend_id === '' && quickStatusForm.metric_key !== 'prometheus_query') {
-      setQuickStatusStatus('Backend-free tiles are supported only for Prometheus tiles.');
+      setQuickStatusStatus('Backend-free items are supported only for Prometheus metrics.');
       return;
     }
     if (metricMeta?.requiresThresholds) {
@@ -1174,6 +1262,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       project_id: quickStatusForm.project_id === '' ? null : Number(quickStatusForm.project_id),
       label: quickStatusForm.label.trim(),
       metric_key: quickStatusForm.metric_key,
+      display_variant: quickStatusForm.metric_key === 'prometheus_query' ? quickStatusForm.display_variant : 'tile',
+      display_unit:
+        metricMeta?.requiresPrometheus && quickStatusForm.display_unit.trim()
+          ? quickStatusForm.display_unit.trim()
+          : null,
       mount_path:
         quickStatusForm.metric_key === 'mount_used_percent' || quickStatusForm.metric_key === 'mount_available_gb'
           ? quickStatusForm.mount_path.trim()
@@ -1208,16 +1301,16 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setQuickStatusItems((prev) =>
           sortQuickStatusItems(prev.map((item) => (item.id === updated.id ? updated : item)))
         );
-        setQuickStatusStatus('Quick status tile updated.');
+        setQuickStatusStatus('Dashboard item updated.');
       } else {
         const created = await createQuickStatusItem(payload);
         setQuickStatusItems((prev) => sortQuickStatusItems([...prev, created]));
-        setQuickStatusStatus('Quick status tile added.');
+        setQuickStatusStatus('Dashboard item added.');
       }
       setQuickStatusTiles(await fetchQuickStatusTiles());
       resetQuickStatusForm({ keepStatus: true });
     } catch (err) {
-      setQuickStatusStatus(extractErrorMessage(err, 'Could not save the quick tile. Review the form and try again.'));
+      setQuickStatusStatus(extractErrorMessage(err, 'Could not save the dashboard item. Review the form and try again.'));
     }
   };
 
@@ -1228,6 +1321,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       project_id: item.project_id ?? '',
       label: item.label,
       metric_key: item.metric_key,
+      display_variant: item.display_variant ?? 'tile',
+      display_unit: item.display_unit ?? '',
       mount_path: item.mount_path ?? '',
       lower_warning_threshold: item.lower_warning_threshold ?? '',
       lower_critical_threshold: item.lower_critical_threshold ?? '',
@@ -1257,7 +1352,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         resetQuickStatusForm();
       }
     } catch (err) {
-      setQuickStatusStatus(extractErrorMessage(err, 'Could not delete the quick tile. Try again.'));
+      setQuickStatusStatus(extractErrorMessage(err, 'Could not delete the dashboard item. Try again.'));
     }
   };
 
@@ -1266,6 +1361,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     project_id: item.project_id,
     label: item.label,
     metric_key: item.metric_key,
+    display_variant: item.display_variant ?? 'tile',
+    display_unit: item.display_unit ?? null,
     mount_path: item.mount_path,
     lower_warning_threshold: item.lower_warning_threshold,
     lower_critical_threshold: item.lower_critical_threshold,
@@ -1843,12 +1940,16 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 backend_name: backendName,
                 label: item.label,
                 metric_key: item.metric_key,
+                display_variant: item.display_variant ?? 'tile',
+                display_unit: item.display_unit ?? null,
                 value: null,
                 display_value: '—',
                 status: 'unknown',
                 stale: false,
                 show_updated_age: item.show_updated_age ?? false,
                 history: Array.from({ length: 12 }, () => 'unknown' as const),
+                series: [],
+                series_summary: null,
                 details: null,
               } satisfies QuickStatusTile),
           })),
@@ -1924,6 +2025,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const quickStatusMetricMeta = quickStatusMetricOptions.find(
     (option) => option.key === quickStatusForm.metric_key
   );
+  const quickStatusUsesTemperatureBand =
+    quickStatusForm.metric_key === 'prometheus_query' && quickStatusForm.display_variant === 'temperature';
+  const quickStatusUsesHumidityBand =
+    quickStatusForm.metric_key === 'prometheus_query' && quickStatusForm.display_variant === 'humidity';
   const quickStatusThresholdDirection = getQuickStatusThresholdDirection(
     quickStatusForm.metric_key,
     quickStatusMetricMeta?.thresholdDirection,
@@ -1946,6 +2051,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     if (quickStatusForm.metric_key === 'docker_container_count') {
       return 'count';
     }
+    if (quickStatusUsesTemperatureBand) {
+      return '°C';
+    }
+    if (quickStatusUsesHumidityBand) {
+      return '%';
+    }
     if (quickStatusForm.metric_key === 'prometheus_query') {
       return '';
     }
@@ -1953,7 +2064,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       return '%';
     }
     return '';
-  }, [quickStatusForm.metric_key]);
+  }, [quickStatusForm.metric_key, quickStatusUsesHumidityBand, quickStatusUsesTemperatureBand]);
 
   const handleTelegramSave = async (event: FormEvent) => {
     event.preventDefault();
@@ -2357,8 +2468,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
           <section id="quick-status" className="d-flex flex-column gap-3">
             <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
               <div>
-                <h5 className="mb-0">Quick status tiles</h5>
-                <p className="text-secondary small mb-0">Add fast-glance tiles to the dashboard overview.</p>
+                <h5 className="mb-0">Dashboard items</h5>
+                <p className="text-secondary small mb-0">Mix square quick tiles with wide Prometheus graph cards.</p>
               </div>
               {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
             </div>
@@ -2367,12 +2478,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               <div className="card-body d-flex flex-column gap-3">
                 {isAdmin && quickStatusItems.length > 1 && (
                   <div className="text-secondary small">
-                    Use the server-level edit button to reorder tiles. Desktop supports drag and drop; on iPhone or
-                    other touch devices, tap one tile and then tap its destination.
+                    Use the server-level edit button to reorder items. Desktop supports drag and drop; on iPhone or
+                    other touch devices, tap one item and then tap its destination.
                   </div>
                 )}
                 {quickStatusItems.length === 0 ? (
-                  <div className="text-secondary small">No quick status tiles configured yet.</div>
+                  <div className="text-secondary small">No dashboard items configured yet.</div>
                 ) : (
                   quickStatusPreviewGroups.map((group) => (
                     <section className="quick-status-section" key={group.backendId}>
@@ -2382,7 +2493,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           <span className="quick-status-section__count">
                             {group.filteredItemsCount}
                             {group.filteredItemsCount !== group.allItemsCount ? ` / ${group.allItemsCount}` : ''}{' '}
-                            {group.filteredItemsCount === 1 ? 'tile' : 'tiles'}
+                            {group.filteredItemsCount === 1 ? 'item' : 'items'}
                           </span>
                           {isAdmin && (
                             <button
@@ -2407,14 +2518,24 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       {quickStatusOrderingBackendId === group.backendId && (
                         <div className="text-secondary small">
                           {quickStatusSelectedMoveId === null
-                            ? 'Reorder mode: drag a tile or tap one tile and then tap where it should move.'
-                            : 'Tile selected. Tap the destination tile to move it there.'}
+                            ? 'Reorder mode: drag an item or tap one item and then tap where it should move.'
+                            : 'Item selected. Tap the destination item to move it there.'}
                         </div>
                       )}
                       <div className="quick-status-grid">
                         {group.items.map(({ item, tile }, index) => (
-                          <div className="quick-status-grid__item" key={item.id}>
-                            <QuickStatusTileCard
+                          <div
+                            className={
+                              tile.display_variant === 'graph' ||
+                              tile.display_variant === 'temperature' ||
+                              tile.display_variant === 'humidity' ||
+                              tile.display_variant === 'self_monitoring'
+                                ? 'quick-status-grid__item quick-status-grid__item--wide'
+                                : 'quick-status-grid__item'
+                            }
+                            key={item.id}
+                          >
+                            <QuickStatusItemCard
                               tile={tile}
                               dragging={quickStatusDraggingId === item.id || quickStatusSelectedMoveId === item.id}
                               draggable={isAdmin && !quickStatusOrdering && quickStatusOrderingBackendId === group.backendId}
@@ -2468,7 +2589,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         return (
                           <div className="quick-status-detail card-panel rounded-4 p-3">
                             <div className="text-uppercase card-panel__heading fw-semibold mb-2">
-                              Tile details
+                              Item details
                             </div>
                             <ul className="mb-0 small quick-status-detail__list">
                               {selectedPreviewTile.details.map((line) => (
@@ -2495,11 +2616,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               </div>
             </div>
             <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Existing Tiles</div>
+              <div className="card-header border-secondary text-uppercase fw-semibold">Existing Items</div>
               <div className="card-body d-flex flex-column gap-3">
                 <div className="d-flex flex-column flex-lg-row gap-2 justify-content-between align-items-lg-center">
                   <div className="text-secondary small">
-                    Search tiles by server, label, metric, mount path, or ping target.
+                    Search items by server, label, metric, mount path, or ping target.
                   </div>
                   <input
                     className="form-control bg-dark text-light border-secondary"
@@ -2509,13 +2630,13 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       setQuickStatusListSearch(event.target.value);
                       setQuickStatusPageByBackend({});
                     }}
-                    placeholder="Search quick status tiles"
+                    placeholder="Search dashboard items"
                   />
                 </div>
                 {quickStatusItems.length === 0 ? (
-                  <div className="text-secondary small">No quick status tiles configured yet.</div>
+                  <div className="text-secondary small">No dashboard items configured yet.</div>
                 ) : quickStatusListGroups.length === 0 ? (
-                  <div className="text-secondary small">No quick status tiles match the current search.</div>
+                  <div className="text-secondary small">No dashboard items match the current search.</div>
                 ) : (
                   quickStatusListGroups.map((group) => (
                     <div key={`list-${group.backendId}`} className="rounded-3 border border-secondary p-3 d-flex flex-column gap-3">
@@ -2534,7 +2655,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           <span className="badge bg-secondary-subtle text-secondary border border-secondary">
                             {group.filteredItemsCount}
                             {group.filteredItemsCount !== group.allItemsCount ? ` / ${group.allItemsCount}` : ''}{' '}
-                            {group.filteredItemsCount === 1 ? 'tile' : 'tiles'}
+                            {group.filteredItemsCount === 1 ? 'item' : 'items'}
                           </span>
                           <span>
                             {quickStatusListSearch.trim()
@@ -2585,12 +2706,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                   </div>
                                   <div className="text-secondary small">{getQuickStatusMetricLabel(item.metric_key)}</div>
                                   <div className="text-secondary small">
+                                    {item.display_variant && item.display_variant !== 'tile'
+                                      ? `${item.display_variant} card · `
+                                      : 'quick tile · '}
                                     {thresholdLabel}
                                     {(item.metric_key === 'mount_used_percent' || item.metric_key === 'mount_available_gb') &&
                                     item.mount_path
                                       ? ` · ${item.mount_path}`
                                       : ''}
-                                    {item.backend_id == null ? ' · project-only tile' : ''}
+                                    {item.backend_id == null ? ' · project-only item' : ''}
                                     {meta?.requiresPing
                                       ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
                                       : ''}
@@ -2668,7 +2792,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             </div>
             <div className="card bg-dark border border-secondary">
               <div className="card-header border-secondary text-uppercase fw-semibold">
-                {quickStatusEditingId ? 'Edit quick status tile' : 'Add quick status tile'}
+                {quickStatusEditingId ? 'Edit dashboard item' : 'Add dashboard item'}
               </div>
               <div className="card-body">
                 <form className="d-flex flex-column gap-3" onSubmit={handleQuickStatusSubmit}>
@@ -2685,7 +2809,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           }))
                         }
                       >
-                        <option value="">No backend (project-only Prometheus tile)</option>
+                        <option value="">No backend (project-only Prometheus item)</option>
                         {backends.map((backend) => (
                           <option key={backend.id} value={backend.id}>
                             {backend.name}
@@ -2693,7 +2817,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         ))}
                       </select>
                       <div className="form-text text-secondary small">
-                        Required for monitor-backed metrics. Leave empty only for project-level Prometheus tiles.
+                        Required for monitor-backed metrics. Leave empty only for project-level Prometheus items.
                       </div>
                     </div>
                     <div className="col-md-6">
@@ -2735,6 +2859,27 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         {quickStatusMetricOptions.find((option) => option.key === quickStatusForm.metric_key)?.helper}
                       </div>
                     </div>
+                    {quickStatusMetricMeta?.requiresPrometheus && (
+                      <div className="col-md-6">
+                        <label className="form-label">Display style</label>
+                        <select
+                          className="form-select bg-dark text-light border-secondary"
+                          value={quickStatusForm.display_variant}
+                          onChange={(event) =>
+                            handleQuickStatusDisplayVariantChange(event.target.value as QuickStatusDisplayVariant)
+                          }
+                        >
+                          <option value="tile">Quick tile (1x1)</option>
+                          <option value="graph">Graph card (4x2)</option>
+                          <option value="temperature">Temperature card (4x2)</option>
+                          <option value="humidity">Humidity card (4x2)</option>
+                          <option value="self_monitoring">Self-monitoring card (4x2)</option>
+                        </select>
+                        <div className="form-text text-secondary small">
+                          Temperature and humidity cards use comfort bands. Self-monitoring cards use a Kibana-style summary layout.
+                        </div>
+                      </div>
+                    )}
                     {(quickStatusForm.metric_key === 'mount_used_percent' ||
                       quickStatusForm.metric_key === 'mount_available_gb') && (
                       <div className="col-12">
@@ -2819,21 +2964,43 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           />
                         </div>
                         <div className="col-md-3">
-                          <label className="form-label">Threshold direction</label>
-                          <select
-                            className="form-select bg-dark text-light border-secondary"
-                            value={quickStatusForm.prometheus_threshold_direction}
+                          <label className="form-label">Display unit</label>
+                          <input
+                            className="form-control bg-dark text-light border-secondary"
+                            value={quickStatusForm.display_unit}
                             onChange={(event) =>
-                              setQuickStatusForm((prev) => ({
-                                ...prev,
-                                prometheus_threshold_direction: event.target.value as PrometheusThresholdDirection,
-                              }))
+                              setQuickStatusForm((prev) => ({ ...prev, display_unit: event.target.value }))
                             }
-                          >
-                            <option value="higher">Higher is worse</option>
-                            <option value="lower">Lower is worse</option>
-                          </select>
+                            placeholder="% / °C / ms"
+                          />
                         </div>
+                        {quickStatusForm.display_variant !== 'temperature' && quickStatusForm.display_variant !== 'humidity' ? (
+                          <div className="col-md-3">
+                            <label className="form-label">Threshold direction</label>
+                            <select
+                              className="form-select bg-dark text-light border-secondary"
+                              value={quickStatusForm.prometheus_threshold_direction}
+                              onChange={(event) =>
+                                setQuickStatusForm((prev) => ({
+                                  ...prev,
+                                  prometheus_threshold_direction: event.target.value as PrometheusThresholdDirection,
+                                }))
+                              }
+                            >
+                              <option value="higher">Higher is worse</option>
+                              <option value="lower">Lower is worse</option>
+                            </select>
+                          </div>
+                        ) : (
+                          <div className="col-md-3">
+                            <label className="form-label">
+                              {quickStatusForm.display_variant === 'humidity' ? 'Humidity band' : 'Temperature band'}
+                            </label>
+                            <div className="form-control bg-dark text-light border-secondary d-flex align-items-center">
+                              Comfort range
+                            </div>
+                          </div>
+                        )}
                         <div className="col-md-3">
                           <label className="form-label">Refresh interval (sec)</label>
                           <input
@@ -3006,7 +3173,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   </div>
                   <div className="d-flex gap-2 flex-wrap">
                     <button className="btn btn-light text-dark" type="submit" disabled={!isAdmin}>
-                      {quickStatusEditingId ? 'Save tile' : 'Add tile'}
+                      {quickStatusEditingId ? 'Save item' : 'Add item'}
                     </button>
                     <button className="btn btn-outline-light" type="button" onClick={resetQuickStatusForm}>
                       Reset

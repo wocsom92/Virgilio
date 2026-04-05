@@ -31,8 +31,10 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Backend Monitor"
-    version: str = "6.0.3"
+    version: str = "7.0.1"
     debug: bool = False
+    log_level: str = "INFO"
+    log_service: str = "monitor"
 
     api_token: str = "monitor-token"
     expose_docker_running_containers: bool = False
