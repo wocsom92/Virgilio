@@ -15,10 +15,10 @@ Lightweight FastAPI agent that runs on a monitored host, collects local metrics 
 ## Main entrypoints
 
 - App: `monitor.app.main:app`
-- Config: [monitor/app/config.py](/Users/martin/code/server_monitor/monitor/app/config.py)
-- Metrics collection: [monitor/app/metrics.py](/Users/martin/code/server_monitor/monitor/app/metrics.py)
-- Storage: [monitor/app/storage.py](/Users/martin/code/server_monitor/monitor/app/storage.py)
-- Docker image: [monitor/Dockerfile](/Users/martin/code/server_monitor/monitor/Dockerfile)
+- Config: [monitor/app/config.py](app/config.py)
+- Metrics collection: [monitor/app/metrics.py](app/metrics.py)
+- Storage: [monitor/app/storage.py](app/storage.py)
+- Docker image: [monitor/Dockerfile](Dockerfile)
 
 ## API surface
 
@@ -96,7 +96,7 @@ pytest -q monitor/tests
 
 ## Code layout
 
-- [monitor/app/main.py](/Users/martin/code/server_monitor/monitor/app/main.py): routes and token verification
-- [monitor/app/metrics.py](/Users/martin/code/server_monitor/monitor/app/metrics.py): host metric collection and reboot handling
-- [monitor/app/storage.py](/Users/martin/code/server_monitor/monitor/app/storage.py): in-memory history repository
-- [monitor/app/schemas.py](/Users/martin/code/server_monitor/monitor/app/schemas.py): API models
+- [monitor/app/main.py](app/main.py): routes and token verification
+- [monitor/app/metrics.py](app/metrics.py): host metric collection and reboot handling
+- [monitor/app/storage.py](app/storage.py): in-memory history repository
+- [monitor/app/schemas.py](app/schemas.py): API models

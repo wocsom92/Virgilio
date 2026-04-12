@@ -198,7 +198,8 @@ async def test_alert_transition_is_recorded_in_notification_center_without_teleg
     assert events[0].channel == "local"
     assert events[0].delivery_status == "local"
     assert events[0].severity == "critical"
-    assert "Disk changed from normal to error" in events[0].body
+    assert events[0].title == "backend-1: Disk error at 95%"
+    assert "backend-1: Disk error at 95% (was normal)" in events[0].body
 
 
 @pytest.mark.asyncio
@@ -366,9 +367,9 @@ async def test_transition_notification_includes_ssh_failure_details(db_session, 
             "ssh_last_unsuccessful_attempt_seconds": 3600,
             "ssh_last_failure_auth_method": "publickey",
             "ssh_last_failure_username": "root",
-            "ssh_last_failure_source_ip": "10.0.0.8",
+            "ssh_last_failure_source_ip": "192.0.2.8",
             "ssh_last_failure_port": 55123,
-            "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+            "ssh_last_failure_line": "Failed publickey for root from 192.0.2.8 port 55123 ssh2",
         },
     )
     db_session.add(snapshot)
@@ -389,7 +390,7 @@ async def test_transition_notification_includes_ssh_failure_details(db_session, 
     assert "SSH Failure Details" in text
     assert "Method: publickey" in text
     assert "User: root" in text
-    assert "Source: 10.0.0.8" in text
+    assert "Source: 192.0.2.8" in text
     assert "Port: 55123" in text
     assert sent
 
@@ -417,9 +418,9 @@ async def test_notification_center_event_includes_ssh_failure_details(db_session
             "ssh_last_unsuccessful_attempt_seconds": 3600,
             "ssh_last_failure_auth_method": "publickey",
             "ssh_last_failure_username": "root",
-            "ssh_last_failure_source_ip": "10.0.0.8",
+            "ssh_last_failure_source_ip": "192.0.2.8",
             "ssh_last_failure_port": 55123,
-            "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+            "ssh_last_failure_line": "Failed publickey for root from 192.0.2.8 port 55123 ssh2",
         },
     )
     db_session.add(snapshot)
@@ -435,13 +436,14 @@ async def test_notification_center_event_includes_ssh_failure_details(db_session
     event = result.scalars().first()
 
     assert event is not None
-    assert "SSH failed login changed from normal to error (1h)" in event.body
+    assert event.title == "backend-1: SSH failed login error at 1h"
+    assert "backend-1: SSH failed login error at 1h (was normal)" in event.body
     assert "SSH Failure Details:" in event.body
     assert "Method: publickey" in event.body
     assert "User: root" in event.body
-    assert "Source: 10.0.0.8" in event.body
+    assert "Source: 192.0.2.8" in event.body
     assert "Port: 55123" in event.body
-    assert "Log: Failed publickey for root from 10.0.0.8 port 55123 ssh2" in event.body
+    assert "Log: Failed publickey for root from 192.0.2.8 port 55123 ssh2" in event.body
 
 
 @pytest.mark.asyncio
@@ -468,9 +470,9 @@ async def test_successful_ssh_login_notification_includes_details(db_session, mo
                 "ssh_last_successful_login_seconds": 30,
                 "ssh_last_successful_auth_method": "publickey",
                 "ssh_last_successful_username": "root",
-                "ssh_last_successful_source_ip": "10.0.0.8",
+                "ssh_last_successful_source_ip": "192.0.2.8",
                 "ssh_last_successful_port": 55123,
-                "ssh_last_successful_line": "Accepted publickey for root from 10.0.0.8 port 55123 ssh2",
+                "ssh_last_successful_line": "Accepted publickey for root from 192.0.2.8 port 55123 ssh2",
             },
         }
     )
@@ -494,7 +496,7 @@ async def test_successful_ssh_login_notification_includes_details(db_session, mo
     assert "SSH Login Details" in text
     assert "Method: publickey" in text
     assert "User: root" in text
-    assert "Source: 10.0.0.8" in text
+    assert "Source: 192.0.2.8" in text
     assert "Port: 55123" in text
     assert sent
 
@@ -523,9 +525,9 @@ async def test_unsuccessful_ssh_login_notification_includes_details(db_session, 
                 "ssh_last_unsuccessful_attempt_seconds": 30,
                 "ssh_last_failure_auth_method": "publickey",
                 "ssh_last_failure_username": "root",
-                "ssh_last_failure_source_ip": "10.0.0.8",
+                "ssh_last_failure_source_ip": "192.0.2.8",
                 "ssh_last_failure_port": 55123,
-                "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+                "ssh_last_failure_line": "Failed publickey for root from 192.0.2.8 port 55123 ssh2",
             },
         }
     )
@@ -549,7 +551,7 @@ async def test_unsuccessful_ssh_login_notification_includes_details(db_session, 
     assert "SSH Failure Details" in text
     assert "Method: publickey" in text
     assert "User: root" in text
-    assert "Source: 10.0.0.8" in text
+    assert "Source: 192.0.2.8" in text
     assert "Port: 55123" in text
-    assert "Log: Failed publickey for root from 10.0.0.8 port 55123 ssh2" in text
+    assert "Log: Failed publickey for root from 192.0.2.8 port 55123 ssh2" in text
     assert sent

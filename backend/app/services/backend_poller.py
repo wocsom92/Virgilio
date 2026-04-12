@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.app.models.monitors import MonitoredBackend
 from backend.app.services.backend_ingest import safe_ingest_backend_metrics
+from backend.app.services.quick_status import run_due_quick_status_checks
 from backend.app.services.site_monitoring import run_due_site_monitor_checks
 from backend.app.services.telegram_notifications import dispatch_due_quick_status_notifications
 
@@ -119,9 +120,10 @@ class BackendPoller:
         async with self._session_factory() as session:
             try:
                 await run_due_site_monitor_checks(session, now=now)
+                await run_due_quick_status_checks(session, now=now)
             except Exception:
                 await session.rollback()
-                logger.exception("Site monitor polling tick failed at %s", now.isoformat())
+                logger.exception("Background status polling tick failed at %s", now.isoformat())
                 raise
             await dispatch_due_quick_status_notifications(session)
 

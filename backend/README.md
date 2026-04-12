@@ -14,8 +14,8 @@ FastAPI service for auth, backend registry, metric ingestion, dashboard data, qu
 ## Main entrypoints
 
 - App: `backend.app.main:app`
-- Docker image: [backend/Dockerfile](/Users/martin/code/server_monitor/backend/Dockerfile)
-- Tests: [backend/tests](/Users/martin/code/server_monitor/backend/tests)
+- Docker image: [backend/Dockerfile](Dockerfile)
+- Tests: [backend/tests](tests)
 
 ## API surface
 
@@ -45,6 +45,7 @@ Required for normal operation:
 - `SERVER_MONITOR_DB_HOST`
 - `SERVER_MONITOR_DB_PORT`
 - `SERVER_MONITOR_DB_NAME`
+- `SERVER_MONITOR_HISTORY_DB_NAME`
 - `SERVER_MONITOR_AUTH_SECRET_KEY`
 
 Common optional variables:
@@ -81,7 +82,7 @@ Start the API from the repository root:
 uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The service expects a reachable MySQL instance matching the configured `SERVER_MONITOR_DB_*` values.
+The service expects a reachable MySQL instance matching the configured `SERVER_MONITOR_DB_*` values. Runtime configuration/state stays in `SERVER_MONITOR_DB_NAME`; high-churn history tables are stored in `SERVER_MONITOR_HISTORY_DB_NAME` and are recreated automatically when missing.
 
 ## Run with Docker
 
@@ -104,10 +105,10 @@ pytest -q backend/tests
 
 ## Code layout
 
-- [backend/app/main.py](/Users/martin/code/server_monitor/backend/app/main.py): app factory and lifespan
-- [backend/app/core](/Users/martin/code/server_monitor/backend/app/core): settings and security
-- [backend/app/routers](/Users/martin/code/server_monitor/backend/app/routers): HTTP routes
-- [backend/app/services](/Users/martin/code/server_monitor/backend/app/services): polling, ingest, warnings, Telegram, reboot logic
-- [backend/app/db](/Users/martin/code/server_monitor/backend/app/db): DB session and schema helpers
-- [backend/app/models](/Users/martin/code/server_monitor/backend/app/models): SQLAlchemy models
-- [backend/app/bot](/Users/martin/code/server_monitor/backend/app/bot): Telegram polling bot
+- [backend/app/main.py](app/main.py): app factory and lifespan
+- [backend/app/core](app/core): settings and security
+- [backend/app/routers](app/routers): HTTP routes
+- [backend/app/services](app/services): polling, ingest, warnings, Telegram, reboot logic
+- [backend/app/db](app/db): DB session and schema helpers
+- [backend/app/models](app/models): SQLAlchemy models
+- [backend/app/bot](app/bot): Telegram polling bot

@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `7.0.1`
+Current version: `7.1.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -18,9 +18,9 @@ It has three runtime parts:
 
 Component docs:
 
-- [frontend/README.md](/Users/martin/code/server_monitor/frontend/README.md)
-- [backend/README.md](/Users/martin/code/server_monitor/backend/README.md)
-- [monitor/README.md](/Users/martin/code/server_monitor/monitor/README.md)
+- [frontend/README.md](frontend/README.md)
+- [backend/README.md](backend/README.md)
+- [monitor/README.md](monitor/README.md)
 
 ## Features
 
@@ -41,6 +41,8 @@ Component docs:
 - Projects can expose separate sidebar tabs, each with its own project-scoped quick tiles.
 - Quick status tiles now include a 24-hour history strip with hourly segments under each square tile.
 - Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
+- Quick tiles show a loading indicator during initial fetch instead of briefly displaying "No quick tiles configured".
+- Ping and Prometheus quick-status checks run concurrently on the backend, reducing dashboard load time when many network-checked tiles are configured.
 - Prometheus quick-status tiles can query any Prometheus instant expression that returns exactly one numeric sample, with configurable refresh cadence and higher-is-worse or lower-is-worse thresholds.
 - Full-stack Compose now includes an internal Prometheus service that scrapes the `backend` and `monitor` APIs at `/prometheus`.
 - A default `Self-monitoring` project tab is auto-created on startup and shows backend/monitor API call totals plus last-hour `200`, `4xx`, and `5xx` response counts.
@@ -66,7 +68,7 @@ Component docs:
 - Telegram warning notifications for CPU and memory issues include the top 10 highest-usage processes.
 - SSH notifications include structured details for failed and successful login detection.
 - Telegram delivery can optionally use a dedicated outbound proxy, which is useful on hosts where the ISP path blocks Telegram but local Xray/VPN access is available.
-- In-app notification center with unread counter, paginated history, fallback visibility when Telegram delivery fails or is blocked, severity labels that mirror tile colors (`warn` orange, `critical` red), and expanded SSH failure details for quick-status alerts.
+- In-app notification center with unread counter, paginated history, fallback visibility when Telegram delivery fails or is blocked, severity labels that mirror tile colors (`warn` orange, `critical` red), and expanded SSH failure details for quick-status alerts. Notifications display as compact summary rows (severity, date, title) and expand on click to reveal the full body and delivery details.
 - HTTP Site Monitoring targets without an explicit scheme are normalized to `https://...`, and malformed targets now fail as normal checks instead of crashing the backend poller.
 - Shared UI styling now uses one translucent panel language across navigation, dashboard, auth, site monitoring, and admin screens instead of separate flat dark sections.
 - Optional host reboot support (requires explicit enablement + container privileges).
@@ -88,6 +90,7 @@ Create a root `.env` (or use host-specific `.env.*`) with at least:
 - `SERVER_MONITOR_DB_HOST`
 - `SERVER_MONITOR_DB_PORT`
 - `SERVER_MONITOR_DB_NAME`
+- `SERVER_MONITOR_HISTORY_DB_NAME`
 - `SERVER_MONITOR_AUTH_SECRET_KEY`
 - `SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES`
 - `SERVER_MONITOR_CORS_ALLOW_ORIGINS`
@@ -99,6 +102,9 @@ Common optional values:
 - `SERVER_MONITOR_REBOOT_COMMAND`
 - `SERVER_MONITOR_LOG_LEVEL`
 - `SERVER_MONITOR_TELEGRAM_PROXY_URL`
+- `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE`
+- `SERVER_MONITOR_TELEGRAM_LOCAL_ADDRESS`
+- `TELEGRAM_EGRESS_PROXY_BIND_INTERFACE`
 - `MONITOR_MOUNTED_POINTS`
 - `MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS`
 - `MONITOR_HOST_ROOT_SOURCE`
@@ -118,9 +124,14 @@ Notes:
 - In development, frontend defaults to `http://localhost:8000`.
 - SSH quick status checks require host filesystem bind mount (set `MONITOR_HOST_ROOT_SOURCE=/` and keep `MONITOR_HOST_ROOT_TARGET=/hostfs`).
 - Set `SERVER_MONITOR_TELEGRAM_PROXY_URL` when Telegram should egress through a local HTTP proxy such as Xray on `http://host.docker.internal:10809`.
+- Set `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE` when Telegram should bypass the default route and leave through a VPN interface such as `wg0`.
+- Set `SERVER_MONITOR_TELEGRAM_LOCAL_ADDRESS` only if your VPN setup requires binding Telegram traffic to a specific tunnel IP in addition to the interface.
+- If both `SERVER_MONITOR_TELEGRAM_PROXY_URL` and `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE` are set, Telegram tries the proxy first and automatically falls back to the VPN interface when the proxy path is unavailable.
+- On host-network deployments, prefer the `telegram-egress-proxy` service and point `SERVER_MONITOR_TELEGRAM_PROXY_URL` at `http://host.docker.internal:18080`; set `TELEGRAM_EGRESS_PROXY_BIND_INTERFACE` in the local env file when that proxy should fall back through a specific VPN interface.
 - HTTP site-monitor targets entered as bare hostnames like `telegram.org` are stored as `https://telegram.org`.
 - The full-stack deployment now includes Prometheus automatically. Self-monitoring project cards query it through the internal Compose URL `http://prometheus:9090`.
 - Backend, monitor, and Telegram bot containers now emit structured JSON logs to stdout. Frontend Nginx access logs are also written as JSON.
+- The backend stores slow-changing configuration/state in `SERVER_MONITOR_DB_NAME` and high-churn metric history in `SERVER_MONITOR_HISTORY_DB_NAME`. Restoring only the config database is enough to bring the app back; the history database will be recreated empty on startup.
 
 ### Raspberry Pi log stack
 
@@ -225,6 +236,7 @@ Behavior summary:
 - If the target env file includes `COMPOSE_PROFILES=logs`, the full deployment also starts Elasticsearch, Kibana, and Filebeat.
 - `managed` purge mode removes only managed files in deploy path.
 - `full` purge mode removes entire deploy path before upload.
+- After services restart, the script always runs post-deploy checks for container state, endpoint health, and raw Telegram-token log redaction.
 - After a successful deployment, the script runs `sudo docker system prune -f` on the remote host.
 
 ## API overview
@@ -299,7 +311,7 @@ Guidelines:
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](/Users/martin/code/server_monitor/LICENSE).
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
 ## Project structure
 

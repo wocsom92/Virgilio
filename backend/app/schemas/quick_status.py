@@ -22,6 +22,9 @@ QuickStatusMetricKey = Literal[
     "ssh_last_successful_login",
     "ssh_last_unsuccessful_attempt",
     "ssh_status",
+    "telegram_bot_status",
+    "wifi_status",
+    "vpn_status",
     "prometheus_query",
 ]
 
@@ -46,12 +49,23 @@ SUPPORTED_QUICK_STATUS_METRIC_KEYS: set[str] = {
     "ssh_last_successful_login",
     "ssh_last_unsuccessful_attempt",
     "ssh_status",
+    "telegram_bot_status",
+    "wifi_status",
+    "vpn_status",
     "prometheus_query",
 }
 
 _REQUIRES_PING_ENDPOINT = {"ping_result", "ping_delay_ms"}
 _LOWER_IS_WORSE = {"last_restart", "memory_available_gb", "mount_available_gb", "ssh_last_unsuccessful_attempt"}
-_NO_THRESHOLD_METRICS = {"ping_result", "ssh_last_successful_login", "ssh_status", "swap_used_percent"}
+_NO_THRESHOLD_METRICS = {
+    "ping_result",
+    "ssh_last_successful_login",
+    "ssh_status",
+    "telegram_bot_status",
+    "wifi_status",
+    "vpn_status",
+    "swap_used_percent",
+}
 _PROMETHEUS_METRICS = {"prometheus_query"}
 _BAND_THRESHOLD_METRICS = {"cpu_temperature_c", "prometheus_query"}
 

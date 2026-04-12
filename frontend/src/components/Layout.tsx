@@ -1,6 +1,6 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import type { IconType } from 'react-icons';
-import { FiActivity, FiBarChart2, FiFolder, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings, FiX } from 'react-icons/fi';
+import { FiActivity, FiBarChart2, FiChevronDown, FiChevronUp, FiFolder, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings } from 'react-icons/fi';
 import {
   AuthUser,
   NotificationEvent,
@@ -13,7 +13,7 @@ import {
 import { DEFAULT_BACKEND_VERSION, FRONTEND_VERSION } from '../constants/versions';
 import { formatNotificationDeliveryError, getUserFacingErrorMessage } from '../utils/errors';
 
-export type AppView = 'monitoring' | 'site-monitoring' | 'graphs' | 'admin' | `project:${number}`;
+export type AppView = 'monitoring' | 'site-monitoring' | 'graphs' | 'notifications' | 'admin' | `project:${number}`;
 
 interface LayoutProps {
   activeView: AppView;
@@ -45,6 +45,12 @@ const VIEW_META: Record<
     navDescription: 'All graphs',
     icon: FiBarChart2,
   },
+  notifications: {
+    label: 'Notification Center',
+    description: 'Notification history across Telegram and local quick-status events.',
+    navDescription: 'History and unread alerts',
+    icon: FiMessageSquare,
+  },
   admin: {
     label: 'Administration',
     description: 'Configuration, access control, and host operations.',
@@ -67,12 +73,12 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifications, setNotifications] = useState<NotificationEvent[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationsError, setNotificationsError] = useState<string | null>(null);
   const [notificationPage, setNotificationPage] = useState(1);
   const [notificationTotalPages, setNotificationTotalPages] = useState(1);
   const [notificationTotalItems, setNotificationTotalItems] = useState(0);
+  const [expandedNotificationIds, setExpandedNotificationIds] = useState<Set<number>>(new Set());
   const [projects, setProjects] = useState<Project[]>([]);
 
   const activeProjectId = getProjectViewId(activeView);
@@ -216,7 +222,8 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
   };
 
   const handleOpenNotifications = async () => {
-    setNotificationsOpen(true);
+    onSwitch('notifications');
+    setNotificationsLoading(true);
     try {
       await markNotificationsRead();
       setUnreadCount(0);
@@ -251,6 +258,18 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
     return 'bg-secondary';
   };
 
+  const toggleNotificationExpanded = (id: number) => {
+    setExpandedNotificationIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
   const adminVersionBadges = useMemo(
     () => (
       <div className="d-flex flex-wrap align-items-center gap-2">
@@ -259,6 +278,112 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
       </div>
     ),
     [backendVersion]
+  );
+
+  const notificationCenterContent = (
+    <section className="notification-center-page card-panel rounded-4 p-3 p-md-4">
+      <div className="notification-center-page__header">
+        <div>
+          <h2 className="fw-semibold text-uppercase mb-1">History</h2>
+          <p className="text-secondary small mb-0">
+            Alerts, recoveries, Telegram delivery status, and local quick-status events.
+          </p>
+        </div>
+        <button
+          className="btn btn-outline-light"
+          type="button"
+          onClick={() => {
+            void loadNotificationPage(notificationPage);
+          }}
+          disabled={notificationsLoading}
+        >
+          Reload
+        </button>
+      </div>
+      <div className="d-flex flex-column gap-3 notification-center-body">
+        {notificationsLoading && <div className="text-secondary small">Loading notifications...</div>}
+        {notificationsError && <div className="alert alert-danger mb-0">{notificationsError}</div>}
+        {!notificationsLoading && !notificationsError && notificationTotalItems > 0 && (
+          <div className="d-flex align-items-center justify-content-between gap-2 small text-secondary">
+            <span>
+              Showing {notificationRangeStart}-{notificationRangeEnd} of {notificationTotalItems}
+            </span>
+            <span>
+              Page {notificationPage} / {notificationTotalPages}
+            </span>
+          </div>
+        )}
+        {!notificationsLoading && !notifications.length && !notificationsError && (
+          <div className="text-secondary small">No notifications yet.</div>
+        )}
+        {!notificationsLoading && notifications.length > 0 && (
+          <div className="d-flex flex-column gap-2 notification-center-list">
+            {notifications.map((item) => {
+              const deliveryError = formatNotificationDeliveryError(item.error_message);
+              const isExpanded = expandedNotificationIds.has(item.id);
+              return (
+                <article
+                  key={item.id}
+                  className={`notification-entry${isExpanded ? ' notification-entry--expanded' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleNotificationExpanded(item.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      toggleNotificationExpanded(item.id);
+                    }
+                  }}
+                >
+                  <div className="notification-entry__summary">
+                    <div className="notification-entry__meta">
+                      <span className={`badge text-uppercase ${getSeverityBadgeClass(item.severity)}`}>{item.severity}</span>
+                      {item.delivery_status === 'failed' && <span className="badge bg-danger">failed</span>}
+                      {item.backend_name && <span className="badge bg-dark border border-secondary">{item.backend_name}</span>}
+                      <span className="text-secondary notification-entry__date">{new Date(item.created_at).toLocaleString()}</span>
+                    </div>
+                    <span className="notification-entry__title">{item.title}</span>
+                    <span className="notification-entry__chevron">
+                      {isExpanded ? <FiChevronUp size={14} /> : <FiChevronDown size={14} />}
+                    </span>
+                  </div>
+                  {isExpanded && (
+                    <div className="notification-entry__details">
+                      <pre className="notification-entry__body">{item.body}</pre>
+                      {deliveryError && <div className="small text-danger">Delivery error: {deliveryError}</div>}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+        {!notificationsLoading && !notificationsError && notificationTotalPages > 1 && (
+          <div className="d-flex align-items-center justify-content-between gap-2">
+            <button
+              className="btn btn-sm btn-outline-light"
+              type="button"
+              disabled={notificationPage <= 1}
+              onClick={() => {
+                void handleChangeNotificationPage(notificationPage - 1);
+              }}
+            >
+              Previous
+            </button>
+            <button
+              className="btn btn-sm btn-outline-light"
+              type="button"
+              disabled={notificationPage >= notificationTotalPages}
+              onClick={() => {
+                void handleChangeNotificationPage(notificationPage + 1);
+              }}
+            >
+              Next
+            </button>
+          </div>
+        )}
+      </div>
+    </section>
   );
 
   return (
@@ -288,7 +413,13 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
                 key={view}
                 type="button"
                 className={`app-nav-link ${isActive ? 'app-nav-link--active' : ''}`}
-                onClick={() => onSwitch(view)}
+                onClick={() => {
+                  if (view === 'notifications') {
+                    void handleOpenNotifications();
+                    return;
+                  }
+                  onSwitch(view);
+                }}
                 disabled={isDisabled}
               >
                 <span className="app-nav-link__icon">
@@ -298,7 +429,7 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
                   <span className="app-nav-link__title">{meta.label}</span>
                   <span className="app-nav-link__description">{meta.navDescription}</span>
                 </span>
-                {view === 'monitoring' && unreadCount > 0 && (
+                {view === 'notifications' && unreadCount > 0 && (
                   <span className="app-nav-link__badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
                 )}
               </button>
@@ -360,7 +491,7 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
             </div>
           </div>
           <div className="d-flex flex-wrap align-items-center justify-content-end gap-2">
-            {activeView === 'monitoring' && (
+            {activeView !== 'notifications' && (
               <button
                 className="btn btn-sm btn-outline-light position-relative notification-trigger"
                 type="button"
@@ -382,101 +513,8 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
           </div>
         </header>
 
-        <main className="app-main">{children}</main>
+        <main className="app-main">{activeView === 'notifications' ? notificationCenterContent : children}</main>
       </div>
-
-      {notificationsOpen && (
-        <div className="notification-center-backdrop" role="presentation" onClick={() => setNotificationsOpen(false)}>
-          <div
-            className="notification-center-modal card shadow-lg"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Notification center"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="card-header d-flex align-items-center justify-content-between">
-              <div>
-                <div className="text-uppercase small fw-semibold">Notification Center</div>
-                <div className="text-secondary small">Notification history across Telegram and local quick-status events.</div>
-              </div>
-              <button className="btn btn-sm btn-outline-light" type="button" onClick={() => setNotificationsOpen(false)}>
-                <FiX size={16} />
-              </button>
-            </div>
-            <div className="card-body d-flex flex-column gap-3 notification-center-body">
-              {notificationsLoading && <div className="text-secondary small">Loading notifications…</div>}
-              {notificationsError && <div className="alert alert-danger mb-0">{notificationsError}</div>}
-              {!notificationsLoading && !notificationsError && notificationTotalItems > 0 && (
-                <div className="d-flex align-items-center justify-content-between gap-2 small text-secondary">
-                  <span>
-                    Showing {notificationRangeStart}-{notificationRangeEnd} of {notificationTotalItems}
-                  </span>
-                  <span>
-                    Page {notificationPage} / {notificationTotalPages}
-                  </span>
-                </div>
-              )}
-              {!notificationsLoading && !notifications.length && !notificationsError && (
-                <div className="text-secondary small">No notifications yet.</div>
-              )}
-              {!notificationsLoading && notifications.length > 0 && (
-                <div className="d-flex flex-column gap-2 notification-center-list">
-                  {notifications.map((item) => {
-                    const deliveryError = formatNotificationDeliveryError(item.error_message);
-                    return (
-                      <article key={item.id} className="notification-entry">
-                        <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
-                          <span
-                            className={`badge ${
-                              item.delivery_status === 'failed'
-                                ? 'bg-danger'
-                                : item.delivery_status === 'local'
-                                  ? 'bg-secondary'
-                                  : 'bg-success'
-                            }`}
-                          >
-                            {item.delivery_status}
-                          </span>
-                          <span className={`badge text-uppercase ${getSeverityBadgeClass(item.severity)}`}>{item.severity}</span>
-                          {item.backend_name && <span className="badge bg-dark border border-secondary">{item.backend_name}</span>}
-                          <span className="small text-secondary">{new Date(item.created_at).toLocaleString()}</span>
-                        </div>
-                        <div className="fw-semibold mb-1">{item.title}</div>
-                        <pre className="notification-entry__body">{item.body}</pre>
-                        {deliveryError && <div className="small text-danger">Delivery error: {deliveryError}</div>}
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-              {!notificationsLoading && !notificationsError && notificationTotalPages > 1 && (
-                <div className="d-flex align-items-center justify-content-between gap-2">
-                  <button
-                    className="btn btn-sm btn-outline-light"
-                    type="button"
-                    disabled={notificationPage <= 1}
-                    onClick={() => {
-                      void handleChangeNotificationPage(notificationPage - 1);
-                    }}
-                  >
-                    Previous
-                  </button>
-                  <button
-                    className="btn btn-sm btn-outline-light"
-                    type="button"
-                    disabled={notificationPage >= notificationTotalPages}
-                    onClick={() => {
-                      void handleChangeNotificationPage(notificationPage + 1);
-                    }}
-                  >
-                    Next
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

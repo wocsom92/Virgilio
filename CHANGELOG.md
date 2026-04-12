@@ -4,12 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-04-08
+
 ### Added
 - Added built-in Prometheus scraping for the local `backend` and `monitor` services, including exported HTTP request counters by service, route, status code, and status class.
 - Added an auto-seeded `Self-monitoring` project tab with graph cards for backend/monitor API call volume and last-hour `200`, `4xx`, and `5xx` response totals.
 
 ### Changed
+- Notification Center entries now display as compact summary rows showing severity, delivery status, date, and title. Clicking a row expands it to reveal the full body and delivery error details.
+- Quick tiles now show a loading indicator during the initial fetch instead of briefly flashing "No quick tiles configured".
+- Ping and Prometheus quick-status checks now run concurrently on the backend, reducing dashboard load time when many network-checked tiles are configured.
 - Prometheus dashboard cards now support explicit display units such as `%`, including a dedicated humidity-card style and visible low/high/current value labels on the embedded 24-hour graphs.
+- Project version updated from `7.0.1` to `7.1.0` across backend, frontend, monitor, README, changelog, and displayed UI version constants.
 
 ## [7.0.1] - 2026-04-05
 

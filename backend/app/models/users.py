@@ -3,7 +3,7 @@ from enum import StrEnum
 from sqlalchemy import String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.app.models.base import Base, TimestampMixin
+from backend.app.models.base import Base, CONFIG_SCHEMA, TimestampMixin
 
 
 class UserRole(StrEnum):
@@ -13,6 +13,7 @@ class UserRole(StrEnum):
 
 class User(TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)

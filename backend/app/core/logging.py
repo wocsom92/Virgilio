@@ -39,6 +39,7 @@ _RESERVED_RECORD_FIELDS = {
 _REQUEST_HANDLER: ContextVar[str | None] = ContextVar("backend_request_handler", default=None)
 _REQUEST_USER_ID: ContextVar[int | None] = ContextVar("backend_request_user_id", default=None)
 _HTTP_CLIENT_MESSAGE_RE = re.compile(r'^HTTP Request: ([A-Z]+) (\S+) "HTTP/\d+(?:\.\d+)? (\d{3}) [^"]+"$')
+_SENSITIVE_TEXT_RE = re.compile(r"(/bot)[^/\s\"]+")
 
 
 def bind_request_handler(handler: str | None) -> Token[str | None]:
@@ -73,19 +74,29 @@ def _normalize_level(level_name: str) -> str:
     return normalized.lower()
 
 
+def _redact_sensitive_text(value: str) -> str:
+    return _SENSITIVE_TEXT_RE.sub(r"\1<redacted>", value)
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
+    return value
+
+
 def _resolve_handler(record: logging.LogRecord) -> str:
     explicit_handler = getattr(record, "handler", None)
     if explicit_handler:
-        return str(explicit_handler)
+        return _redact_sensitive_text(str(explicit_handler))
 
     scoped_handler = _REQUEST_HANDLER.get()
     if scoped_handler:
-        return scoped_handler
+        return _redact_sensitive_text(scoped_handler)
 
     if record.name == "uvicorn.access" and isinstance(record.args, tuple) and len(record.args) >= 3:
         method, path = record.args[1], record.args[2]
         if isinstance(method, str) and isinstance(path, str):
-            return f"{method} {path}"
+            return _redact_sensitive_text(f"{method} {path}")
 
     return "background"
 
@@ -100,7 +111,7 @@ def _resolve_short_message(record: logging.LogRecord) -> str:
         if isinstance(method, str) and isinstance(path, str):
             return f"HTTP {method} {path} -> {status_code}"
 
-    rendered_message = record.getMessage().strip()
+    rendered_message = _redact_sensitive_text(record.getMessage().strip())
     if not rendered_message:
         return "log event"
 
@@ -151,7 +162,7 @@ class JsonFormatter(logging.Formatter):
             "handler": _resolve_handler(record),
             "level": _normalize_level(record.levelname),
             "msg": _resolve_short_message(record),
-            "message": record.getMessage(),
+            "message": _redact_sensitive_text(record.getMessage()),
             "logger_name": record.name,
             "service_name": getattr(record, "service_name", self.service_name),
             "source_module": record.module,
@@ -169,7 +180,7 @@ class JsonFormatter(logging.Formatter):
         for key, value in record.__dict__.items():
             if key.startswith("_") or key in _RESERVED_RECORD_FIELDS:
                 continue
-            payload[key] = value
+            payload[key] = _redact_value(value)
 
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)

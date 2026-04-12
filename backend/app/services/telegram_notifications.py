@@ -66,6 +66,85 @@ def _status_label(status: str) -> str:
     return status
 
 
+def _truncate_notification_title(title: str, max_length: int = 240) -> str:
+    if len(title) <= max_length:
+        return title
+    return f"{title[: max_length - 1].rstrip()}…"
+
+
+def _build_quick_status_event_title(
+    *,
+    backend_name: str,
+    label: str,
+    current_status: str,
+    display_value: str,
+) -> str:
+    if current_status in _ALERT_STATUSES:
+        title = f"{backend_name}: {label} {_status_label(current_status)} at {display_value}"
+    else:
+        title = f"{backend_name}: {label} cleared at {display_value}"
+    return _truncate_notification_title(title)
+
+
+def _format_quick_status_event_fragment(
+    *,
+    backend_name: str,
+    label: str,
+    current_status: str,
+    display_value: str,
+) -> str:
+    status_text = _status_label(current_status) if current_status in _ALERT_STATUSES else "cleared"
+    return f"{backend_name} {label} {status_text} at {display_value}"
+
+
+def _build_quick_status_group_title(events: Sequence[QuickStatusNotificationEvent]) -> str:
+    if len(events) == 1:
+        event = events[0]
+        return _build_quick_status_event_title(
+            backend_name=event.backend_name,
+            label=event.label,
+            current_status=event.current_status,
+            display_value=event.display_value,
+        )
+    prefix = "Quick status alerts" if any(event.current_status in _ALERT_STATUSES for event in events) else "Quick status updates"
+    fragments = [
+        _format_quick_status_event_fragment(
+            backend_name=event.backend_name,
+            label=event.label,
+            current_status=event.current_status,
+            display_value=event.display_value,
+        )
+        for event in events[:3]
+    ]
+    if len(events) > 3:
+        fragments.append(f"+{len(events) - 3} more")
+    return _truncate_notification_title(f"{prefix} ({len(events)}): {', '.join(fragments)}")
+
+
+def _build_quick_status_transition_group_title(transitions: Sequence[QuickStatusTransition]) -> str:
+    if len(transitions) == 1:
+        transition = transitions[0]
+        return _build_quick_status_event_title(
+            backend_name=transition.backend_name,
+            label=transition.label,
+            current_status=transition.current_status,
+            display_value=transition.display_value,
+        )
+    prefix = "Quick status alerts" if any(transition.current_status in _ALERT_STATUSES for transition in transitions) else "Quick status updates"
+    fragments = [
+        _format_quick_status_event_fragment(
+            backend_name=transition.backend_name,
+            label=transition.label,
+            current_status=transition.current_status,
+            display_value=transition.display_value,
+        )
+        for transition in transitions[:3]
+    ]
+    if len(transitions) > 3:
+        fragments.append(f"+{len(transitions) - 3} more")
+    return _truncate_notification_title(f"{prefix} ({len(transitions)}): {', '.join(fragments)}")
+
+
 def _format_binary_size_from_gib(value_gib: float | None) -> str:
     if value_gib is None:
         return "unknown"
@@ -484,17 +563,27 @@ async def _record_quick_status_inbox_event(
 ) -> None:
     if current_status in _ALERT_STATUSES:
         severity = current_status
-        title = f"Quick status alert: {backend_name}"
+        title = _build_quick_status_event_title(
+            backend_name=backend_name,
+            label=label,
+            current_status=current_status,
+            display_value=display_value,
+        )
         body = (
-            f"{label} changed from {_status_label(previous_status)} "
-            f"to {_status_label(current_status)} ({display_value})"
+            f"{backend_name}: {label} {_status_label(current_status)} at {display_value} "
+            f"(was {_status_label(previous_status)})"
         )
     else:
         severity = "info"
-        title = f"Quick status cleared: {backend_name}"
+        title = _build_quick_status_event_title(
+            backend_name=backend_name,
+            label=label,
+            current_status=current_status,
+            display_value=display_value,
+        )
         body = (
-            f"{label} cleared "
-            f"(was {_status_label(previous_status)}, now {display_value})"
+            f"{backend_name}: {label} cleared at {display_value} "
+            f"(was {_status_label(previous_status)})"
         )
     if item.metric_key == "ssh_last_unsuccessful_attempt" and detail_lines:
         body = "\n".join([body, "", "SSH Failure Details:", *(line.text for line in detail_lines)])
@@ -600,7 +689,7 @@ async def dispatch_due_quick_status_notifications(
 
     result = await session.execute(
         select(QuickStatusItem)
-        .options(selectinload(QuickStatusItem.backend))
+        .options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
         .where(
             QuickStatusItem.pending_notification_status.is_not(None),
             QuickStatusItem.pending_notification_due_at.is_not(None),
@@ -677,11 +766,7 @@ async def dispatch_due_quick_status_notifications(
     text = _build_transition_message(transitions, snapshots_by_backend_name)
     try:
         severity = "critical" if any(event.current_status == "critical" for event in events) else "warn"
-        title = (
-            f"Quick status alert: {events[0].backend_name}"
-            if len(events) == 1
-            else f"Quick status alerts ({len(events)})"
-        )
+        title = _build_quick_status_group_title(events)
         await _send_tracked_telegram_message(
             session,
             bot_token=settings_model_ctx.bot_token,
@@ -734,7 +819,7 @@ async def try_send_quick_status_transition_notification(
             text=text,
             category="quick_status",
             severity=severity,
-            title="Quick status alert",
+            title=_build_quick_status_transition_group_title(transitions),
         )
     except TelegramError as exc:
         logger.warning("Failed to send Telegram warning notification: %s", exc)

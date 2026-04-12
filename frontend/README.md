@@ -15,10 +15,10 @@ React + Vite dashboard for the monitoring suite. It handles bootstrap/login, bac
 
 ## Main entrypoints
 
-- App bootstrap: [frontend/src/main.tsx](/Users/martin/code/server_monitor/frontend/src/main.tsx)
-- Root component: [frontend/src/App.tsx](/Users/martin/code/server_monitor/frontend/src/App.tsx)
-- API client: [frontend/src/api/client.ts](/Users/martin/code/server_monitor/frontend/src/api/client.ts)
-- Docker image: [frontend/Dockerfile](/Users/martin/code/server_monitor/frontend/Dockerfile)
+- App bootstrap: [frontend/src/main.tsx](src/main.tsx)
+- Root component: [frontend/src/App.tsx](src/App.tsx)
+- API client: [frontend/src/api/client.ts](src/api/client.ts)
+- Docker image: [frontend/Dockerfile](Dockerfile)
 
 ## Environment
 
@@ -90,8 +90,8 @@ npm --prefix frontend test -- --run
 
 ## Code layout
 
-- [frontend/src/components](/Users/martin/code/server_monitor/frontend/src/components): dashboard and admin UI
-- [frontend/src/api](/Users/martin/code/server_monitor/frontend/src/api): typed client and request helpers
-- [frontend/src/hooks](/Users/martin/code/server_monitor/frontend/src/hooks): reusable hooks
-- [frontend/src/utils](/Users/martin/code/server_monitor/frontend/src/utils): chart/mount formatting helpers
-- [frontend/src/styles](/Users/martin/code/server_monitor/frontend/src/styles): theme styles
+- [frontend/src/components](src/components): dashboard and admin UI
+- [frontend/src/api](src/api): typed client and request helpers
+- [frontend/src/hooks](src/hooks): reusable hooks
+- [frontend/src/utils](src/utils): chart/mount formatting helpers
+- [frontend/src/styles](src/styles): theme styles

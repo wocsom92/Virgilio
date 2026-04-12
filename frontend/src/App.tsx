@@ -204,7 +204,7 @@ export default function App() {
         <AdminPanel currentUser={currentUser} />
       ) : view === 'site-monitoring' ? (
         <SiteMonitoring />
-      ) : (
+      ) : view === 'notifications' ? null : (
         <Dashboard canRefresh={currentUser.role === 'admin'} mode={view === 'graphs' ? 'graphs' : 'monitoring'} projectId={activeProjectId} />
       )}
     </Layout>

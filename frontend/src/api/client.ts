@@ -262,6 +262,9 @@ export type QuickStatusMetricKey =
   | 'ssh_last_successful_login'
   | 'ssh_last_unsuccessful_attempt'
   | 'ssh_status'
+  | 'telegram_bot_status'
+  | 'wifi_status'
+  | 'vpn_status'
   | 'prometheus_query';
 
 export type PrometheusThresholdDirection = 'higher' | 'lower';

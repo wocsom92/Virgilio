@@ -79,6 +79,16 @@ if [[ "${TIMEOUT_SECONDS}" -lt 1 ]]; then
 fi
 
 command -v curl >/dev/null 2>&1 || die "curl is required on remote host"
+command -v docker >/dev/null 2>&1 || die "docker is required on remote host"
+
+docker_cmd=(docker)
+if ! docker ps >/dev/null 2>&1; then
+  if sudo -n docker ps >/dev/null 2>&1; then
+    docker_cmd=(sudo docker)
+  else
+    die "docker access failed; configure the deploy user for docker or passwordless sudo docker"
+  fi
+fi
 
 backend_port="$(read_env_value "${ENV_FILE}" "SERVER_MONITOR_PORT" || true)"
 backend_port="${backend_port:-28000}"
@@ -97,10 +107,56 @@ elasticsearch_port="$(read_env_value "${ENV_FILE}" "ELASTICSEARCH_PORT" || true)
 elasticsearch_port="${elasticsearch_port:-9200}"
 kibana_port="$(read_env_value "${ENV_FILE}" "KIBANA_PORT" || true)"
 kibana_port="${kibana_port:-5601}"
+monitor_container_name="$(read_env_value "${ENV_FILE}" "MONITOR_CONTAINER_NAME" || true)"
+monitor_container_name="${monitor_container_name:-server-monitor-agent}"
 
 tmp_dir="$(mktemp -d)"
 cleanup() {
   rm -rf "${tmp_dir}"
+}
+
+container_check() {
+  local container_name="$1"
+  local state
+  state="$("${docker_cmd[@]}" inspect "${container_name}" --format '{{.State.Status}}' 2>/dev/null || true)"
+  if [[ "${state}" != "running" ]]; then
+    die "container ${container_name} is ${state:-missing}, expected running"
+  fi
+
+  local health
+  health="$("${docker_cmd[@]}" inspect "${container_name}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
+  case "${health}" in
+    healthy|none)
+      log "OK container ${container_name}: state=${state}, health=${health}"
+      ;;
+    starting)
+      local deadline=$((SECONDS + TIMEOUT_SECONDS))
+      while (( SECONDS < deadline )); do
+        sleep 2
+        health="$("${docker_cmd[@]}" inspect "${container_name}" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
+        if [[ "${health}" == "healthy" || "${health}" == "none" ]]; then
+          log "OK container ${container_name}: state=${state}, health=${health}"
+          return 0
+        fi
+      done
+      die "container ${container_name} health stayed ${health}, expected healthy"
+      ;;
+    *)
+      die "container ${container_name} health is ${health}, expected healthy"
+      ;;
+  esac
+}
+
+logs_check_no_raw_telegram_tokens() {
+  local services=("$@")
+  local logs_file="${tmp_dir}/compose-logs.$$"
+  if ! "${docker_cmd[@]}" compose logs --no-color "${services[@]}" > "${logs_file}" 2>/dev/null; then
+    die "failed to read docker compose logs for ${services[*]}"
+  fi
+  if grep -E '/bot[0-9][^/[:space:]"]*/' "${logs_file}" >/dev/null 2>&1; then
+    die "raw Telegram bot token path found in compose logs for ${services[*]}"
+  fi
+  log "OK logs-redaction: no raw Telegram bot token paths in ${services[*]}"
 }
 trap cleanup EXIT
 
@@ -143,9 +199,23 @@ http_check() {
   die "${label} failed: ${url} -> HTTP ${code} (expected: ${expected_csv:-not 404/5xx}). Body: ${body}"
 }
 
-log "Starting endpoint smoke checks (profile=${PROFILE}, env=${ENV_FILE})"
+log "Starting post-deploy checks (profile=${PROFILE}, env=${ENV_FILE})"
 
 if [[ "${PROFILE}" == "full" ]]; then
+  container_check "server-monitor-db"
+  container_check "server-monitor-backend"
+  container_check "server-monitor-frontend"
+  container_check "server-monitor-telegram-bot"
+  container_check "server-monitor-prometheus"
+  if [[ ",${compose_profiles}," == *",telegram-egress,"* ]]; then
+    container_check "server-monitor-telegram-egress-proxy"
+  fi
+  if [[ ",${compose_profiles}," == *",logs,"* ]]; then
+    container_check "server-monitor-elasticsearch"
+    container_check "server-monitor-kibana"
+    container_check "server-monitor-filebeat"
+  fi
+
   http_check "backend-health" "http://127.0.0.1:${backend_port}/healthz" "200"
   http_check "backend-version" "http://127.0.0.1:${backend_port}/version" "200"
   http_check "backend-auth-status" "http://127.0.0.1:${backend_port}/auth/status" "200"
@@ -157,7 +227,12 @@ if [[ "${PROFILE}" == "full" ]]; then
   fi
 fi
 
+container_check "${monitor_container_name}"
 http_check "monitor-health" "http://127.0.0.1:${monitor_port}/healthz" "200"
 http_check "monitor-latest-metrics" "http://127.0.0.1:${monitor_port}/metrics/latest" "200" "Authorization: Bearer ${monitor_token}"
 
-log "All endpoint smoke checks passed."
+if [[ "${PROFILE}" == "full" ]]; then
+  logs_check_no_raw_telegram_tokens backend telegram-bot
+fi
+
+log "All post-deploy checks passed."

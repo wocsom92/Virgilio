@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
+from backend.app.core.config import settings
 from backend.app.core.security import require_admin_user
 from backend.app.db.session import get_session
 from backend.app.services.reboot_service import request_reboot
@@ -48,13 +49,18 @@ async def reboot_host(
 
 @router.get("/db-size")
 async def get_db_size(session: AsyncSession = Depends(get_session)) -> dict:
-    # Returns database size in bytes for the current schema
+    # Returns combined size in bytes for the configured config + history schemas.
     try:
         result = await session.execute(
             text(
                 "SELECT SUM(data_length + index_length) AS size_bytes "
-                "FROM information_schema.tables WHERE table_schema = DATABASE()"
-            )
+                "FROM information_schema.tables "
+                "WHERE table_schema IN (:config_schema, :history_schema)"
+            ),
+            {
+                "config_schema": settings.db_name,
+                "history_schema": settings.history_db_name,
+            },
         )
         size = result.scalar() or 0
     except Exception as exc:  # pragma: no cover - defensive guard for DB permission issues

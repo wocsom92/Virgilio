@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.app.core.config import settings
 from backend.app.core.logging import configure_logging
 from backend.app.db.session import async_session_factory
+from backend.app.services.http_clients import build_telegram_request
 from backend.app.services.monitor_client import MonitorClientError, request_monitor_reboot
 from backend.app.services.reboot_service import request_reboot
 from backend.app.services.telegram_service import TelegramError, send_message
@@ -242,9 +243,12 @@ def build_application() -> Application:
     if not settings.telegram_bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
 
-    builder = ApplicationBuilder().token(settings.telegram_bot_token)
-    if settings.telegram_proxy_url:
-        builder = builder.proxy(settings.telegram_proxy_url).get_updates_proxy(settings.telegram_proxy_url)
+    builder = (
+        ApplicationBuilder()
+        .token(settings.telegram_bot_token)
+        .request(build_telegram_request(connection_pool_size=20))
+        .get_updates_request(build_telegram_request(connection_pool_size=4))
+    )
     application = builder.build()
     application.add_handler(CommandHandler("start", handle_start))
     application.add_handler(CommandHandler("stats", with_session(handle_stats)))

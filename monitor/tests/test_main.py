@@ -101,7 +101,7 @@ def test_latest_metrics_falls_back_to_collect(monkeypatch, client):
 def test_ping_requires_bearer_token(client):
     test_client, _ = client
 
-    response = test_client.get("/ping", params={"target": "1.1.1.1"})
+    response = test_client.get("/ping", params={"target": "192.0.2.1"})
 
     assert response.status_code == 401
 
@@ -118,12 +118,12 @@ def test_ping_endpoint_returns_payload(monkeypatch, client):
     response = test_client.get(
         "/ping",
         headers={"Authorization": "Bearer monitor-token"},
-        params={"target": "1.1.1.1", "timeout_seconds": 2},
+        params={"target": "192.0.2.1", "timeout_seconds": 2},
     )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["target"] == "1.1.1.1"
+    assert payload["target"] == "192.0.2.1"
     assert payload["success"] is True
     assert payload["latency_ms"] == 12.5
 

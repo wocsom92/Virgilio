@@ -95,6 +95,13 @@ _PROMETHEUS_CACHE: dict[tuple[int, int | None, str, str], PrometheusCheckResult]
 _PROMETHEUS_LOCK = asyncio.Lock()
 
 
+def _loaded_relation(item: QuickStatusItem, relation_name: str):
+    state = getattr(item, "__dict__", None)
+    if not isinstance(state, dict):
+        return None
+    return state.get(relation_name)
+
+
 def _ping_cache_key(item: QuickStatusItem) -> tuple[int, int | None, str]:
     return (item.id, item.backend_id, item.ping_endpoint or "")
 
@@ -104,8 +111,8 @@ def _prometheus_cache_key(item: QuickStatusItem) -> tuple[int, int | None, str, 
 
 
 def _quick_status_item_sort_key(item: QuickStatusItem) -> tuple[int, str, int, int, int]:
-    backend = getattr(item, "backend", None)
-    project = getattr(item, "project", None)
+    backend = _loaded_relation(item, "backend")
+    project = _loaded_relation(item, "project")
     backend_order = backend.display_order if backend is not None else (project.display_order if project is not None else 0)
     backend_name = backend.name if backend is not None else (project.name if project is not None else "")
     return (
@@ -228,6 +235,12 @@ def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | N
         return (seconds / 3600) if seconds is not None else None
     if metric_key == "ssh_status":
         return _extract_raw_payload_value(snapshot, "ssh_status_level")
+    if metric_key == "telegram_bot_status":
+        return _extract_raw_payload_value(snapshot, "telegram_bot_status_level")
+    if metric_key == "wifi_status":
+        return _extract_raw_payload_value(snapshot, "wifi_status_level")
+    if metric_key == "vpn_status":
+        return _extract_raw_payload_value(snapshot, "vpn_status_level")
     return None
 
 
@@ -258,7 +271,7 @@ def _format_value(metric_key: str, value: float | None) -> str:
     if metric_key in {"ssh_last_successful_login", "ssh_last_unsuccessful_attempt"}:
         hours = value / 3600 if metric_key == "ssh_last_successful_login" else value
         return _format_uptime_hours(hours)
-    if metric_key == "ssh_status":
+    if metric_key in {"ssh_status", "telegram_bot_status", "wifi_status", "vpn_status"}:
         level = int(round(value))
         if level <= 0:
             return "OK"
@@ -314,6 +327,20 @@ def _detail_severity_for_status(status: str) -> str:
     if status == "warn":
         return "warn"
     return "ok"
+
+
+def _format_ip_detail(ip_value: str, country_code: Any, probe_service: Any) -> str:
+    country_suffix = (
+        f" ({country_code.strip().upper()})"
+        if isinstance(country_code, str) and country_code.strip()
+        else ""
+    )
+    service_suffix = (
+        f" via {probe_service.strip()}"
+        if isinstance(probe_service, str) and probe_service.strip()
+        else ""
+    )
+    return f"{ip_value.strip()}{country_suffix}{service_suffix}"
 
 
 def _build_detail_lines(
@@ -413,6 +440,97 @@ def _build_detail_lines(
             lines.append(QuickStatusDetailLine(text=f"Port: {port}", severity=severity))
         if isinstance(raw_line, str) and raw_line.strip():
             lines.append(QuickStatusDetailLine(text=f"Log: {raw_line.strip()}", severity=severity))
+        return lines or None
+
+    if item.metric_key == "telegram_bot_status":
+        bot_running = payload.get("telegram_bot_running")
+        egress_proxy_running = payload.get("telegram_egress_proxy_running")
+        lines = []
+        if isinstance(bot_running, bool):
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"Bot container: {'running' if bot_running else 'stopped'}",
+                    severity="ok" if bot_running else "critical",
+                )
+            )
+        if isinstance(egress_proxy_running, bool):
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"Egress proxy: {'running' if egress_proxy_running else 'stopped'}",
+                    severity="ok" if egress_proxy_running else "warn",
+                )
+            )
+        return lines or None
+
+    if item.metric_key == "wifi_status":
+        ssid = payload.get("wifi_ssid")
+        interface = payload.get("wifi_interface")
+        client_count = payload.get("wifi_client_count")
+        lease_count = payload.get("wifi_dhcp_lease_count")
+        operstate = payload.get("wifi_operstate")
+        hostapd_socket_present = payload.get("wifi_hostapd_socket_present")
+        lines: list[QuickStatusDetailLine] = []
+        if isinstance(ssid, str) and ssid.strip():
+            lines.append(QuickStatusDetailLine(text=f"SSID: {ssid.strip()}", severity="ok"))
+        if isinstance(interface, str) and interface.strip():
+            lines.append(QuickStatusDetailLine(text=f"Interface: {interface.strip()}", severity="ok"))
+        if isinstance(operstate, str) and operstate.strip():
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"Operstate: {operstate.strip()}",
+                    severity="ok" if operstate.strip() == "up" else "critical",
+                )
+            )
+        if isinstance(hostapd_socket_present, bool):
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"hostapd socket: {'present' if hostapd_socket_present else 'missing'}",
+                    severity="ok" if hostapd_socket_present else "critical",
+                )
+            )
+        if isinstance(client_count, int):
+            lines.append(QuickStatusDetailLine(text=f"Associated clients: {client_count}", severity="ok"))
+        if isinstance(lease_count, int):
+            lines.append(QuickStatusDetailLine(text=f"DHCP leases: {lease_count}", severity="ok"))
+        return lines or None
+
+    if item.metric_key == "vpn_status":
+        active_backend = payload.get("vpn_active_backend")
+        hotspot_public_ip = payload.get("vpn_hotspot_public_ip")
+        hotspot_probe_service = payload.get("vpn_hotspot_probe_service")
+        hotspot_country_code = payload.get("vpn_hotspot_country_code")
+        expected_public_ip = payload.get("vpn_expected_public_ip")
+        expected_probe_service = payload.get("vpn_expected_probe_service")
+        expected_country_code = payload.get("vpn_expected_country_code")
+        default_public_ip = payload.get("vpn_default_public_ip")
+        default_probe_service = payload.get("vpn_default_probe_service")
+        default_country_code = payload.get("vpn_default_country_code")
+        lines = []
+        if isinstance(active_backend, str) and active_backend.strip():
+            lines.append(QuickStatusDetailLine(text=f"Active backend: {active_backend.strip()}", severity="ok"))
+        if isinstance(hotspot_public_ip, str) and hotspot_public_ip.strip():
+            severity = "ok" if hotspot_public_ip == expected_public_ip else _detail_severity_for_status(status)
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"Hotspot egress IP: {_format_ip_detail(hotspot_public_ip, hotspot_country_code, hotspot_probe_service)}",
+                    severity=severity,
+                )
+            )
+        if isinstance(expected_public_ip, str) and expected_public_ip.strip():
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"Backend egress IP: {_format_ip_detail(expected_public_ip, expected_country_code, expected_probe_service)}",
+                    severity="ok",
+                )
+            )
+        if isinstance(default_public_ip, str) and default_public_ip.strip():
+            severity = "warn" if default_public_ip == hotspot_public_ip else "ok"
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"Host default IP: {_format_ip_detail(default_public_ip, default_country_code, default_probe_service)}",
+                    severity=severity,
+                )
+            )
         return lines or None
 
     if item.metric_key != "ssh_status":
@@ -648,7 +766,7 @@ def _resolve_status(
         return "ok"
     if metric_key == "ssh_last_successful_login":
         return "ok"
-    if metric_key == "ssh_status":
+    if metric_key in {"ssh_status", "telegram_bot_status", "wifi_status", "vpn_status"}:
         if value >= 2:
             return "critical"
         if value >= 1:
@@ -843,7 +961,10 @@ def _build_prometheus_series_points(
     interval_seconds: int | None = None,
 ) -> list[QuickStatusSeriesPoint]:
     normalized_points: dict[datetime, float | None] = {}
-    gap_threshold = timedelta(seconds=max(5, int(interval_seconds or 60)) * 2)
+    gap_threshold = max(
+        timedelta(seconds=max(5, int(interval_seconds or 60)) * 2),
+        _TILE_STALE_AFTER,
+    )
 
     def store_point(recorded_at: datetime | None, value: float | None) -> None:
         if recorded_at is None:
@@ -879,7 +1000,7 @@ def _build_prometheus_series_points(
 
     previous_recorded_at = window_start
     for point in ordered_points:
-        if point.recorded_at - previous_recorded_at >= gap_threshold:
+        if point.recorded_at - previous_recorded_at > gap_threshold:
             points.append(QuickStatusSeriesPoint(recorded_at=point.recorded_at, value=None))
         points.append(point)
         previous_recorded_at = point.recorded_at
@@ -1282,6 +1403,60 @@ async def _load_prometheus_history_samples(
     return samples_by_item
 
 
+async def _load_latest_ping_samples(
+    session: AsyncSession,
+    item_ids: set[int],
+) -> dict[int, QuickStatusPingSample]:
+    if not item_ids:
+        return {}
+
+    ranked_samples = (
+        select(
+            QuickStatusPingSample.id.label("sample_id"),
+            func.row_number().over(
+                partition_by=QuickStatusPingSample.quick_status_item_id,
+                order_by=(QuickStatusPingSample.checked_at.desc(), QuickStatusPingSample.id.desc()),
+            ).label("row_number"),
+        )
+        .where(QuickStatusPingSample.quick_status_item_id.in_(item_ids))
+        .subquery()
+    )
+
+    result = await session.execute(
+        select(QuickStatusPingSample)
+        .join(ranked_samples, QuickStatusPingSample.id == ranked_samples.c.sample_id)
+        .where(ranked_samples.c.row_number == 1)
+    )
+    return {sample.quick_status_item_id: sample for sample in result.scalars()}
+
+
+async def _load_latest_prometheus_samples(
+    session: AsyncSession,
+    item_ids: set[int],
+) -> dict[int, QuickStatusPrometheusSample]:
+    if not item_ids:
+        return {}
+
+    ranked_samples = (
+        select(
+            QuickStatusPrometheusSample.id.label("sample_id"),
+            func.row_number().over(
+                partition_by=QuickStatusPrometheusSample.quick_status_item_id,
+                order_by=(QuickStatusPrometheusSample.checked_at.desc(), QuickStatusPrometheusSample.id.desc()),
+            ).label("row_number"),
+        )
+        .where(QuickStatusPrometheusSample.quick_status_item_id.in_(item_ids))
+        .subquery()
+    )
+
+    result = await session.execute(
+        select(QuickStatusPrometheusSample)
+        .join(ranked_samples, QuickStatusPrometheusSample.id == ranked_samples.c.sample_id)
+        .where(ranked_samples.c.row_number == 1)
+    )
+    return {sample.quick_status_item_id: sample for sample in result.scalars()}
+
+
 async def _persist_ping_result(
     session: AsyncSession,
     item: QuickStatusItem,
@@ -1347,7 +1522,7 @@ async def _check_ping(
 ) -> tuple[PingCheckResult | None, QuickStatusPingSample | None]:
     if not item.ping_endpoint:
         return None, None
-    backend = getattr(item, "backend", None)
+    backend = _loaded_relation(item, "backend")
     if backend is None:
         return None, None
     interval = max(5, int(item.ping_interval_seconds or 60))
@@ -1441,7 +1616,7 @@ async def _check_prometheus(
 async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem]:
     result = await session.execute(
         select(QuickStatusItem)
-        .options(selectinload(QuickStatusItem.backend))
+        .options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
         .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
     )
     return [item for item in result.scalars() if is_supported_quick_status_metric(getattr(item, "metric_key", None))]
@@ -1450,10 +1625,70 @@ async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem
 async def list_quick_status_items_for_backend(session: AsyncSession, backend_id: int) -> list[QuickStatusItem]:
     result = await session.execute(
         select(QuickStatusItem)
+        .options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
         .where(QuickStatusItem.backend_id == backend_id)
         .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
     )
     return [item for item in result.scalars() if is_supported_quick_status_metric(getattr(item, "metric_key", None))]
+
+
+async def refresh_due_quick_status_samples(
+    session: AsyncSession,
+    items: Iterable[QuickStatusItem] | None = None,
+    *,
+    now: datetime | None = None,
+) -> int:
+    items_list = list(items) if items is not None else await list_quick_status_items(session)
+    ping_items = [item for item in items_list if item.metric_key in _PING_METRICS]
+    prometheus_items = [item for item in items_list if item.metric_key in _PROMETHEUS_METRICS]
+    if not ping_items and not prometheus_items:
+        return 0
+
+    checked_at = _coerce_utc(now or datetime.now(tz=timezone.utc))
+    latest_ping_samples = await _load_latest_ping_samples(session, {item.id for item in ping_items})
+    latest_prometheus_samples = await _load_latest_prometheus_samples(session, {item.id for item in prometheus_items})
+
+    check_items: list[QuickStatusItem] = []
+    check_latest_samples: list[QuickStatusPingSample | QuickStatusPrometheusSample | None] = []
+    check_tasks: list = []
+
+    for item in ping_items:
+        latest = latest_ping_samples.get(item.id)
+        check_items.append(item)
+        check_latest_samples.append(latest)
+        check_tasks.append(_check_ping(session, item, latest_sample=latest, persist_history=False, now=checked_at))
+
+    for item in prometheus_items:
+        latest = latest_prometheus_samples.get(item.id)
+        check_items.append(item)
+        check_latest_samples.append(latest)
+        check_tasks.append(_check_prometheus(session, item, latest_sample=latest, persist_history=False, now=checked_at))
+
+    check_results = await asyncio.gather(*check_tasks) if check_tasks else []
+    persisted_count = 0
+    for item, latest_sample, (result, _) in zip(check_items, check_latest_samples, check_results):
+        if result is None:
+            continue
+        if item.metric_key in _PING_METRICS and isinstance(result, PingCheckResult):
+            persisted = await _persist_ping_result(session, item, result, latest_sample)
+        elif item.metric_key in _PROMETHEUS_METRICS and isinstance(result, PrometheusCheckResult):
+            persisted = await _persist_prometheus_result(session, item, result, latest_sample)
+        else:
+            persisted = None
+        if persisted is not None:
+            persisted_count += 1
+    return persisted_count
+
+
+async def run_due_quick_status_checks(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> int:
+    persisted_count = await refresh_due_quick_status_samples(session, now=now)
+    if persisted_count:
+        await session.commit()
+    return persisted_count
 
 
 async def build_quick_status_tiles(
@@ -1501,37 +1736,43 @@ async def build_quick_status_tiles(
     prometheus_results_by_item: dict[int, PrometheusCheckResult | None] = {}
     prometheus_series_by_item: dict[int, list[QuickStatusSeriesPoint]] = {}
     prometheus_summary_by_item: dict[int, QuickStatusSeriesSummary | None] = {}
+
+    check_items: list[QuickStatusItem] = []
+    check_latest_samples: list[QuickStatusPingSample | QuickStatusPrometheusSample | None] = []
+    check_tasks: list = []
     for item in items_list:
-        if item.metric_key not in _PING_METRICS:
-            if item.metric_key not in _PROMETHEUS_METRICS:
-                continue
-            latest_sample = (
-                prometheus_history_by_item.get(item.id, [])[-1] if prometheus_history_by_item.get(item.id) else None
+        if item.metric_key in _PING_METRICS:
+            latest = ping_history_by_item.get(item.id, [])[-1] if ping_history_by_item.get(item.id) else None
+            check_items.append(item)
+            check_latest_samples.append(latest)
+            check_tasks.append(
+                _check_ping(session, item, latest_sample=latest, persist_history=False, now=window_end)
             )
-            prometheus_result, persisted_sample = await _check_prometheus(
-                session,
-                item,
-                latest_sample=latest_sample,
-                persist_history=persist_prometheus_history,
-                now=window_end,
+        elif item.metric_key in _PROMETHEUS_METRICS:
+            latest = prometheus_history_by_item.get(item.id, [])[-1] if prometheus_history_by_item.get(item.id) else None
+            check_items.append(item)
+            check_latest_samples.append(latest)
+            check_tasks.append(
+                _check_prometheus(session, item, latest_sample=latest, persist_history=False, now=window_end)
             )
-            prometheus_results_by_item[item.id] = prometheus_result
-            if persisted_sample is not None:
-                prometheus_history_by_item.setdefault(item.id, []).append(persisted_sample)
-                prometheus_history_by_item[item.id].sort(key=lambda sample: (_coerce_utc(sample.checked_at), sample.id))
-            continue
-        latest_sample = ping_history_by_item.get(item.id, [])[-1] if ping_history_by_item.get(item.id) else None
-        ping_result, persisted_sample = await _check_ping(
-            session,
-            item,
-            latest_sample=latest_sample,
-            persist_history=persist_ping_history,
-            now=window_end,
-        )
-        ping_results_by_item[item.id] = ping_result
-        if persisted_sample is not None:
-            ping_history_by_item.setdefault(item.id, []).append(persisted_sample)
-            ping_history_by_item[item.id].sort(key=lambda sample: (_coerce_utc(sample.checked_at), sample.id))
+
+    check_results = await asyncio.gather(*check_tasks) if check_tasks else []
+
+    for item, latest_sample, (result, _) in zip(check_items, check_latest_samples, check_results):
+        if item.metric_key in _PING_METRICS:
+            ping_results_by_item[item.id] = result
+            if persist_ping_history and result is not None:
+                persisted = await _persist_ping_result(session, item, result, latest_sample)
+                if persisted is not None:
+                    ping_history_by_item.setdefault(item.id, []).append(persisted)
+                    ping_history_by_item[item.id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
+        elif item.metric_key in _PROMETHEUS_METRICS:
+            prometheus_results_by_item[item.id] = result
+            if persist_prometheus_history and result is not None:
+                persisted = await _persist_prometheus_result(session, item, result, latest_sample)
+                if persisted is not None:
+                    prometheus_history_by_item.setdefault(item.id, []).append(persisted)
+                    prometheus_history_by_item[item.id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
     history_snapshots_by_backend = await _load_history_snapshots(session, backend_ids, window_start, window_end)
     latest_snapshots = {
         backend_id: snapshots[-1]
@@ -1592,8 +1833,8 @@ async def build_quick_status_tiles(
             )
 
     for item in items_list:
-        backend = getattr(item, "backend", None)
-        project = getattr(item, "project", None)
+        backend = _loaded_relation(item, "backend")
+        project = _loaded_relation(item, "project")
         snapshot = latest_snapshots.get(item.backend_id) if item.backend_id is not None else None
         ping_result = ping_results_by_item.get(item.id) if item.metric_key in _PING_METRICS else None
         prometheus_result = (

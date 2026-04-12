@@ -17,6 +17,7 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
   const [error, setError] = useState<string | null>(null);
   const [quickStatusTiles, setQuickStatusTiles] = useState<QuickStatusTile[]>([]);
   const [quickStatusError, setQuickStatusError] = useState<string | null>(null);
+  const [quickStatusLoading, setQuickStatusLoading] = useState(true);
   const [selectedQuickStatusTileId, setSelectedQuickStatusTileId] = useState<number | null>(null);
   const isQuickStatusFetchingRef = useRef(false);
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
@@ -39,6 +40,7 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
       );
     } finally {
       isQuickStatusFetchingRef.current = false;
+      setQuickStatusLoading(false);
     }
   }, [projectId]);
 
@@ -263,16 +265,16 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
                 </section>
               ))}
             </div>
+          ) : quickStatusLoading ? (
+            <div className="text-secondary small">Loading quick tiles…</div>
           ) : (
             !quickStatusError && (
               <div className="card-panel rounded-4 p-4">
                 <div className="fw-semibold mb-1">No quick tiles configured</div>
                 <div className="text-secondary small">
-                  {loading
-                    ? 'Loading current monitoring state…'
-                    : isProjectView
-                      ? 'Assign quick tiles to this project from Administration to populate this view.'
-                      : 'Add quick tiles from Administration to populate this view.'}
+                  {isProjectView
+                    ? 'Assign quick tiles to this project from Administration to populate this view.'
+                    : 'Add quick tiles from Administration to populate this view.'}
                 </div>
               </div>
             )

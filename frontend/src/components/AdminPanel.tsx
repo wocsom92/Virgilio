@@ -288,6 +288,42 @@ const quickStatusMetricOptions: Array<{
     supportsMinMaxBand: false,
   },
   {
+    key: 'telegram_bot_status',
+    label: 'Telegram bot status',
+    defaultWarning: 0,
+    defaultCritical: 0,
+    helper: 'Green when the Telegram bot and its egress proxy are running.',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
+  },
+  {
+    key: 'wifi_status',
+    label: 'Wi-Fi hotspot status',
+    defaultWarning: 0,
+    defaultCritical: 0,
+    helper: 'Green when the hotspot interface, hostapd socket, and SSID are active.',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
+  },
+  {
+    key: 'vpn_status',
+    label: 'VPN egress status',
+    defaultWarning: 0,
+    defaultCritical: 0,
+    helper: 'Green only when hotspot client egress IP matches the selected VPN backend IP from external IP checks.',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
+  },
+  {
     key: 'prometheus_query',
     label: 'Prometheus query',
     defaultWarning: 80,
@@ -2905,7 +2941,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({ ...prev, ping_endpoint: event.target.value }))
                             }
-                            placeholder="8.8.8.8 or server.local"
+                            placeholder="192.0.2.10 or server.local"
                             required
                           />
                           <div className="form-text text-secondary small">

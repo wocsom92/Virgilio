@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.config import settings
 from backend.app.core.logging import bind_request_handler, bind_request_user_id, reset_request_handler, reset_request_user_id
 from backend.app.db.session import async_session_factory, engine
+from backend.app.db.schema_compat import ensure_databases_exist, ensure_schema_compat
 from backend.app.models.base import Base
 from backend.app.routers import auth, backends, dashboard, metrics, notifications, telegram
 from backend.app.routers import system
@@ -15,7 +16,6 @@ from backend.app.services.http_metrics import install_http_metrics
 from backend.app.services.http_clients import close_http_clients
 from backend.app.version import BACKEND_VERSION
 from backend.app.services.reboot_service import notify_reboot_recovery
-from backend.app.db.schema_compat import ensure_schema_compat
 from backend.app.services.self_monitoring import ensure_self_monitoring_project
 
 
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Create database tables on startup for convenience."""
     async with engine.begin() as conn:
+        await conn.run_sync(ensure_databases_exist)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_schema_compat)
     async with async_session_factory() as session:

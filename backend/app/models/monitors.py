@@ -3,11 +3,12 @@ from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.app.models.base import Base, TimestampMixin
+from backend.app.models.base import Base, CONFIG_SCHEMA, HISTORY_SCHEMA, TimestampMixin
 
 
 class MonitoredBackend(TimestampMixin, Base):
     __tablename__ = "monitored_backends"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
@@ -31,9 +32,14 @@ class MonitoredBackend(TimestampMixin, Base):
 
 class MetricSnapshot(TimestampMixin, Base):
     __tablename__ = "metric_snapshots"
+    __table_args__ = {"schema": HISTORY_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backend_id: Mapped[int] = mapped_column(ForeignKey("monitored_backends.id"), nullable=False, index=True)
+    backend_id: Mapped[int] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id"),
+        nullable=False,
+        index=True,
+    )
     reported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     cpu_temperature_c: Mapped[float | None] = mapped_column(Float)
     ram_used_percent: Mapped[float | None] = mapped_column(Float)
@@ -58,6 +64,7 @@ class MetricSnapshot(TimestampMixin, Base):
 
 class TelegramSettings(TimestampMixin, Base):
     __tablename__ = "telegram_settings"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bot_token: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -71,6 +78,7 @@ class TelegramSettings(TimestampMixin, Base):
 
 class RebootEvent(TimestampMixin, Base):
     __tablename__ = "reboot_events"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     requested_by: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -81,6 +89,7 @@ class RebootEvent(TimestampMixin, Base):
 
 class SystemSettings(TimestampMixin, Base):
     __tablename__ = "system_settings"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     metric_retention_days: Mapped[int] = mapped_column(Integer, nullable=False, default=7)
@@ -89,6 +98,7 @@ class SystemSettings(TimestampMixin, Base):
 
 class NotificationEvent(TimestampMixin, Base):
     __tablename__ = "notification_events"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     channel: Mapped[str] = mapped_column(String(32), nullable=False, default="telegram")
@@ -96,7 +106,11 @@ class NotificationEvent(TimestampMixin, Base):
     severity: Mapped[str] = mapped_column(String(16), nullable=False, default="info")
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    backend_id: Mapped[int | None] = mapped_column(ForeignKey("monitored_backends.id"), nullable=True, index=True)
+    backend_id: Mapped[int | None] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id"),
+        nullable=True,
+        index=True,
+    )
     backend_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     delivery_status: Mapped[str] = mapped_column(String(16), nullable=False, default="sent")
     target: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -108,10 +122,19 @@ class NotificationEvent(TimestampMixin, Base):
 
 class QuickStatusItem(TimestampMixin, Base):
     __tablename__ = "quick_status_items"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backend_id: Mapped[int | None] = mapped_column(ForeignKey("monitored_backends.id"), nullable=True, index=True)
-    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True, index=True)
+    backend_id: Mapped[int | None] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id"),
+        nullable=True,
+        index=True,
+    )
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.projects.id"),
+        nullable=True,
+        index=True,
+    )
     label: Mapped[str] = mapped_column(String(120), nullable=False)
     metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
     mount_path: Mapped[str | None] = mapped_column(String(255))
@@ -151,9 +174,14 @@ class QuickStatusItem(TimestampMixin, Base):
 
 class QuickStatusPingSample(TimestampMixin, Base):
     __tablename__ = "quick_status_ping_samples"
+    __table_args__ = {"schema": HISTORY_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    quick_status_item_id: Mapped[int] = mapped_column(ForeignKey("quick_status_items.id"), nullable=False, index=True)
+    quick_status_item_id: Mapped[int] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.quick_status_items.id"),
+        nullable=False,
+        index=True,
+    )
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     latency_ms: Mapped[float | None] = mapped_column(Float)
@@ -163,9 +191,14 @@ class QuickStatusPingSample(TimestampMixin, Base):
 
 class QuickStatusPrometheusSample(TimestampMixin, Base):
     __tablename__ = "quick_status_prometheus_samples"
+    __table_args__ = {"schema": HISTORY_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    quick_status_item_id: Mapped[int] = mapped_column(ForeignKey("quick_status_items.id"), nullable=False, index=True)
+    quick_status_item_id: Mapped[int] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.quick_status_items.id"),
+        nullable=False,
+        index=True,
+    )
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     sampled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -176,6 +209,7 @@ class QuickStatusPrometheusSample(TimestampMixin, Base):
 
 class Project(TimestampMixin, Base):
     __tablename__ = "projects"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
@@ -191,6 +225,7 @@ class Project(TimestampMixin, Base):
 
 class SiteMonitor(TimestampMixin, Base):
     __tablename__ = "site_monitors"
+    __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
@@ -215,9 +250,14 @@ class SiteMonitor(TimestampMixin, Base):
 
 class SiteMonitorSample(TimestampMixin, Base):
     __tablename__ = "site_monitor_samples"
+    __table_args__ = {"schema": HISTORY_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    site_monitor_id: Mapped[int] = mapped_column(ForeignKey("site_monitors.id"), nullable=False, index=True)
+    site_monitor_id: Mapped[int] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.site_monitors.id"),
+        nullable=False,
+        index=True,
+    )
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)

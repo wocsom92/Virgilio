@@ -1,6 +1,10 @@
+from sqlalchemy import DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
-from sqlalchemy import DateTime
+
+
+CONFIG_SCHEMA = "config"
+HISTORY_SCHEMA = "history"
 
 
 class Base(DeclarativeBase):

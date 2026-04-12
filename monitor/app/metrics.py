@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import glob
 import gzip
+import ipaddress
 import json
 import logging
 import os
@@ -33,11 +34,18 @@ _SSH_SNAPSHOT_CACHE_TTL_SECONDS = 5.0
 _SSH_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _MOUNT_POINTS_CACHE_TTL_SECONDS = 30.0
 _OS_VERSION_CACHE_TTL_SECONDS = 300.0
+_SERVICE_SNAPSHOT_CACHE_TTL_SECONDS = 15.0
+_NETWORK_EGRESS_CACHE_TTL_SECONDS = 60.0
 _top_processes_cache: tuple[float, dict[str, list[dict[str, Any]]] | None] | None = None
 _ssh_snapshot_cache: tuple[float, dict[str, Any]] | None = None
 _ssh_settings_cache: tuple[float, tuple[bool, bool, bool, str, str, str, str, str]] | None = None
 _mount_points_cache: tuple[float, list[str]] | None = None
 _os_version_cache: tuple[float, str] | None = None
+_telegram_snapshot_cache: tuple[float, dict[str, Any]] | None = None
+_wifi_snapshot_cache: tuple[float, dict[str, Any]] | None = None
+_vpn_snapshot_cache: tuple[float, dict[str, Any]] | None = None
+_public_ip_probe_cache: dict[tuple[str, str], tuple[float, tuple[str | None, str | None]]] = {}
+_country_code_probe_cache: dict[tuple[str, str], tuple[float, tuple[str | None, str | None]]] = {}
 
 _SSH_LOG_TIMESTAMP_RE = re.compile(r"^(?P<stamp>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+")
 _LAST_OUTPUT_TIMESTAMP_RE = re.compile(r"([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})")
@@ -79,7 +87,7 @@ _SSH_AUTH_FAILURE_RE = re.compile(
     re.IGNORECASE,
 )
 _SSH_PREAUTH_DISCONNECT_RE = re.compile(
-    r"(?:Connection closed|Connection reset|Disconnected)\s+from\s+authenticating user\s+"
+    r"(?:Connection closed|Connection reset|Disconnected)\s+(?:from|by)\s+authenticating user\s+"
     r"(?P<username>\S+)\s+(?P<source_ip>\S+)(?:\s+port\s+(?P<port>\d+))?",
     re.IGNORECASE,
 )
@@ -88,6 +96,18 @@ _SSH_SUCCESS_DETAILS_RE = re.compile(
     r"(?P<source_ip>\S+)(?:\s+port\s+(?P<port>\d+))?",
     re.IGNORECASE,
 )
+_IP_ADDR_SHOW_RE = re.compile(r"\binet\s+(?P<address>\d+\.\d+\.\d+\.\d+)/")
+_PUBLIC_IP_PROBE_SERVICES: tuple[tuple[str, str], ...] = (
+    ("ipify", "https://api.ipify.org"),
+    ("icanhazip", "https://ipv4.icanhazip.com"),
+    ("ifconfig.me", "https://ifconfig.me/ip"),
+)
+_COUNTRY_CODE_PROBE_SERVICES: tuple[tuple[str, str], ...] = (
+    ("ipapi", "https://ipapi.co/{ip}/country/"),
+    ("ipinfo", "https://ipinfo.io/{ip}/country"),
+    ("ipwhois", "https://ipwho.is/{ip}"),
+)
+_XRAY_PROXY_URL = "http://127.0.0.1:10809"
 
 
 def _safe_percent(value: Any) -> float | None:
@@ -848,6 +868,408 @@ def _get_os_version() -> str:
     return result
 
 
+def _host_path(path: str) -> str:
+    normalized = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    if normalized and normalized != "/":
+        suffix = path.lstrip("/")
+        return os.path.join(normalized, suffix) if suffix else normalized
+    return path
+
+
+def _host_file_exists(path: str) -> bool:
+    for candidate in _host_candidate_paths(path):
+        if os.path.exists(candidate):
+            return True
+    return False
+
+
+def _read_host_text(path: str) -> str | None:
+    for candidate in _host_candidate_paths(path):
+        try:
+            with open(candidate, "r", encoding="utf-8", errors="ignore") as handle:
+                return handle.read()
+        except OSError:
+            continue
+    return None
+
+
+def _read_host_key_value_file(path: str) -> dict[str, str]:
+    payload = _read_host_text(path)
+    if payload is None:
+        return {}
+    result: dict[str, str] = {}
+    for raw_line in payload.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        if not line or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            result[key] = value
+    return result
+
+
+def _count_host_file_lines(path: str) -> int:
+    payload = _read_host_text(path)
+    if payload is None:
+        return 0
+    return sum(1 for line in payload.splitlines() if line.strip())
+
+
+def _host_network_namespace_path() -> str | None:
+    candidate = os.path.join(_host_path("/proc/1/ns/net"))
+    if os.path.exists(candidate):
+        return candidate
+    return None
+
+
+def _host_network_command_invocations(command: str, args: list[str], *, include_chroot: bool = True) -> list[list[str]]:
+    nsenter_bin = shutil.which("nsenter")
+    namespace_path = _host_network_namespace_path()
+    if not nsenter_bin or not namespace_path:
+        return []
+    invocations: list[list[str]] = []
+    for candidate in _candidate_host_command_invocations(command, args, include_chroot=include_chroot):
+        invocations.append([nsenter_bin, f"--net={namespace_path}", *candidate])
+    return invocations
+
+
+def _run_host_network_command(
+    command: str,
+    args: list[str],
+    *,
+    timeout: int = 8,
+    include_chroot: bool = True,
+) -> str | None:
+    for invocation in _host_network_command_invocations(command, args, include_chroot=include_chroot):
+        try:
+            result = subprocess.run(
+                invocation,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        output = (result.stdout or "").strip()
+        if output:
+            return output
+    return None
+
+
+def _detect_hotspot_interface() -> str | None:
+    config = _read_host_key_value_file("/etc/hostapd/hostapd.conf")
+    interface = (config.get("interface") or "").strip()
+    return interface or None
+
+
+def _detect_hotspot_ssid() -> str | None:
+    config = _read_host_key_value_file("/etc/hostapd/hostapd.conf")
+    ssid = (config.get("ssid") or "").strip()
+    return ssid or None
+
+
+def _host_interface_ipv4(interface: str | None) -> str | None:
+    if not interface:
+        return None
+    output = _run_host_network_command("ip", ["-4", "-o", "addr", "show", "dev", interface], timeout=6)
+    if not output:
+        return None
+    match = _IP_ADDR_SHOW_RE.search(output)
+    return match.group("address") if match else None
+
+
+def _normalize_public_ip_probe_value(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    try:
+        parsed = ipaddress.ip_address(candidate)
+    except ValueError:
+        return None
+    if parsed.version != 4:
+        return None
+    return str(parsed)
+
+
+def _normalize_country_code_probe_value(value: str | None) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip().upper()
+    if re.fullmatch(r"[A-Z]{2}", candidate):
+        return candidate
+    try:
+        payload = json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    nested_candidate = payload.get("country_code")
+    if isinstance(nested_candidate, str):
+        nested_value = nested_candidate.strip().upper()
+        if re.fullmatch(r"[A-Z]{2}", nested_value):
+            return nested_value
+    return None
+
+
+def _probe_public_ip(*, cache_key: tuple[str, str], curl_args: list[str]) -> tuple[str | None, str | None]:
+    now = time.monotonic()
+    cached = _public_ip_probe_cache.get(cache_key)
+    if cached is not None:
+        cached_at, cached_value = cached
+        if now - cached_at <= _NETWORK_EGRESS_CACHE_TTL_SECONDS:
+            return cached_value
+
+    result: tuple[str | None, str | None] = (None, None)
+    for service_name, service_url in _PUBLIC_IP_PROBE_SERVICES:
+        base_args = ["-4fsSL", "--max-time", "8", *_curl_user_agent_args(), *curl_args, service_url]
+        output = _run_host_network_command("curl", base_args, timeout=10)
+        value = _normalize_public_ip_probe_value(output)
+        if value is not None:
+            result = (value, service_name)
+            break
+
+    _public_ip_probe_cache[cache_key] = (now, result)
+    return result
+
+
+def _probe_country_code(*, ip_address_value: str) -> tuple[str | None, str | None]:
+    now = time.monotonic()
+    cache_key = ("ip", ip_address_value)
+    cached = _country_code_probe_cache.get(cache_key)
+    if cached is not None:
+        cached_at, cached_value = cached
+        if now - cached_at <= _NETWORK_EGRESS_CACHE_TTL_SECONDS:
+            return cached_value
+
+    result: tuple[str | None, str | None] = (None, None)
+    for service_name, service_url_template in _COUNTRY_CODE_PROBE_SERVICES:
+        service_url = service_url_template.format(ip=ip_address_value)
+        base_args = ["-4fsSL", "--max-time", "8", *_curl_user_agent_args(), service_url]
+        output = _run_host_network_command("curl", base_args, timeout=10)
+        value = _normalize_country_code_probe_value(output)
+        if value is not None:
+            result = (value, service_name)
+            break
+
+    _country_code_probe_cache[cache_key] = (now, result)
+    return result
+
+
+def _curl_user_agent_args() -> list[str]:
+    return ["-A", f"server-monitor/{settings.version}"]
+
+
+def _probe_public_ip_via_interface(interface: str) -> tuple[str | None, str | None]:
+    return _probe_public_ip(cache_key=("interface", interface), curl_args=["--interface", interface])
+
+
+def _probe_public_ip_via_source_ip(source_ip: str) -> tuple[str | None, str | None]:
+    return _probe_public_ip(cache_key=("source_ip", source_ip), curl_args=["--interface", source_ip])
+
+
+def _probe_public_ip_via_proxy(proxy_url: str) -> tuple[str | None, str | None]:
+    return _probe_public_ip(cache_key=("proxy", proxy_url), curl_args=["-x", proxy_url])
+
+
+def _probe_default_public_ip() -> tuple[str | None, str | None]:
+    return _probe_public_ip(cache_key=("default", ""), curl_args=[])
+
+
+def _collect_telegram_bot_snapshot(running_containers: list[str] | None) -> dict[str, Any]:
+    global _telegram_snapshot_cache
+    now = time.monotonic()
+    if _telegram_snapshot_cache is not None:
+        cached_at, cached_value = _telegram_snapshot_cache
+        if now - cached_at <= _SERVICE_SNAPSHOT_CACHE_TTL_SECONDS:
+            return dict(cached_value)
+
+    names = {name.strip() for name in (running_containers or []) if isinstance(name, str) and name.strip()}
+    bot_running = "server-monitor-telegram-bot" in names
+    proxy_running = "server-monitor-telegram-egress-proxy" in names
+
+    if bot_running and proxy_running:
+        status_level = 0
+        status = "ok"
+    elif bot_running:
+        status_level = 1
+        status = "warn"
+    elif running_containers is None:
+        status_level = None
+        status = None
+    else:
+        status_level = 2
+        status = "critical"
+
+    result = {
+        "telegram_bot_status_level": status_level,
+        "telegram_bot_status": status,
+        "telegram_bot_running": bot_running if running_containers is not None else None,
+        "telegram_egress_proxy_running": proxy_running if running_containers is not None else None,
+    }
+    _telegram_snapshot_cache = (now, result)
+    return dict(result)
+
+
+def _count_wifi_clients(interface: str | None) -> int | None:
+    if not interface:
+        return None
+    output = _run_host_network_command("iw", ["dev", interface, "station", "dump"], timeout=6)
+    if output is None:
+        return None
+    return sum(1 for line in output.splitlines() if line.lstrip().startswith("Station "))
+
+
+def _collect_wifi_snapshot() -> dict[str, Any]:
+    global _wifi_snapshot_cache
+    now = time.monotonic()
+    if _wifi_snapshot_cache is not None:
+        cached_at, cached_value = _wifi_snapshot_cache
+        if now - cached_at <= _SERVICE_SNAPSHOT_CACHE_TTL_SECONDS:
+            return dict(cached_value)
+
+    interface = _detect_hotspot_interface()
+    ssid = _detect_hotspot_ssid()
+    operstate = None
+    if interface:
+        operstate_text = _read_host_text(f"/sys/class/net/{interface}/operstate")
+        operstate = operstate_text.strip() if isinstance(operstate_text, str) and operstate_text.strip() else None
+    hostapd_socket_present = interface is not None and _host_file_exists(f"/run/hostapd/{interface}")
+    client_count = _count_wifi_clients(interface)
+    dhcp_leases = _count_host_file_lines("/var/lib/misc/dnsmasq.leases")
+
+    if interface and ssid and operstate == "up" and hostapd_socket_present:
+        status_level = 0
+        status = "ok"
+    elif interface or ssid:
+        status_level = 2 if operstate not in (None, "up") or not hostapd_socket_present else 1
+        status = "critical" if status_level == 2 else "warn"
+    else:
+        status_level = None
+        status = None
+
+    result = {
+        "wifi_status_level": status_level,
+        "wifi_status": status,
+        "wifi_ssid": ssid,
+        "wifi_interface": interface,
+        "wifi_client_count": client_count,
+        "wifi_dhcp_lease_count": dhcp_leases,
+        "wifi_operstate": operstate,
+        "wifi_hostapd_socket_present": hostapd_socket_present if interface else None,
+    }
+    _wifi_snapshot_cache = (now, result)
+    return dict(result)
+
+
+def _vpn_interface_name(active_backend: str | None) -> str | None:
+    if not active_backend:
+        return None
+    token = active_backend.strip().lower()
+    if token == "xray":
+        return None
+    return token
+
+
+def _read_active_vpn_backend() -> str | None:
+    payload = _read_host_text("/usr/local/etc/vpn-backend/active-backend")
+    if not isinstance(payload, str):
+        return None
+    token = payload.strip()
+    return token or None
+
+
+def _collect_vpn_snapshot() -> dict[str, Any]:
+    global _vpn_snapshot_cache
+    now = time.monotonic()
+    if _vpn_snapshot_cache is not None:
+        cached_at, cached_value = _vpn_snapshot_cache
+        if now - cached_at <= _SERVICE_SNAPSHOT_CACHE_TTL_SECONDS:
+            return dict(cached_value)
+
+    active_backend = _read_active_vpn_backend()
+    hotspot_interface = _detect_hotspot_interface()
+    if not active_backend and not hotspot_interface:
+        result = {
+            "vpn_status_level": None,
+            "vpn_status": None,
+            "vpn_active_backend": None,
+            "vpn_hotspot_public_ip": None,
+            "vpn_hotspot_probe_service": None,
+            "vpn_hotspot_country_code": None,
+            "vpn_expected_public_ip": None,
+            "vpn_expected_probe_service": None,
+            "vpn_expected_country_code": None,
+            "vpn_default_public_ip": None,
+            "vpn_default_probe_service": None,
+            "vpn_default_country_code": None,
+        }
+        _vpn_snapshot_cache = (now, result)
+        return dict(result)
+
+    hotspot_source_ip = _host_interface_ipv4(hotspot_interface)
+    default_public_ip, default_probe_service = _probe_default_public_ip()
+
+    expected_public_ip: str | None = None
+    expected_probe_service: str | None = None
+    if active_backend:
+        if active_backend.strip().lower() == "xray":
+            expected_public_ip, expected_probe_service = _probe_public_ip_via_proxy(_XRAY_PROXY_URL)
+        else:
+            interface = _vpn_interface_name(active_backend)
+            if interface:
+                expected_public_ip, expected_probe_service = _probe_public_ip_via_interface(interface)
+
+    hotspot_public_ip: str | None = None
+    hotspot_probe_service: str | None = None
+    if hotspot_source_ip:
+        hotspot_public_ip, hotspot_probe_service = _probe_public_ip_via_source_ip(hotspot_source_ip)
+
+    hotspot_country_code = _probe_country_code(ip_address_value=hotspot_public_ip)[0] if hotspot_public_ip else None
+    expected_country_code = _probe_country_code(ip_address_value=expected_public_ip)[0] if expected_public_ip else None
+    default_country_code = _probe_country_code(ip_address_value=default_public_ip)[0] if default_public_ip else None
+
+    if not active_backend:
+        status_level = None
+        status = None
+    elif hotspot_public_ip and expected_public_ip:
+        if hotspot_public_ip == expected_public_ip:
+            status_level = 0
+            status = "ok"
+        else:
+            status_level = 2
+            status = "critical"
+    elif hotspot_public_ip or expected_public_ip:
+        status_level = 1
+        status = "warn"
+    else:
+        status_level = 2
+        status = "critical"
+
+    result = {
+        "vpn_status_level": status_level,
+        "vpn_status": status,
+        "vpn_active_backend": active_backend,
+        "vpn_hotspot_public_ip": hotspot_public_ip,
+        "vpn_hotspot_probe_service": hotspot_probe_service,
+        "vpn_hotspot_country_code": hotspot_country_code,
+        "vpn_expected_public_ip": expected_public_ip,
+        "vpn_expected_probe_service": expected_probe_service,
+        "vpn_expected_country_code": expected_country_code,
+        "vpn_default_public_ip": default_public_ip,
+        "vpn_default_probe_service": default_probe_service,
+        "vpn_default_country_code": default_country_code,
+    }
+    _vpn_snapshot_cache = (now, result)
+    return dict(result)
+
+
 def _mounted_usage(mount_points: list[str]) -> list[dict[str, Any]]:
     usage = []
     for mount in mount_points:
@@ -1020,6 +1442,7 @@ def collect_metrics() -> dict[str, Any]:
         disk_temps = None
 
     mount_points = _resolve_mount_points()
+    running_containers = _list_running_docker_containers()
     payload: dict[str, Any] = {
         "reported_at": datetime.now(tz=timezone.utc).isoformat(),
         "hostname": socket.gethostname(),
@@ -1030,9 +1453,7 @@ def collect_metrics() -> dict[str, Any]:
         "memory_available_gb": round(virtual_memory.available / (1024 ** 3), 2),
         "swap_used_percent": round(float(swap.percent), 2) if swap and swap.percent is not None else None,
         "docker_container_count": _count_docker_containers(),
-        "docker_running_containers": (
-            _list_running_docker_containers() if settings.expose_docker_running_containers else None
-        ),
+        "docker_running_containers": (running_containers if settings.expose_docker_running_containers else None),
         "disk_usage_percent": round(disk.percent, 2),
         "disk_total_gb": round(disk.total / (1024 ** 3), 2),
         "disk_available_gb": round(disk.free / (1024 ** 3), 2),
@@ -1048,6 +1469,9 @@ def collect_metrics() -> dict[str, Any]:
     if top_processes:
         payload["top_processes"] = top_processes
     payload.update(_collect_ssh_snapshot())
+    payload.update(_collect_telegram_bot_snapshot(running_containers))
+    payload.update(_collect_wifi_snapshot())
+    payload.update(_collect_vpn_snapshot())
     warnings = _detect_warnings(payload)
     if warnings:
         payload["warnings"] = warnings

@@ -1,9 +1,11 @@
-from functools import lru_cache
 import json
+from functools import lru_cache
 from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from backend.app.models.base import CONFIG_SCHEMA, HISTORY_SCHEMA
 
 
 class Settings(BaseSettings):
@@ -27,6 +29,7 @@ class Settings(BaseSettings):
     db_host: str = "localhost"
     db_port: int = 3306
     db_name: str = "server_monitor"
+    history_db_name: str = "backend_monitor"
 
     # Authentication options
     admin_api_token: str = "change-me"  # Legacy token, superseded by username/password auth
@@ -38,6 +41,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_default_chat_id: str | None = None
     telegram_proxy_url: str | None = None
+    telegram_bind_interface: str | None = None
+    telegram_local_address: str | None = None
     telegram_allowed_users: List[str] = Field(default_factory=list)
 
     # Host control
@@ -77,6 +82,21 @@ class Settings(BaseSettings):
                 ]
         return []
 
+    @field_validator(
+        "telegram_proxy_url",
+        "telegram_bind_interface",
+        "telegram_local_address",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_optional_string(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @field_validator("telegram_allowed_users", mode="before")
     @classmethod
     def _parse_allowed_users(cls, value: List[str] | str | None) -> List[str]:
@@ -114,6 +134,18 @@ class Settings(BaseSettings):
             f"mysql+asyncmy://{self.db_user}:{self.db_password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
+
+    def sqlalchemy_schema_translate_map(self) -> dict[str, str]:
+        """Map logical SQLAlchemy schemas to physical database names."""
+        return {
+            CONFIG_SCHEMA: self.db_name,
+            HISTORY_SCHEMA: self.history_db_name,
+        }
+
+    def database_names(self) -> list[str]:
+        """Return distinct physical database names used by the backend."""
+        names = [self.db_name, self.history_db_name]
+        return list(dict.fromkeys(name for name in names if name))
 
 
 @lru_cache

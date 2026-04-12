@@ -37,6 +37,20 @@ def test_metric_value_reads_ssh_payload_fields():
     assert quick_status._metric_value(snapshot, "ssh_status", None) == 1
 
 
+def test_metric_value_reads_device_status_payload_fields():
+    snapshot = _snapshot(
+        {
+            "telegram_bot_status_level": 1,
+            "wifi_status_level": 0,
+            "vpn_status_level": 2,
+        }
+    )
+
+    assert quick_status._metric_value(snapshot, "telegram_bot_status", None) == 1
+    assert quick_status._metric_value(snapshot, "wifi_status", None) == 0
+    assert quick_status._metric_value(snapshot, "vpn_status", None) == 2
+
+
 def test_metric_value_reads_mount_available_gb():
     snapshot = MetricSnapshot(
         backend_id=1,
@@ -69,6 +83,9 @@ def test_format_value_for_ssh_metrics():
     assert quick_status._format_value("ssh_status", 0) == "OK"
     assert quick_status._format_value("ssh_status", 1) == "WARN"
     assert quick_status._format_value("ssh_status", 2) == "CRIT"
+    assert quick_status._format_value("telegram_bot_status", 0) == "OK"
+    assert quick_status._format_value("wifi_status", 1) == "WARN"
+    assert quick_status._format_value("vpn_status", 2) == "CRIT"
     assert quick_status._format_value("cpu_temperature_c", 55.1) == "55.1 °C"
 
 
@@ -117,6 +134,64 @@ def test_resolve_status_for_ssh_metrics():
     assert quick_status._resolve_status(0, 0, 0, "ssh_status") == "ok"
     assert quick_status._resolve_status(1, 0, 0, "ssh_status") == "warn"
     assert quick_status._resolve_status(2, 0, 0, "ssh_status") == "critical"
+    assert quick_status._resolve_status(0, 0, 0, "telegram_bot_status") == "ok"
+    assert quick_status._resolve_status(1, 0, 0, "wifi_status") == "warn"
+    assert quick_status._resolve_status(2, 0, 0, "vpn_status") == "critical"
+
+
+def test_build_detail_lines_for_device_status_tiles():
+    snapshot = _snapshot(
+        {
+            "telegram_bot_running": True,
+            "telegram_egress_proxy_running": True,
+            "wifi_ssid": "lab-wifi",
+            "wifi_interface": "wlan0",
+            "wifi_client_count": 2,
+            "wifi_dhcp_lease_count": 3,
+            "wifi_operstate": "up",
+            "wifi_hostapd_socket_present": True,
+            "vpn_active_backend": "wg0",
+            "vpn_hotspot_public_ip": "198.51.100.27",
+            "vpn_hotspot_probe_service": "ifconfig.me",
+            "vpn_hotspot_country_code": "DE",
+            "vpn_expected_public_ip": "198.51.100.27",
+            "vpn_expected_probe_service": "icanhazip",
+            "vpn_expected_country_code": "DE",
+            "vpn_default_public_ip": "203.0.113.42",
+            "vpn_default_probe_service": "ipify",
+            "vpn_default_country_code": "US",
+        }
+    )
+
+    telegram_item = QuickStatusItem(label="Telegram", metric_key="telegram_bot_status", warning_threshold=0, critical_threshold=0)
+    wifi_item = QuickStatusItem(label="Wi-Fi", metric_key="wifi_status", warning_threshold=0, critical_threshold=0)
+    vpn_item = QuickStatusItem(label="VPN", metric_key="vpn_status", warning_threshold=0, critical_threshold=0)
+
+    telegram_lines = quick_status._build_detail_lines(telegram_item, snapshot, status="ok")
+    wifi_lines = quick_status._build_detail_lines(wifi_item, snapshot, status="ok")
+    vpn_lines = quick_status._build_detail_lines(vpn_item, snapshot, status="ok")
+
+    assert telegram_lines is not None
+    assert [line.text for line in telegram_lines] == [
+        "Bot container: running",
+        "Egress proxy: running",
+    ]
+    assert wifi_lines is not None
+    assert [line.text for line in wifi_lines] == [
+        "SSID: lab-wifi",
+        "Interface: wlan0",
+        "Operstate: up",
+        "hostapd socket: present",
+        "Associated clients: 2",
+        "DHCP leases: 3",
+    ]
+    assert vpn_lines is not None
+    assert [line.text for line in vpn_lines] == [
+        "Active backend: wg0",
+        "Hotspot egress IP: 198.51.100.27 (DE) via ifconfig.me",
+        "Backend egress IP: 198.51.100.27 (DE) via icanhazip",
+        "Host default IP: 203.0.113.42 (US) via ipify",
+    ]
 
 
 def test_resolve_status_for_mount_available_gb():
@@ -262,6 +337,47 @@ def test_build_prometheus_series_points_pads_window_and_marks_gaps():
     assert summary.delta_value == pytest.approx(4.0)
 
 
+def test_build_prometheus_series_points_connects_sparse_samples_until_stale_gap():
+    window_start = datetime(2026, 4, 2, 12, 0, tzinfo=timezone.utc)
+    window_end = window_start + timedelta(hours=1)
+    samples = [
+        QuickStatusPrometheusSample(
+            quick_status_item_id=1,
+            checked_at=window_start + timedelta(minutes=1),
+            sampled_at=window_start + timedelta(minutes=1),
+            value=22.0,
+        ),
+        QuickStatusPrometheusSample(
+            quick_status_item_id=1,
+            checked_at=window_start + timedelta(minutes=8),
+            sampled_at=window_start + timedelta(minutes=8),
+            value=22.5,
+        ),
+        QuickStatusPrometheusSample(
+            quick_status_item_id=1,
+            checked_at=window_start + timedelta(minutes=39),
+            sampled_at=window_start + timedelta(minutes=39),
+            value=23.0,
+        ),
+    ]
+
+    points = quick_status._build_prometheus_series_points(
+        samples,
+        window_start,
+        window_end,
+        interval_seconds=60,
+    )
+
+    assert [(point.recorded_at, point.value) for point in points] == [
+        (window_start, None),
+        (window_start + timedelta(minutes=1), 22.0),
+        (window_start + timedelta(minutes=8), 22.5),
+        (window_start + timedelta(minutes=39), None),
+        (window_start + timedelta(minutes=39), 23.0),
+        (window_end, None),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_build_quick_status_tiles_keeps_backend_order_stable(db_session):
     backend_b = MonitoredBackend(
@@ -390,9 +506,9 @@ async def test_build_quick_status_tiles_include_ssh_failure_details(db_session):
                 "ssh_last_unsuccessful_attempt_seconds": 3600,
                 "ssh_last_failure_auth_method": "publickey",
                 "ssh_last_failure_username": "root",
-                "ssh_last_failure_source_ip": "10.0.0.8",
+                "ssh_last_failure_source_ip": "192.0.2.8",
                 "ssh_last_failure_port": 55123,
-                "ssh_last_failure_line": "Failed publickey for root from 10.0.0.8 port 55123 ssh2",
+                "ssh_last_failure_line": "Failed publickey for root from 192.0.2.8 port 55123 ssh2",
             },
         )
     )
@@ -414,10 +530,10 @@ async def test_build_quick_status_tiles_include_ssh_failure_details(db_session):
     assert tiles[0].details is not None
     assert any(line.text == "Method: publickey" and line.severity == "critical" for line in tiles[0].details)
     assert any(line.text == "User: root" and line.severity == "critical" for line in tiles[0].details)
-    assert any(line.text == "Source: 10.0.0.8" and line.severity == "critical" for line in tiles[0].details)
+    assert any(line.text == "Source: 192.0.2.8" and line.severity == "critical" for line in tiles[0].details)
     assert any(line.text == "Port: 55123" and line.severity == "critical" for line in tiles[0].details)
     assert any(
-        line.text == "Log: Failed publickey for root from 10.0.0.8 port 55123 ssh2"
+        line.text == "Log: Failed publickey for root from 192.0.2.8 port 55123 ssh2"
         and line.severity == "critical"
         for line in tiles[0].details
     )
@@ -839,6 +955,61 @@ async def test_build_quick_status_tiles_supports_project_prometheus_tile_without
     assert tiles[0].project_id == project.id
     assert tiles[0].backend_name == "Home"
     assert tiles[0].show_updated_age is True
+
+
+@pytest.mark.asyncio
+async def test_run_due_quick_status_checks_samples_project_prometheus_items(db_session, monkeypatch):
+    now = datetime(2026, 3, 30, 12, 0, tzinfo=timezone.utc)
+    project = Project(name="Home", display_order=2)
+    db_session.add(project)
+    await db_session.flush()
+    item = QuickStatusItem(
+        backend_id=None,
+        project_id=project.id,
+        project=project,
+        label="Room temp",
+        metric_key="prometheus_query",
+        warning_threshold=26,
+        critical_threshold=28,
+        prometheus_url="http://prometheus:9090",
+        prometheus_query='background_room_temperature_celsius{room="bedroom"}',
+        prometheus_interval_seconds=60,
+        prometheus_threshold_direction="higher",
+        display_variant="temperature",
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    calls: list[datetime] = []
+
+    async def fake_fetch_prometheus_query_value(base_url: str, query: str):
+        calls.append(now + timedelta(seconds=61 * len(calls)))
+        return PrometheusQueryValue(
+            value=23.4 + len(calls),
+            sampled_at=calls[-1],
+        )
+
+    monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
+
+    assert await quick_status.run_due_quick_status_checks(db_session, now=now) == 1
+    assert await quick_status.run_due_quick_status_checks(db_session, now=now + timedelta(seconds=30)) == 0
+    assert await quick_status.run_due_quick_status_checks(db_session, now=now + timedelta(seconds=61)) == 1
+
+    samples = (
+        await db_session.execute(
+            select(QuickStatusPrometheusSample)
+            .where(QuickStatusPrometheusSample.quick_status_item_id == item.id)
+            .order_by(QuickStatusPrometheusSample.checked_at.asc(), QuickStatusPrometheusSample.id.asc())
+        )
+    ).scalars().all()
+
+    assert len(calls) == 2
+    assert [quick_status._coerce_utc(sample.checked_at) for sample in samples] == [
+        now,
+        now + timedelta(seconds=61),
+    ]
+    assert [sample.value for sample in samples] == [24.4, 25.4]
 
 
 @pytest.mark.asyncio
