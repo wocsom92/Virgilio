@@ -173,11 +173,11 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
       : 'quick-status-grid__item';
 
   return (
-    <div className="d-flex flex-column gap-4">
-      <div className="d-flex justify-content-between align-items-center">
-        <div>
-          <h2 className="fw-semibold text-uppercase mb-1">{isMonitoringView ? 'Quick Tiles' : 'All Graphs'}</h2>
-          <p className="text-secondary small mb-0">
+    <div className="dashboard-page d-flex flex-column gap-4">
+      <div className="page-intro">
+        <div className="page-intro__copy">
+          <h2 className="page-intro__title">{isMonitoringView ? 'Quick Tiles' : 'All Graphs'}</h2>
+          <p className="page-intro__description mb-0">
             {isMonitoringView
               ? isProjectView
                 ? 'Project quick tiles and drill-down status details.'

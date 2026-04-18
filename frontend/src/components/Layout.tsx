@@ -399,8 +399,8 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
       <aside className={`app-sidebar ${menuOpen ? 'app-sidebar--open' : ''}`}>
         <div className="app-sidebar__brand">
           <div className="app-sidebar__eyebrow">Virgilio</div>
-          <div className="app-sidebar__title">System Monitoring</div>
-          <div className="app-sidebar__quote">Lasciate ogni speranza, voi che entrate</div>
+          <div className="app-sidebar__title">Server Monitor</div>
+          <div className="app-sidebar__quote">Fleet health, projects, alerts, and administration.</div>
         </div>
 
         <nav className="app-sidebar__nav" aria-label="Primary">
@@ -485,7 +485,7 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
               <FiMenu size={18} />
             </button>
             <div>
-              <div className="app-header__eyebrow">Workspace</div>
+              <div className="app-header__eyebrow">Control Center</div>
               <h1 className="app-header__title">{viewMeta.label}</h1>
               <p className="app-header__description mb-0">{viewMeta.description}</p>
             </div>

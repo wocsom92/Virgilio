@@ -136,8 +136,8 @@ export default function App() {
 
   if (authLoading) {
     return (
-      <div className="container py-5 text-light app-auth-shell">
-        <div className="h4">Loading…</div>
+      <div className="container py-5 app-auth-shell">
+        <div className="h4 mb-1">Loading…</div>
         <div className="text-secondary small">Checking authentication status.</div>
       </div>
     );
@@ -145,7 +145,7 @@ export default function App() {
 
   if (!currentUser) {
     return (
-      <div className="container py-5 text-light app-auth-shell">
+      <div className="container py-5 app-auth-shell">
         <div className="row justify-content-center">
           <div className="col-12 col-md-8 col-lg-6">
             <div className="card app-auth-card shadow-sm">
@@ -163,7 +163,7 @@ export default function App() {
                   <div>
                     <label className="form-label">Username</label>
                     <input
-                      className="form-control bg-dark text-light border-secondary"
+                      className="form-control bg-dark border-secondary"
                       value={authForm.username}
                       onChange={(event) =>
                         setAuthForm((prev) => ({ ...prev, username: event.target.value }))
@@ -176,7 +176,7 @@ export default function App() {
                     <label className="form-label">Password</label>
                     <input
                       type="password"
-                      className="form-control bg-dark text-light border-secondary"
+                      className="form-control bg-dark border-secondary"
                       value={authForm.password}
                       onChange={(event) =>
                         setAuthForm((prev) => ({ ...prev, password: event.target.value }))
