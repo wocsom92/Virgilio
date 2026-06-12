@@ -4,10 +4,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MonitoredBackend, QuickStatusTile } from '../api/client';
 import { Dashboard } from './Dashboard';
-import { fetchDashboard, fetchQuickStatusTiles, refreshBackend } from '../api/client';
+import {
+  fetchDashboard,
+  fetchQuickStatusTileDetail,
+  fetchQuickStatusTileHistory,
+  fetchQuickStatusTiles,
+  refreshBackend,
+} from '../api/client';
 
 vi.mock('../api/client', () => ({
   fetchDashboard: vi.fn(),
+  fetchQuickStatusTileDetail: vi.fn(),
+  fetchQuickStatusTileHistory: vi.fn(),
   fetchQuickStatusTiles: vi.fn(),
   refreshBackend: vi.fn(),
 }));
@@ -60,6 +68,8 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
     value: overrides.value ?? 42,
     display_value: overrides.display_value ?? '42%',
     status: overrides.status ?? 'ok',
+    history_loaded: overrides.history_loaded ?? true,
+    has_details: overrides.has_details ?? false,
     history: overrides.history ?? Array.from({ length: 12 }, () => 'ok' as const),
     series: overrides.series ?? [],
     series_summary: overrides.series_summary ?? null,
@@ -74,6 +84,8 @@ describe('Dashboard', () => {
     vi.clearAllMocks();
     window.localStorage.clear();
     vi.mocked(fetchQuickStatusTiles).mockResolvedValue([]);
+    vi.mocked(fetchQuickStatusTileHistory).mockResolvedValue([]);
+    vi.mocked(fetchQuickStatusTileDetail).mockResolvedValue(makeQuickStatusTile());
   });
 
   it('renders sorted backend cards after fetching data', async () => {

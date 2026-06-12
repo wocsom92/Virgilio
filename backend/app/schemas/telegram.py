@@ -43,6 +43,12 @@ class TelegramSettingsBase(BaseModel):
         le=10_080,
         description="Minimum number of minutes between automatic quick-status notifications",
     )
+    quick_status_alert_confirmation_minutes: int = Field(
+        default=5,
+        ge=0,
+        le=10_080,
+        description="How long a warning or error must persist before tile color changes and notifications are sent",
+    )
     warn_thresholds: WarnThresholds | None = Field(
         default=None,
         description="Warning-level thresholds that control when alerts are emitted",

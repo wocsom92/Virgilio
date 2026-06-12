@@ -311,6 +311,10 @@ def ensure_schema_compat(connection: Connection) -> None:
             )
         if "display_unit" not in columns:
             connection.execute(text(f"ALTER TABLE {config_quick_status_items} ADD COLUMN display_unit VARCHAR(16) NULL"))
+        if "alert_condition_started_at" not in columns:
+            connection.execute(
+                text(f"ALTER TABLE {config_quick_status_items} ADD COLUMN alert_condition_started_at DATETIME NULL")
+            )
     if not _has_table(connection, "quick_status_ping_samples", schema=history_schema):
         connection.execute(
             text(
@@ -384,6 +388,13 @@ def ensure_schema_compat(connection: Connection) -> None:
         if "quick_status_last_notification_at" not in columns:
             connection.execute(
                 text(f"ALTER TABLE {config_telegram_settings} ADD COLUMN quick_status_last_notification_at DATETIME NULL")
+            )
+        if "quick_status_alert_confirmation_minutes" not in columns:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {config_telegram_settings} "
+                    "ADD COLUMN quick_status_alert_confirmation_minutes INT NOT NULL DEFAULT 5"
+                )
             )
 
     # Create reboot_events table if missing (introduced in 2025-02).

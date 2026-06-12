@@ -18,6 +18,7 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
     display_value: overrides.display_value ?? '22.6°C',
     display_unit: overrides.display_unit ?? '°C',
     status: overrides.status ?? 'ok',
+    history_loaded: overrides.history_loaded ?? true,
     history: overrides.history ?? [],
     series:
       overrides.series ??

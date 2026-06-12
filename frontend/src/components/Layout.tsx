@@ -52,9 +52,9 @@ const VIEW_META: Record<
     icon: FiMessageSquare,
   },
   admin: {
-    label: 'Administration',
-    description: 'Configuration, access control, and host operations.',
-    navDescription: 'Admin menu',
+    label: 'Settings',
+    description: 'Backends, dashboard items, notifications, and system controls.',
+    navDescription: 'Configuration',
     icon: FiSettings,
   },
 };
@@ -400,7 +400,7 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
         <div className="app-sidebar__brand">
           <div className="app-sidebar__eyebrow">Virgilio</div>
           <div className="app-sidebar__title">Server Monitor</div>
-          <div className="app-sidebar__quote">Fleet health, projects, alerts, and administration.</div>
+          <div className="app-sidebar__quote">Fleet health, projects, alerts, and configuration.</div>
         </div>
 
         <nav className="app-sidebar__nav" aria-label="Primary">

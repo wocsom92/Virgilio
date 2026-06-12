@@ -156,7 +156,7 @@ export default function App() {
                 <p className="text-secondary mb-0">
                   {needsBootstrap
                     ? 'Set the first admin credentials for this Virgilio instance.'
-                    : 'Sign in to access monitoring, site monitoring, graphs, and the admin console.'}
+                    : 'Sign in to access monitoring, site monitoring, graphs, and settings.'}
                 </p>
                 {authError && <div className="alert alert-danger mb-0">{authError}</div>}
                 <form className="d-flex flex-column gap-3" onSubmit={handleAuthSubmit}>

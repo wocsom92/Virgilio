@@ -2,10 +2,18 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.app.models.monitors import MetricSnapshot, MonitoredBackend
+from backend.app.models.monitors import (
+    MetricSnapshot,
+    MonitoredBackend,
+    NotificationEvent,
+    Project,
+    QuickStatusItem,
+    QuickStatusPingSample,
+    QuickStatusPrometheusSample,
+)
 from backend.app.schemas.backend import BackendWithLatestSnapshot, MonitoredBackendRead
 from backend.app.schemas.common import MetricSnapshotRead
 
@@ -61,3 +69,60 @@ async def fetch_backends_with_latest_snapshots(
             )
         )
     return payload
+
+
+async def delete_monitored_backend(session: AsyncSession, backend_id: int) -> bool:
+    """Remove a backend and all dependent monitoring data.
+
+    The backend can be referenced by quick-status rows, quick-status history, metric snapshots, and
+    notification events. Delete those explicitly in dependency order so the operation succeeds even
+    when the database does not have cascading foreign keys configured.
+    """
+    backend = await session.get(MonitoredBackend, backend_id)
+    if backend is None:
+        return False
+
+    item_ids = list(
+        (
+            await session.execute(select(QuickStatusItem.id).where(QuickStatusItem.backend_id == backend_id))
+        ).scalars()
+    )
+    if item_ids:
+        await session.execute(
+            delete(QuickStatusPingSample).where(QuickStatusPingSample.quick_status_item_id.in_(item_ids))
+        )
+        await session.execute(
+            delete(QuickStatusPrometheusSample).where(QuickStatusPrometheusSample.quick_status_item_id.in_(item_ids))
+        )
+
+    await session.execute(delete(NotificationEvent).where(NotificationEvent.backend_id == backend_id))
+    await session.execute(delete(MetricSnapshot).where(MetricSnapshot.backend_id == backend_id))
+    await session.execute(delete(QuickStatusItem).where(QuickStatusItem.backend_id == backend_id))
+    await session.delete(backend)
+    await session.commit()
+    return True
+
+
+async def delete_project(session: AsyncSession, project_id: int) -> bool:
+    """Remove a project and all dependent quick-status data."""
+    project = await session.get(Project, project_id)
+    if project is None:
+        return False
+
+    item_ids = list(
+        (
+            await session.execute(select(QuickStatusItem.id).where(QuickStatusItem.project_id == project_id))
+        ).scalars()
+    )
+    if item_ids:
+        await session.execute(
+            delete(QuickStatusPingSample).where(QuickStatusPingSample.quick_status_item_id.in_(item_ids))
+        )
+        await session.execute(
+            delete(QuickStatusPrometheusSample).where(QuickStatusPrometheusSample.quick_status_item_id.in_(item_ids))
+        )
+
+    await session.execute(delete(QuickStatusItem).where(QuickStatusItem.project_id == project_id))
+    await session.delete(project)
+    await session.commit()
+    return True

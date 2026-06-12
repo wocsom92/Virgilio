@@ -34,6 +34,7 @@ from backend.app.services.prometheus_client import (
 )
 from backend.app.services.self_monitoring import ENDPOINTS_LABEL, PEAKS_LABEL, TOTALS_LABEL
 from backend.app.services.system_settings import metric_retention_timedelta
+from backend.app.services.telegram_settings import get_or_create_settings
 
 
 _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "swap_used_percent", "mount_used_percent"}
@@ -53,6 +54,68 @@ _HISTORY_STATUS_PRIORITY = {
     "info": 1,
     "ok": 1,
 }
+
+
+def _sync_quick_status_alert_condition_started_at(item: QuickStatusItem, raw_status: str, now: datetime) -> None:
+    if raw_status in _ALERT_STATUSES:
+        if item.alert_condition_started_at is None:
+            item.alert_condition_started_at = now
+    else:
+        item.alert_condition_started_at = None
+
+
+def _effective_quick_status_display_status(
+    raw_status: str,
+    item: QuickStatusItem,
+    *,
+    now: datetime,
+    confirmation_minutes: int,
+) -> str:
+    if raw_status not in _ALERT_STATUSES:
+        return raw_status
+    if confirmation_minutes <= 0:
+        return raw_status
+    started = item.alert_condition_started_at
+    if started is None:
+        return "ok"
+    if now - _coerce_utc(started) >= timedelta(minutes=confirmation_minutes):
+        return raw_status
+    return "ok"
+
+
+async def _apply_quick_status_alert_suppression_to_tiles(
+    session: AsyncSession,
+    items_list: list[QuickStatusItem],
+    tiles: list[QuickStatusTileRead],
+    *,
+    now: datetime,
+) -> list[QuickStatusTileRead]:
+    settings_model = await get_or_create_settings(session)
+    confirmation_minutes = max(0, int(settings_model.quick_status_alert_confirmation_minutes or 0))
+    items_by_id = {item.id: item for item in items_list}
+    result: list[QuickStatusTileRead] = []
+    for tile in tiles:
+        if tile.id <= 0:
+            result.append(tile)
+            continue
+        item = items_by_id.get(tile.id)
+        if item is None:
+            result.append(tile)
+            continue
+        raw_status = tile.status
+        _sync_quick_status_alert_condition_started_at(item, raw_status, now)
+        effective = _effective_quick_status_display_status(
+            raw_status,
+            item,
+            now=now,
+            confirmation_minutes=confirmation_minutes,
+        )
+        session.add(item)
+        if effective != raw_status:
+            result.append(tile.model_copy(update={"status": effective}))
+        else:
+            result.append(tile)
+    return result
 
 
 @dataclass(slots=True)
@@ -490,6 +553,27 @@ def _build_detail_lines(
             )
         if isinstance(client_count, int):
             lines.append(QuickStatusDetailLine(text=f"Associated clients: {client_count}", severity="ok"))
+        clients_raw = payload.get("wifi_associated_clients")
+        if isinstance(clients_raw, list):
+            _wifi_detail_cap = 24
+            valid_clients: list[dict[str, object]] = []
+            for entry in clients_raw:
+                if not isinstance(entry, dict):
+                    continue
+                mac = entry.get("mac")
+                if not isinstance(mac, str) or not mac.strip():
+                    continue
+                valid_clients.append(entry)
+            for entry in valid_clients[:_wifi_detail_cap]:
+                mac = str(entry.get("mac", "")).strip()
+                sig = entry.get("signal_dbm")
+                if isinstance(sig, int):
+                    lines.append(QuickStatusDetailLine(text=f"Client: {mac} · {sig} dBm", severity="ok"))
+                else:
+                    lines.append(QuickStatusDetailLine(text=f"Client: {mac}", severity="ok"))
+            remaining = len(valid_clients) - _wifi_detail_cap
+            if remaining > 0:
+                lines.append(QuickStatusDetailLine(text=f"… and {remaining} more", severity="ok"))
         if isinstance(lease_count, int):
             lines.append(QuickStatusDetailLine(text=f"DHCP leases: {lease_count}", severity="ok"))
         return lines or None
@@ -1299,6 +1383,33 @@ async def _load_history_snapshots(
     return snapshots_by_backend
 
 
+async def _load_latest_snapshots(
+    session: AsyncSession,
+    backend_ids: set[int],
+) -> dict[int, MetricSnapshot]:
+    if not backend_ids:
+        return {}
+
+    ranked_snapshots = (
+        select(
+            MetricSnapshot.id.label("snapshot_id"),
+            func.row_number().over(
+                partition_by=MetricSnapshot.backend_id,
+                order_by=(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc()),
+            ).label("row_number"),
+        )
+        .where(MetricSnapshot.backend_id.in_(backend_ids))
+        .subquery()
+    )
+
+    result = await session.execute(
+        select(MetricSnapshot)
+        .join(ranked_snapshots, MetricSnapshot.id == ranked_snapshots.c.snapshot_id)
+        .where(ranked_snapshots.c.row_number == 1)
+    )
+    return {snapshot.backend_id: snapshot for snapshot in result.scalars()}
+
+
 async def _load_ping_history_samples(
     session: AsyncSession,
     item_ids: set[int],
@@ -1455,6 +1566,83 @@ async def _load_latest_prometheus_samples(
         .where(ranked_samples.c.row_number == 1)
     )
     return {sample.quick_status_item_id: sample for sample in result.scalars()}
+
+
+def _has_detail_content(
+    item: QuickStatusItem,
+    snapshot: MetricSnapshot | None,
+) -> bool:
+    if item.metric_key in _PROMETHEUS_METRICS:
+        return True
+    if snapshot is None:
+        return False
+
+    payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+
+    if item.metric_key == "ssh_last_unsuccessful_attempt":
+        return bool(
+            (
+                isinstance(payload.get("ssh_last_failure_auth_method"), str)
+                and payload.get("ssh_last_failure_auth_method", "").strip()
+            )
+            or (
+                isinstance(payload.get("ssh_last_failure_username"), str)
+                and payload.get("ssh_last_failure_username", "").strip()
+            )
+            or (
+                isinstance(payload.get("ssh_last_failure_source_ip"), str)
+                and payload.get("ssh_last_failure_source_ip", "").strip()
+            )
+            or isinstance(payload.get("ssh_last_failure_port"), int)
+            or (
+                isinstance(payload.get("ssh_last_failure_line"), str)
+                and payload.get("ssh_last_failure_line", "").strip()
+            )
+        )
+
+    if item.metric_key == "ssh_status":
+        for key in (
+            "ssh_pubkey_auth_line",
+            "ssh_password_auth_line",
+            "ssh_kbd_interactive_auth_line",
+            "ssh_permit_root_login_line",
+        ):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return True
+        return False
+
+    if item.metric_key == "telegram_bot_status":
+        return isinstance(payload.get("telegram_bot_running"), bool) or isinstance(
+            payload.get("telegram_egress_proxy_running"), bool
+        )
+
+    if item.metric_key == "wifi_status":
+        return any(
+            payload.get(key) is not None
+            for key in (
+                "wifi_ssid",
+                "wifi_interface",
+                "wifi_client_count",
+                "wifi_dhcp_lease_count",
+                "wifi_operstate",
+                "wifi_hostapd_socket_present",
+                "wifi_associated_clients",
+            )
+        )
+
+    if item.metric_key == "vpn_status":
+        return any(
+            payload.get(key) is not None
+            for key in (
+                "vpn_active_backend",
+                "vpn_hotspot_public_ip",
+                "vpn_expected_public_ip",
+                "vpn_default_public_ip",
+            )
+        )
+
+    return False
 
 
 async def _persist_ping_result(
@@ -1720,17 +1908,12 @@ async def build_quick_status_tiles(
 
     backend_ids = set(backend_by_id) | {item.backend_id for item in items_list if item.backend_id is not None}
     window_start, window_end = _history_window_bounds(now)
-    ping_history_by_item = await _load_ping_history_samples(
-        session,
-        {item.id for item in items_list if item.metric_key in _PING_METRICS},
-        window_start,
-        window_end,
-    )
-    prometheus_history_by_item = await _load_prometheus_history_samples(
-        session,
-        {item.id for item in items_list if item.metric_key in _PROMETHEUS_METRICS},
-        window_start,
-        window_end,
+    ping_item_ids = {item.id for item in items_list if item.metric_key in _PING_METRICS}
+    prometheus_item_ids = {item.id for item in items_list if item.metric_key in _PROMETHEUS_METRICS}
+    ping_history_by_item, prometheus_history_by_item, history_snapshots_by_backend = await asyncio.gather(
+        _load_ping_history_samples(session, ping_item_ids, window_start, window_end),
+        _load_prometheus_history_samples(session, prometheus_item_ids, window_start, window_end),
+        _load_history_snapshots(session, backend_ids, window_start, window_end),
     )
     ping_results_by_item: dict[int, PingCheckResult | None] = {}
     prometheus_results_by_item: dict[int, PrometheusCheckResult | None] = {}
@@ -1761,19 +1944,29 @@ async def build_quick_status_tiles(
     for item, latest_sample, (result, _) in zip(check_items, check_latest_samples, check_results):
         if item.metric_key in _PING_METRICS:
             ping_results_by_item[item.id] = result
-            if persist_ping_history and result is not None:
-                persisted = await _persist_ping_result(session, item, result, latest_sample)
-                if persisted is not None:
-                    ping_history_by_item.setdefault(item.id, []).append(persisted)
-                    ping_history_by_item[item.id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
         elif item.metric_key in _PROMETHEUS_METRICS:
             prometheus_results_by_item[item.id] = result
-            if persist_prometheus_history and result is not None:
-                persisted = await _persist_prometheus_result(session, item, result, latest_sample)
-                if persisted is not None:
-                    prometheus_history_by_item.setdefault(item.id, []).append(persisted)
-                    prometheus_history_by_item[item.id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
-    history_snapshots_by_backend = await _load_history_snapshots(session, backend_ids, window_start, window_end)
+
+    persist_coros: list = []
+    persist_meta: list[tuple[str, int]] = []
+    for item, latest_sample, (result, _) in zip(check_items, check_latest_samples, check_results):
+        if item.metric_key in _PING_METRICS and persist_ping_history and result is not None:
+            persist_coros.append(_persist_ping_result(session, item, result, latest_sample))
+            persist_meta.append(("ping", item.id))
+        elif item.metric_key in _PROMETHEUS_METRICS and persist_prometheus_history and result is not None:
+            persist_coros.append(_persist_prometheus_result(session, item, result, latest_sample))
+            persist_meta.append(("prom", item.id))
+    if persist_coros:
+        persisted_samples = await asyncio.gather(*persist_coros)
+        for (kind, item_id), persisted in zip(persist_meta, persisted_samples):
+            if persisted is None:
+                continue
+            if kind == "ping":
+                ping_history_by_item.setdefault(item_id, []).append(persisted)
+                ping_history_by_item[item_id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
+            else:
+                prometheus_history_by_item.setdefault(item_id, []).append(persisted)
+                prometheus_history_by_item[item_id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
     latest_snapshots = {
         backend_id: snapshots[-1]
         for backend_id, snapshots in history_snapshots_by_backend.items()
@@ -1816,6 +2009,8 @@ async def build_quick_status_tiles(
                         window_start,
                         window_end,
                     ),
+                    history_loaded=True,
+                    has_details=True,
                     reported_at=reference_date,
                     details=[
                         QuickStatusDetailLine(
@@ -1831,6 +2026,38 @@ async def build_quick_status_tiles(
                     ],
                 )
             )
+
+    for item in items_list:
+        if item.metric_key not in _PROMETHEUS_METRICS:
+            continue
+        prometheus_result = prometheus_results_by_item.get(item.id)
+        series_points = _build_prometheus_series_points(
+            prometheus_history_by_item.get(item.id, []),
+            window_start,
+            window_end,
+            prometheus_result,
+            interval_seconds=item.prometheus_interval_seconds,
+        )
+        prometheus_series_by_item[item.id] = series_points
+        prometheus_summary_by_item[item.id] = _build_prometheus_series_summary(series_points)
+
+    self_monitoring_items = [
+        item for item in items_list if getattr(item, "display_variant", "tile") == "self_monitoring"
+    ]
+    self_monitoring_card_data: dict[int, tuple[list[QuickStatusCardDatum], list[QuickStatusCardDatum]]] = {}
+    if self_monitoring_items:
+        sm_results = await asyncio.gather(
+            *[
+                _build_self_monitoring_card_data(
+                    item,
+                    summary=prometheus_summary_by_item.get(item.id),
+                )
+                for item in self_monitoring_items
+            ]
+        )
+        self_monitoring_card_data = {
+            item.id: sm_results[index] for index, item in enumerate(self_monitoring_items)
+        }
 
     for item in items_list:
         backend = _loaded_relation(item, "backend")
@@ -1866,20 +2093,16 @@ async def build_quick_status_tiles(
                 if prometheus_result is not None and prometheus_result.sampled_at is not None
                 else (_coerce_utc(prometheus_result.checked_at) if prometheus_result is not None else None)
             )
-            series_points = _build_prometheus_series_points(
-                prometheus_history_by_item.get(item.id, []),
-                window_start,
-                window_end,
-                prometheus_result,
-                interval_seconds=item.prometheus_interval_seconds,
-            )
-            prometheus_series_by_item[item.id] = series_points
-            prometheus_summary_by_item[item.id] = _build_prometheus_series_summary(series_points)
-        highlights, breakdown = await _build_self_monitoring_card_data(
-            item,
-            summary=prometheus_summary_by_item.get(item.id),
-        )
+        highlights, breakdown = self_monitoring_card_data.get(item.id, ([], []))
         stale = _is_reference_stale(reported_at, now=window_end)
+        details = _build_detail_lines(
+            item,
+            snapshot,
+            status=status,
+            prometheus_result=prometheus_result,
+            prometheus_summary=prometheus_summary_by_item.get(item.id),
+            now=window_end,
+        )
         tiles.append(
             QuickStatusTileRead(
                 id=item.id,
@@ -1896,6 +2119,8 @@ async def build_quick_status_tiles(
                 status=status,
                 stale=stale,
                 show_updated_age=item.show_updated_age,
+                history_loaded=True,
+                has_details=bool(details),
                 history=(
                     _build_ping_history(item, ping_history_by_item.get(item.id, []), window_start, window_end)
                     if item.metric_key in _PING_METRICS
@@ -1920,17 +2145,168 @@ async def build_quick_status_tiles(
                 highlights=highlights,
                 breakdown=breakdown,
                 reported_at=reported_at,
-                details=_build_detail_lines(
-                    item,
-                    snapshot,
-                    status=status,
-                    prometheus_result=prometheus_result,
-                    prometheus_summary=prometheus_summary_by_item.get(item.id),
-                    now=window_end,
-                ),
+                details=details,
             )
         )
-    return tiles
+    return await _apply_quick_status_alert_suppression_to_tiles(session, items_list, tiles, now=window_end)
+
+
+async def build_quick_status_tile_summaries(
+    session: AsyncSession,
+    items: Iterable[QuickStatusItem],
+    *,
+    include_heartbeat_tiles: bool = False,
+    backends: Iterable[object] | None = None,
+    now: datetime | None = None,
+) -> list[QuickStatusTileRead]:
+    items_list = sorted(
+        [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))],
+        key=_quick_status_item_sort_key,
+    )
+    backend_by_id: dict[int, object] = {}
+    for item in items_list:
+        backend = getattr(item, "backend", None)
+        if backend is not None and item.backend_id is not None:
+            backend_by_id[item.backend_id] = backend
+    for backend in backends or []:
+        backend_id = getattr(backend, "id", None)
+        if backend_id is not None:
+            backend_by_id[backend_id] = backend
+
+    if not items_list and not (include_heartbeat_tiles and backend_by_id):
+        return []
+
+    summary_now = _coerce_utc(now or datetime.now(tz=timezone.utc))
+    backend_ids = set(backend_by_id) | {item.backend_id for item in items_list if item.backend_id is not None}
+    ping_item_ids = {item.id for item in items_list if item.metric_key in _PING_METRICS}
+    prometheus_item_ids = {item.id for item in items_list if item.metric_key in _PROMETHEUS_METRICS}
+
+    latest_snapshots_by_backend, latest_ping_samples, latest_prometheus_samples = await asyncio.gather(
+        _load_latest_snapshots(session, backend_ids),
+        _load_latest_ping_samples(session, ping_item_ids),
+        _load_latest_prometheus_samples(session, prometheus_item_ids),
+    )
+
+    check_items: list[QuickStatusItem] = []
+    check_latest_samples: list[QuickStatusPingSample | QuickStatusPrometheusSample | None] = []
+    check_tasks: list = []
+    for item in items_list:
+        if item.metric_key in _PING_METRICS:
+            latest = latest_ping_samples.get(item.id)
+            check_items.append(item)
+            check_latest_samples.append(latest)
+            check_tasks.append(_check_ping(session, item, latest_sample=latest, persist_history=False, now=summary_now))
+        elif item.metric_key in _PROMETHEUS_METRICS:
+            latest = latest_prometheus_samples.get(item.id)
+            check_items.append(item)
+            check_latest_samples.append(latest)
+            check_tasks.append(
+                _check_prometheus(session, item, latest_sample=latest, persist_history=False, now=summary_now)
+            )
+
+    check_results = await asyncio.gather(*check_tasks) if check_tasks else []
+    ping_results_by_item: dict[int, PingCheckResult | None] = {}
+    prometheus_results_by_item: dict[int, PrometheusCheckResult | None] = {}
+    for item, _, (result, _) in zip(check_items, check_latest_samples, check_results):
+        if item.metric_key in _PING_METRICS:
+            ping_results_by_item[item.id] = result
+        elif item.metric_key in _PROMETHEUS_METRICS:
+            prometheus_results_by_item[item.id] = result
+
+    tiles: list[QuickStatusTileRead] = []
+    if include_heartbeat_tiles:
+        for backend_id in sorted(
+            backend_ids,
+            key=lambda current_backend_id: (
+                getattr(backend_by_id.get(current_backend_id), "display_order", 0),
+                getattr(backend_by_id.get(current_backend_id), "name", "").casefold(),
+                current_backend_id,
+            ),
+        ):
+            backend = backend_by_id.get(backend_id)
+            latest_snapshot = latest_snapshots_by_backend.get(backend_id)
+            freshness_seconds = max(getattr(backend, "poll_interval_seconds", 60) or 60, 30) * 3
+            reference_at = getattr(backend, "last_seen_at", None) or getattr(latest_snapshot, "reported_at", None)
+            reference_date = _coerce_utc(reference_at) if isinstance(reference_at, datetime) else None
+            is_fresh = reference_date is not None and (summary_now - reference_date).total_seconds() <= freshness_seconds
+            tiles.append(
+                QuickStatusTileRead(
+                    id=-backend_id,
+                    backend_id=backend_id,
+                    project_id=None,
+                    backend_display_order=getattr(backend, "display_order", 0),
+                    backend_name=getattr(backend, "name", f"Backend #{backend_id}"),
+                    label="HB",
+                    metric_key="ssh_status",
+                    value=1.0 if is_fresh else (0.0 if reference_date is not None else None),
+                    display_value="Now" if is_fresh else ("Late" if reference_date is not None else "—"),
+                    status="ok" if is_fresh else ("critical" if reference_date is not None else "unknown"),
+                    stale=_is_reference_stale(reference_date, now=summary_now),
+                    history_loaded=False,
+                    has_details=True,
+                    reported_at=reference_date,
+                )
+            )
+
+    for item in items_list:
+        backend = _loaded_relation(item, "backend")
+        project = _loaded_relation(item, "project")
+        snapshot = latest_snapshots_by_backend.get(item.backend_id) if item.backend_id is not None else None
+        ping_result = ping_results_by_item.get(item.id) if item.metric_key in _PING_METRICS else None
+        prometheus_result = (
+            prometheus_results_by_item.get(item.id) if item.metric_key in _PROMETHEUS_METRICS else None
+        )
+        value = _metric_value(snapshot, item.metric_key, item.mount_path) if snapshot else None
+        status = _resolve_status(
+            value,
+            item.warning_threshold,
+            item.critical_threshold,
+            item.metric_key,
+            prometheus_threshold_direction=item.prometheus_threshold_direction,
+        )
+        display_value = _format_item_value(item, value)
+        reported_at = _coerce_utc(snapshot.reported_at) if snapshot and snapshot.reported_at is not None else None
+
+        if item.metric_key in _PING_METRICS:
+            ping_evaluation = _evaluate_ping_result(item, ping_result)
+            value = ping_evaluation.value
+            display_value = ping_evaluation.display_value
+            status = ping_evaluation.status
+            reported_at = _coerce_utc(ping_result.checked_at) if ping_result is not None else None
+        elif item.metric_key in _PROMETHEUS_METRICS:
+            prometheus_evaluation = _evaluate_prometheus_result(item, prometheus_result, now=summary_now)
+            value = prometheus_evaluation.value
+            display_value = prometheus_evaluation.display_value
+            status = prometheus_evaluation.status
+            reported_at = (
+                _coerce_utc(prometheus_result.sampled_at)
+                if prometheus_result is not None and prometheus_result.sampled_at is not None
+                else (_coerce_utc(prometheus_result.checked_at) if prometheus_result is not None else None)
+            )
+
+        tiles.append(
+            QuickStatusTileRead(
+                id=item.id,
+                backend_id=item.backend_id,
+                project_id=item.project_id,
+                backend_display_order=backend.display_order if backend else (project.display_order if project else 0),
+                backend_name=backend.name if backend else (project.name if project else "Project"),
+                label=item.label,
+                metric_key=item.metric_key,
+                display_variant=getattr(item, "display_variant", "tile"),
+                display_unit=getattr(item, "display_unit", None),
+                value=value,
+                display_value=display_value,
+                status=status,
+                stale=_is_reference_stale(reported_at, now=summary_now),
+                show_updated_age=item.show_updated_age,
+                history_loaded=False,
+                has_details=bool(_has_detail_content(item, snapshot) or item.metric_key in _PROMETHEUS_METRICS),
+                reported_at=reported_at,
+            )
+        )
+
+    return await _apply_quick_status_alert_suppression_to_tiles(session, items_list, tiles, now=summary_now)
 
 
 def detect_quick_status_transitions_for_snapshot(

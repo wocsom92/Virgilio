@@ -156,13 +156,38 @@ def test_collect_telegram_bot_snapshot_uses_bot_and_proxy_containers():
     }
 
 
+def test_parse_wifi_associated_clients_extracts_macs_and_signal():
+    dump = (
+        "Station AA:BB:CC:DD:EE:01 (on wlan0)\n"
+        "\tsignal: -42 dBm\n"
+        "Station AA:BB:CC:DD:EE:02 (on wlan0)\n"
+    )
+    clients = metrics._parse_wifi_associated_clients(dump, max_clients=32)
+    assert clients == [
+        {"mac": "aa:bb:cc:dd:ee:01", "signal_dbm": -42},
+        {"mac": "aa:bb:cc:dd:ee:02"},
+    ]
+
+
 def test_collect_wifi_snapshot_reads_hostapd_and_leases(monkeypatch):
     metrics._wifi_snapshot_cache = None
+    iw_sample = (
+        "Station aa:bb:cc:dd:ee:01 (on wlan0)\n"
+        "\tsignal: -45 dBm\n"
+        "Station aa:bb:cc:dd:ee:02 (on wlan0)\n"
+        "\tsignal avg: -60 dBm\n"
+    )
+
+    def fake_iw(command: str, args: list[str], **_: object) -> str | None:
+        if command == "iw" and "station" in args and "dump" in args:
+            return iw_sample
+        return None
+
     monkeypatch.setattr(metrics, "_detect_hotspot_interface", lambda: "wlan0")
     monkeypatch.setattr(metrics, "_detect_hotspot_ssid", lambda: "lab-wifi")
     monkeypatch.setattr(metrics, "_read_host_text", lambda path: "up\n" if path.endswith("/operstate") else None)
     monkeypatch.setattr(metrics, "_host_file_exists", lambda path: path == "/run/hostapd/wlan0")
-    monkeypatch.setattr(metrics, "_count_wifi_clients", lambda interface: 2 if interface == "wlan0" else None)
+    monkeypatch.setattr(metrics, "_run_host_network_command", fake_iw)
     monkeypatch.setattr(metrics, "_count_host_file_lines", lambda path: 3 if path == "/var/lib/misc/dnsmasq.leases" else 0)
 
     snapshot = metrics._collect_wifi_snapshot()
@@ -173,6 +198,10 @@ def test_collect_wifi_snapshot_reads_hostapd_and_leases(monkeypatch):
         "wifi_ssid": "lab-wifi",
         "wifi_interface": "wlan0",
         "wifi_client_count": 2,
+        "wifi_associated_clients": [
+            {"mac": "aa:bb:cc:dd:ee:01", "signal_dbm": -45},
+            {"mac": "aa:bb:cc:dd:ee:02", "signal_dbm": -60},
+        ],
         "wifi_dhcp_lease_count": 3,
         "wifi_operstate": "up",
         "wifi_hostapd_socket_present": True,

@@ -58,6 +58,12 @@ read_env_value() {
   printf '%s' "${raw}"
 }
 
+compose_profile_enabled() {
+  local profiles_csv="$1"
+  local profile_name="$2"
+  [[ ",${profiles_csv}," == *",${profile_name},"* ]]
+}
+
 CONFIG_FILE="${CONFIG_FILE_DEFAULT}"
 TARGET=""
 PROFILE=""
@@ -239,6 +245,24 @@ run_ssh() {
   else
     ssh "${SSH_BASE_OPTS[@]}" "${USER_NAME}@${HOST}" "${remote_cmd}"
   fi
+}
+
+run_ssh_retry() {
+  local description="$1"
+  local remote_cmd="$2"
+  local max_attempts="${3:-3}"
+  local attempt=1
+
+  until run_ssh "${remote_cmd}"; do
+    if (( attempt >= max_attempts )); then
+      log "${description} failed after ${attempt} attempt(s)."
+      return 1
+    fi
+    local delay=$((attempt * 10))
+    log "${description} failed on attempt ${attempt}/${max_attempts}; retrying in ${delay}s..."
+    sleep "${delay}"
+    attempt=$((attempt + 1))
+  done
 }
 
 run_sftp_batch() {
@@ -423,9 +447,11 @@ log "Uploading files via SFTP..."
 run_sftp_batch "${batch_file}"
 
 monitor_container_name="server-monitor-agent"
+compose_profiles=""
 if [[ -n "${LOCAL_ENV_FILE}" ]]; then
   monitor_container_name="$(read_env_value "${LOCAL_ENV_FILE}" "MONITOR_CONTAINER_NAME" || true)"
   monitor_container_name="${monitor_container_name:-server-monitor-agent}"
+  compose_profiles="$(read_env_value "${LOCAL_ENV_FILE}" "COMPOSE_PROFILES" || true)"
 fi
 
 containers_to_remove=()
@@ -437,6 +463,16 @@ if [[ "${PROFILE}" == "full" ]]; then
     "server-monitor-telegram-bot"
     "${monitor_container_name}"
   )
+  if ! compose_profile_enabled "${compose_profiles}" "logs"; then
+    containers_to_remove+=(
+      "server-monitor-elasticsearch"
+      "server-monitor-kibana"
+      "server-monitor-filebeat"
+    )
+  fi
+  if ! compose_profile_enabled "${compose_profiles}" "telegram-egress"; then
+    containers_to_remove+=("server-monitor-telegram-egress-proxy")
+  fi
 else
   containers_to_remove=("${monitor_container_name}")
 fi
@@ -448,9 +484,15 @@ done
 
 log "Restarting Docker services on remote host..."
 if [[ "${PROFILE}" == "full" ]]; then
-  run_ssh "cd \"${DEPLOY_PATH}\" && ${docker_prefix} compose up -d --build"
+  run_ssh_retry \
+    "Remote docker compose restart" \
+    "cd \"${DEPLOY_PATH}\" && ${docker_prefix} compose up -d --build" \
+    3
 else
-  run_ssh "cd \"${DEPLOY_PATH}\" && ${docker_prefix} compose -f docker-compose.monitor.yml up -d --build monitor"
+  run_ssh_retry \
+    "Remote monitor compose restart" \
+    "cd \"${DEPLOY_PATH}\" && ${docker_prefix} compose -f docker-compose.monitor.yml up -d --build monitor" \
+    3
 fi
 
 log "Running post-deploy checks..."

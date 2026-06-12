@@ -4,6 +4,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class WifiAssociatedStation(BaseModel):
+    mac: str
+    signal_dbm: int | None = None
+
+
 class MountedVolume(BaseModel):
     mount_point: str
     total_gb: float | None = Field(None, ge=0)
@@ -68,6 +73,7 @@ class MetricPayload(BaseModel):
     wifi_ssid: str | None = None
     wifi_interface: str | None = None
     wifi_client_count: int | None = None
+    wifi_associated_clients: list[WifiAssociatedStation] | None = None
     wifi_dhcp_lease_count: int | None = None
     wifi_operstate: str | None = None
     wifi_hostapd_socket_present: bool | None = None

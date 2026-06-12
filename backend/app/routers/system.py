@@ -14,6 +14,7 @@ from backend.app.schemas.system import AuthSessionSettings, RetentionSettings
 from backend.app.models.monitors import MonitoredBackend, Project, QuickStatusItem, SiteMonitor
 from backend.app.schemas.quick_status import QuickStatusItemCreate, QuickStatusItemRead, is_supported_quick_status_metric
 from backend.app.schemas.site_monitoring import SiteMonitorCreate, SiteMonitorRead
+from backend.app.services.backend_queries import delete_project as delete_project_with_dependents
 from backend.app.services.quick_status import create_quick_status_item, update_quick_status_item
 from backend.app.services.site_monitoring import create_site_monitor, list_site_monitors, update_site_monitor
 from backend.app.services.system_settings import (
@@ -147,11 +148,9 @@ async def update_project(
 
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(project_id: int, session: AsyncSession = Depends(get_session)) -> None:
-    project = await session.get(Project, project_id)
-    if not project:
+    deleted = await delete_project_with_dependents(session, project_id)
+    if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    await session.delete(project)
-    await session.commit()
 
 
 @router.get("/quick-status", response_model=list[QuickStatusItemRead])

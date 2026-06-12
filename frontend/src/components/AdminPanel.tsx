@@ -353,7 +353,7 @@ const ADMIN_SECTIONS = [
     description: 'Configure ping and HTTP checks for public sites.',
   },
   { id: 'telegram-bots', label: 'Telegram bots', description: 'Configure notifications and test commands.' },
-  { id: 'administration', label: 'Administration', description: 'Access control and host-level controls.' },
+  { id: 'system-access', label: 'System & access', description: 'Users, sessions, retention, and host-level controls.' },
 ];
 type AdminSectionId = (typeof ADMIN_SECTIONS)[number]['id'];
 type BackendSectionId = `backend-${number}`;
@@ -477,6 +477,7 @@ const createEmptyTelegramSettings = (): TelegramSettings => ({
   default_chat_id: '',
   notification_batch_window_seconds: 60,
   notification_cooldown_minutes: 15,
+  quick_status_alert_confirmation_minutes: 5,
   is_active: false,
 });
 
@@ -682,6 +683,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [loadingMountOptions, setLoadingMountOptions] = useState(false);
   const [mountOptionsError, setMountOptionsError] = useState<string | null>(null);
   const [isOrdering, setIsOrdering] = useState(false);
+  const [deletingBackendId, setDeletingBackendId] = useState<number | null>(null);
+  const [backendActionStatus, setBackendActionStatus] = useState<{
+    backendId: number;
+    tone: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const [rebootingBackendId, setRebootingBackendId] = useState<number | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>(ADMIN_SECTIONS[0].id);
   const [showNewForm, setShowNewForm] = useState(false);
@@ -1839,12 +1846,37 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setError('Admin privileges are required for changes.');
       return;
     }
-    if (!window.confirm(`Remove backend ${backend.name}?`)) return;
+    if (
+      !window.confirm(
+        `Remove backend ${backend.name} and delete its linked quick tiles, history, snapshots, and notifications? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
     try {
+      setDeletingBackendId(backend.id);
+      setBackendActionStatus(null);
+      setError(null);
       await deleteBackend(backend.id);
       setBackends((prev) => prev.filter((item) => item.id !== backend.id));
+      setQuickStatusItems((prev) => prev.filter((item) => item.backend_id !== backend.id));
+      setQuickStatusTiles((prev) => prev.filter((item) => item.backend_id !== backend.id));
+      if (editingId === backend.id) {
+        resetForm();
+      }
+      setBackendActionStatus({
+        backendId: backend.id,
+        tone: 'success',
+        message: `Removed ${backend.name} and its linked monitoring data.`,
+      });
     } catch (err) {
-      setError(extractErrorMessage(err, 'Could not delete this backend. Try again.'));
+      setBackendActionStatus({
+        backendId: backend.id,
+        tone: 'error',
+        message: extractErrorMessage(err, 'Could not delete this backend. Try again.'),
+      });
+    } finally {
+      setDeletingBackendId(null);
     }
   }
 
@@ -2112,6 +2144,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         default_chat_id: telegram.default_chat_id,
         notification_batch_window_seconds: telegram.notification_batch_window_seconds,
         notification_cooldown_minutes: telegram.notification_cooldown_minutes,
+        quick_status_alert_confirmation_minutes: telegram.quick_status_alert_confirmation_minutes,
         is_active: telegram.is_active,
       });
       setTelegram(normalizeTelegramSettings(updated));
@@ -2253,6 +2286,13 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const renderBackendList = () => (
     <>
       <h6 className="text-uppercase text-secondary">Existing Backends</h6>
+      {backendActionStatus && !backends.some((backend) => backend.id === backendActionStatus.backendId) ? (
+        <div
+          className={`small mb-3 ${backendActionStatus.tone === 'error' ? 'text-warning' : 'text-success'}`}
+        >
+          {backendActionStatus.message}
+        </div>
+      ) : null}
       <div className="list-group">
         {backends.length === 0 ? (
           <div className="list-group-item bg-dark text-secondary border-secondary">No backends yet.</div>
@@ -2268,6 +2308,13 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   <span className="badge bg-secondary text-uppercase">#{index + 1}</span>
                 </div>
                 <div className="small text-secondary">{backend.base_url}</div>
+                {backendActionStatus?.backendId === backend.id ? (
+                  <div
+                    className={`small mt-2 ${backendActionStatus.tone === 'error' ? 'text-warning' : 'text-success'}`}
+                  >
+                    {backendActionStatus.message}
+                  </div>
+                ) : null}
               </div>
               <div className="d-flex flex-wrap gap-2 align-items-center justify-content-start justify-content-md-end">
                 <div className="btn-group" role="group" aria-label="Reorder backend">
@@ -2275,7 +2322,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     type="button"
                     className="btn btn-sm btn-outline-light"
                     onClick={() => void handleReorder(backend.id, 'up')}
-                    disabled={isOrdering || !isAdmin || index === 0}
+                    disabled={isOrdering || deletingBackendId === backend.id || !isAdmin || index === 0}
                   >
                     Move up
                   </button>
@@ -2283,23 +2330,31 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     type="button"
                     className="btn btn-sm btn-outline-light"
                     onClick={() => void handleReorder(backend.id, 'down')}
-                    disabled={isOrdering || !isAdmin || index === backends.length - 1}
+                    disabled={isOrdering || deletingBackendId === backend.id || !isAdmin || index === backends.length - 1}
                   >
                     Move down
                   </button>
                 </div>
-                <button className="btn btn-sm btn-outline-light" onClick={() => handleEdit(backend)} disabled={!isAdmin}>
+                <button
+                  className="btn btn-sm btn-outline-light"
+                  onClick={() => handleEdit(backend)}
+                  disabled={deletingBackendId === backend.id || !isAdmin}
+                >
                   Edit
                 </button>
                 <button
                   className="btn btn-sm btn-outline-warning"
                   onClick={() => void handleBackendReboot(backend)}
-                  disabled={rebootingBackendId === backend.id || !isAdmin}
+                  disabled={deletingBackendId === backend.id || rebootingBackendId === backend.id || !isAdmin}
                 >
                   {rebootingBackendId === backend.id ? 'Rebooting…' : 'Reboot host'}
                 </button>
-                <button className="btn btn-sm btn-outline-danger" onClick={() => void handleDelete(backend)} disabled={!isAdmin}>
-                  Delete
+                <button
+                  className="btn btn-sm btn-outline-danger"
+                  onClick={() => void handleDelete(backend)}
+                  disabled={deletingBackendId !== null || !isAdmin}
+                >
+                  {deletingBackendId === backend.id ? 'Deleting…' : 'Delete'}
                 </button>
               </div>
             </div>
@@ -2313,7 +2368,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     <div className="admin-panel row g-4">
       <div className="col-12 col-lg-3 order-lg-1">
         <div className="card bg-dark border border-secondary position-sticky admin-panel__menu" style={{ top: '1rem' }}>
-          <div className="card-header border-secondary text-uppercase fw-semibold">Admin Menu</div>
+          <div className="card-header border-secondary text-uppercase fw-semibold">Sections</div>
           <div className="card-body d-flex flex-column gap-2">
             {ADMIN_SECTIONS.map((section) => {
               const isActive = activeSection === section.id;
@@ -3310,6 +3365,30 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       </div>
                     </div>
                     <div>
+                      <label className="form-label">Alert confirmation (minutes)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={10080}
+                        className="form-control bg-dark text-light border-secondary"
+                        value={telegram?.quick_status_alert_confirmation_minutes ?? 5}
+                        onChange={(event) =>
+                          setTelegram((prev) => {
+                            const base = ensureTelegramState(prev);
+                            return {
+                              ...base,
+                              quick_status_alert_confirmation_minutes: Math.max(0, Number(event.target.value || 0)),
+                            };
+                          })
+                        }
+                        required
+                      />
+                      <div className="form-text text-secondary small">
+                        A warning or error must last at least this long before the tile turns amber or red and before
+                        Telegram or in-app notifications are sent. Use 0 to alert immediately.
+                      </div>
+                    </div>
+                    <div>
                       <label className="form-label">Notification cooldown (minutes)</label>
                       <input
                         type="number"
@@ -3365,11 +3444,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             </div>
           </section>
         )}
-        {activeSection === 'administration' && (
-          <section id="administration" className="d-flex flex-column gap-3">
+        {activeSection === 'system-access' && (
+          <section id="system-access" className="d-flex flex-column gap-3">
             <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
               <div>
-                <h5 className="mb-0">Administration</h5>
+                <h5 className="mb-0">System & access</h5>
                 <p className="text-secondary small mb-0">Handle credentials and host-level controls.</p>
               </div>
             </div>

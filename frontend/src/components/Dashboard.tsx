@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchDashboard, fetchQuickStatusTiles, MonitoredBackend, QuickStatusTile, refreshBackend } from '../api/client';
+import { fetchDashboard, MonitoredBackend, refreshBackend } from '../api/client';
+import { useQuickStatusDashboard } from '../hooks/useQuickStatusDashboard';
 import { useLocalStorage } from '../hooks/useLocalStorage';
 import { getUserFacingErrorMessage } from '../utils/errors';
 import { BackendCard } from './BackendCard';
-import { QuickStatusItemCard } from './QuickStatusItemCard';
+import { QuickStatusLoadingShell, QuickStatusSections } from './QuickStatusSections';
 
 interface DashboardProps {
   canRefresh: boolean;
@@ -15,34 +16,21 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
   const [backends, setBackends] = useState<MonitoredBackend[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [quickStatusTiles, setQuickStatusTiles] = useState<QuickStatusTile[]>([]);
-  const [quickStatusError, setQuickStatusError] = useState<string | null>(null);
-  const [quickStatusLoading, setQuickStatusLoading] = useState(true);
-  const [selectedQuickStatusTileId, setSelectedQuickStatusTileId] = useState<number | null>(null);
-  const isQuickStatusFetchingRef = useRef(false);
   const [refreshingId, setRefreshingId] = useState<number | null>(null);
   const [hiddenBackendIds, setHiddenBackendIds] = useLocalStorage<number[]>('dashboard-hidden-backends', []);
   const isFetchingRef = useRef(false);
-
-  const loadQuickStatus = useCallback(async () => {
-    if (isQuickStatusFetchingRef.current) {
-      return;
-    }
-    isQuickStatusFetchingRef.current = true;
-    setQuickStatusError(null);
-    try {
-      const tiles = await fetchQuickStatusTiles(projectId);
-      setQuickStatusTiles(tiles);
-    } catch (err) {
-      setQuickStatusTiles([]);
-      setQuickStatusError(
-        getUserFacingErrorMessage(err, 'Could not load quick tiles. Check the API connection and try again.')
-      );
-    } finally {
-      isQuickStatusFetchingRef.current = false;
-      setQuickStatusLoading(false);
-    }
-  }, [projectId]);
+  const {
+    groups: quickStatusGroups,
+    loading: quickStatusLoading,
+    error: quickStatusError,
+    initialLoadDone: quickStatusInitialLoadDone,
+    selectedTileId: selectedQuickStatusTileId,
+    detailLoadingId,
+    hydratingGroups,
+    reload: reloadQuickStatus,
+    toggleTileDetails,
+    closeTileDetails,
+  } = useQuickStatusDashboard(projectId);
 
   const loadData = useCallback(
     async (options: { showSpinner?: boolean } = {}) => {
@@ -96,16 +84,12 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
   }, [loadData]);
 
   useEffect(() => {
-    void loadQuickStatus();
-  }, [loadQuickStatus]);
-
-  useEffect(() => {
     const QUICK_STATUS_REFRESH_INTERVAL_MS = 300_000;
     const intervalId = window.setInterval(() => {
-      void loadQuickStatus();
+      void reloadQuickStatus();
     }, QUICK_STATUS_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
-  }, [loadQuickStatus]);
+  }, [reloadQuickStatus]);
 
   const handleRefresh = async (backend: MonitoredBackend) => {
     if (!canRefresh) return;
@@ -133,44 +117,15 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
     [setHiddenBackendIds]
   );
 
-  const quickStatusGroups = useMemo(() => {
-    const grouped = new Map<string, { key: string; backendId: number | null; backendName: string; displayOrder: number; items: QuickStatusTile[] }>();
-    for (const tile of quickStatusTiles) {
-      const groupKey =
-        tile.backend_id !== null && tile.backend_id !== undefined
-          ? `backend:${tile.backend_id}`
-          : tile.project_id !== null && tile.project_id !== undefined
-            ? `project:${tile.project_id}`
-            : `tile:${tile.id}`;
-      const current = grouped.get(groupKey) ?? {
-        key: groupKey,
-        backendId: tile.backend_id ?? null,
-        backendName: tile.backend_name,
-        displayOrder: tile.backend_display_order ?? 0,
-        items: [],
-      };
-      current.items.push(tile);
-      grouped.set(groupKey, current);
-    }
-    return Array.from(grouped.values()).sort((a, b) => {
-      if (a.displayOrder !== b.displayOrder) {
-        return a.displayOrder - b.displayOrder;
-      }
-      const byName = a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
-      if (byName !== 0) {
-        return byName;
-      }
-      return a.key.localeCompare(b.key);
-    });
-  }, [quickStatusTiles]);
-
   const isMonitoringView = mode === 'monitoring';
   const isProjectView = isMonitoringView && projectId !== null;
   const shouldShowDashboardError = !isMonitoringView || quickStatusGroups.length === 0;
-  const getGridItemClassName = (variant: QuickStatusTile['display_variant']) =>
-    variant === 'graph' || variant === 'temperature' || variant === 'humidity' || variant === 'self_monitoring'
-      ? 'quick-status-grid__item quick-status-grid__item--wide'
-      : 'quick-status-grid__item';
+  const quickStatusShellGroupNames = useMemo(() => {
+    if (isProjectView) {
+      return ['Project quick tiles'];
+    }
+    return backends.map((backend) => backend.name);
+  }, [backends, isProjectView]);
 
   return (
     <div className="dashboard-page d-flex flex-column gap-4">
@@ -189,7 +144,7 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
           className="btn btn-outline-light"
           onClick={() => {
             void loadData({ showSpinner: true });
-            void loadQuickStatus();
+            void reloadQuickStatus();
           }}
           disabled={loading}
         >
@@ -199,82 +154,24 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
       {isMonitoringView ? (
         <>
           {quickStatusGroups.length > 0 ? (
-            <div className="quick-status-sections">
-              {quickStatusGroups.map((group) => (
-                <section className="quick-status-section" key={group.key}>
-                  <div className="quick-status-section__header">
-                    <h3 className="quick-status-section__title">{group.backendName}</h3>
-                    <span className="quick-status-section__count">
-                      {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
-                    </span>
-                  </div>
-                  <div className="quick-status-grid">
-                    {group.items.map((tile) => (
-                      <div className={getGridItemClassName(tile.display_variant)} key={tile.id}>
-                        <QuickStatusItemCard
-                          tile={tile}
-                          onClick={
-                            tile.details && tile.details.length > 0
-                              ? () =>
-                                  setSelectedQuickStatusTileId((current) => (current === tile.id ? null : tile.id))
-                              : undefined
-                          }
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  {(() => {
-                    const selectedTile = group.items.find((tile) => tile.id === selectedQuickStatusTileId);
-                    if (!selectedTile?.details?.length) {
-                      return null;
-                    }
-                    return (
-                      <div className="quick-status-detail card-panel rounded-4 p-3 mt-3">
-                        <div className="d-flex justify-content-between align-items-center gap-2 mb-2">
-                          <div>
-                            <div className="text-uppercase card-panel__heading fw-semibold">{selectedTile.label}</div>
-                            <div className="small text-secondary">{selectedTile.backend_name}</div>
-                          </div>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-light"
-                            onClick={() => setSelectedQuickStatusTileId(null)}
-                          >
-                            Close
-                          </button>
-                        </div>
-                        <ul className="mb-0 small quick-status-detail__list">
-                          {selectedTile.details.map((line) => (
-                            <li
-                              key={`${line.severity}:${line.text}`}
-                              className={
-                                line.severity === 'critical'
-                                  ? 'text-danger'
-                                  : line.severity === 'warn'
-                                    ? 'text-warning'
-                                    : 'text-success'
-                              }
-                            >
-                              <code>{line.text}</code>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })()}
-                </section>
-              ))}
-            </div>
-          ) : quickStatusLoading ? (
-            <div className="text-secondary small">Loading quick tiles…</div>
+            <QuickStatusSections
+              groups={quickStatusGroups}
+              hydratingGroups={hydratingGroups}
+              selectedTileId={selectedQuickStatusTileId}
+              detailLoadingId={detailLoadingId}
+              onTileToggle={toggleTileDetails}
+              onCloseDetails={closeTileDetails}
+            />
+          ) : quickStatusLoading && !quickStatusInitialLoadDone ? (
+            <QuickStatusLoadingShell groupNames={quickStatusShellGroupNames} />
           ) : (
             !quickStatusError && (
               <div className="card-panel rounded-4 p-4">
                 <div className="fw-semibold mb-1">No quick tiles configured</div>
                 <div className="text-secondary small">
                   {isProjectView
-                    ? 'Assign quick tiles to this project from Administration to populate this view.'
-                    : 'Add quick tiles from Administration to populate this view.'}
+                    ? 'Assign quick tiles to this project from Settings to populate this view.'
+                    : 'Add quick tiles from Settings to populate this view.'}
                 </div>
               </div>
             )

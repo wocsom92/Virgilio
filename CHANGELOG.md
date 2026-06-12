@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-04-20
+
+### Added
+- **Quick-status alert confirmation:** configurable minimum time (default **5 minutes**, `0` = immediate) that a warning or error must persist before the tile switches to warn/critical styling and before automatic **Telegram** and **notification center** alerts are emitted. Configure under **Admin → Telegram → Alert confirmation (minutes)**.
+
+### Fixed
+- Quick-status **24-hour history strips** under tiles could fall out of sync with the live tile after an issue cleared (summary updates refreshed status but reused cached strip data, which looked like reversed or stale colors). The dashboard now reloads history when tile **status**, **display value**, or **stale** state changes from polling.
+
+### Changed
+- Project version updated from `7.1.0` to `8.0.0` across backend, frontend, monitor, README, package metadata, changelog, and displayed UI version constants.
+
 ## [7.1.0] - 2026-04-08
 
 ### Added

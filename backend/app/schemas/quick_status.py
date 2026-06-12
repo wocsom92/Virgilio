@@ -224,6 +224,8 @@ class QuickStatusTileRead(BaseModel):
     status: Literal["ok", "info", "warn", "critical", "unknown"]
     stale: bool = False
     show_updated_age: bool = False
+    history_loaded: bool = False
+    has_details: bool = False
     history: list[Literal["ok", "info", "warn", "critical", "unknown"]] = Field(default_factory=list)
     series: list[QuickStatusSeriesPoint] = Field(default_factory=list)
     series_summary: QuickStatusSeriesSummary | None = None

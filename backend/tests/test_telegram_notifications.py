@@ -26,13 +26,20 @@ async def _create_backend(session, name: str = "backend-1") -> MonitoredBackend:
     return backend
 
 
-async def _create_settings(session, *, cooldown_minutes: int, last_sent_at: datetime | None) -> TelegramSettings:
+async def _create_settings(
+    session,
+    *,
+    cooldown_minutes: int,
+    last_sent_at: datetime | None,
+    batch_window_seconds: int = 60,
+) -> TelegramSettings:
     settings = TelegramSettings(
         bot_token="token",
         default_chat_id="chat-id",
         is_active=True,
-        notification_batch_window_seconds=60,
+        notification_batch_window_seconds=batch_window_seconds,
         notification_cooldown_minutes=cooldown_minutes,
+        quick_status_alert_confirmation_minutes=0,
         quick_status_last_notification_at=last_sent_at,
     )
     session.add(settings)
@@ -88,7 +95,10 @@ async def test_alert_notification_is_queued_until_cooldown_expires(db_session, m
 
     assert item.pending_notification_status == "critical"
     assert item.pending_notification_due_at is not None
-    assert item.pending_notification_due_at >= now + timedelta(minutes=15) - timedelta(seconds=5)
+    due = item.pending_notification_due_at
+    if getattr(due, "tzinfo", None) is None:
+        due = due.replace(tzinfo=timezone.utc)
+    assert due <= now + timedelta(seconds=90)
 
     sent: list[str] = []
 
@@ -154,7 +164,7 @@ async def test_pending_alert_is_dropped_if_state_clears_before_cooldown(db_sessi
 @pytest.mark.asyncio
 async def test_recovery_notification_is_sent_when_alert_clears(db_session, monkeypatch):
     backend = await _create_backend(db_session)
-    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None, batch_window_seconds=0)
     item = await _create_item(db_session, backend.id, last_notified_status="critical")
     await _create_snapshot(db_session, backend.id, 35)
 
@@ -182,6 +192,7 @@ async def test_recovery_notification_is_sent_when_alert_clears(db_session, monke
 @pytest.mark.asyncio
 async def test_alert_transition_is_recorded_in_notification_center_without_telegram_send(db_session):
     backend = await _create_backend(db_session)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
     item = await _create_item(db_session, backend.id, last_notified_status="ok")
     await _create_snapshot(db_session, backend.id, 95)
 
@@ -205,6 +216,7 @@ async def test_alert_transition_is_recorded_in_notification_center_without_teleg
 @pytest.mark.asyncio
 async def test_requeueing_same_pending_alert_does_not_duplicate_notification_center_event(db_session):
     backend = await _create_backend(db_session)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
     item = await _create_item(db_session, backend.id, last_notified_status="ok")
     await _create_snapshot(db_session, backend.id, 95)
 
@@ -282,7 +294,7 @@ async def test_pending_alerts_are_grouped_across_batch_window(db_session, monkey
 @pytest.mark.asyncio
 async def test_transition_notification_includes_top_processes_for_cpu_and_memory_alerts(db_session, monkeypatch):
     backend = await _create_backend(db_session)
-    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None, batch_window_seconds=0)
 
     cpu_item = QuickStatusItem(
         backend_id=backend.id,
@@ -345,7 +357,7 @@ async def test_transition_notification_includes_top_processes_for_cpu_and_memory
 @pytest.mark.asyncio
 async def test_transition_notification_includes_ssh_failure_details(db_session, monkeypatch):
     backend = await _create_backend(db_session)
-    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None, batch_window_seconds=0)
 
     ssh_item = QuickStatusItem(
         backend_id=backend.id,
@@ -398,6 +410,7 @@ async def test_transition_notification_includes_ssh_failure_details(db_session, 
 @pytest.mark.asyncio
 async def test_notification_center_event_includes_ssh_failure_details(db_session):
     backend = await _create_backend(db_session)
+    await _create_settings(db_session, cooldown_minutes=0, last_sent_at=None)
     ssh_item = QuickStatusItem(
         backend_id=backend.id,
         label="SSH failed login",
@@ -492,7 +505,7 @@ async def test_successful_ssh_login_notification_includes_details(db_session, mo
     )
 
     assert text is not None
-    assert "Successful SSH login detected at 2026\\-03\\-16 16:42:00 UTC\\." in text
+    assert "Successful SSH login detected at 2026-03-16 16:42:00 UTC." in text
     assert "SSH Login Details" in text
     assert "Method: publickey" in text
     assert "User: root" in text
@@ -547,7 +560,7 @@ async def test_unsuccessful_ssh_login_notification_includes_details(db_session, 
     )
 
     assert text is not None
-    assert "Unsuccessful SSH login detected at 2026\\-03\\-16 16:41:30 UTC\\." in text
+    assert "Unsuccessful SSH login detected at 2026-03-16 16:41:30 UTC." in text
     assert "SSH Failure Details" in text
     assert "Method: publickey" in text
     assert "User: root" in text

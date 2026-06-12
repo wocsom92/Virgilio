@@ -72,6 +72,7 @@ class TelegramSettings(TimestampMixin, Base):
     warn_thresholds: Mapped[dict | None] = mapped_column(JSON)
     notification_batch_window_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     notification_cooldown_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
+    quick_status_alert_confirmation_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     quick_status_last_notification_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -155,6 +156,7 @@ class QuickStatusItem(TimestampMixin, Base):
     last_notified_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     pending_notification_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     pending_notification_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    alert_condition_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     backend: Mapped[MonitoredBackend | None] = relationship("MonitoredBackend")
     project: Mapped["Project | None"] = relationship("Project", back_populates="quick_status_items")

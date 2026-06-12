@@ -1117,13 +1117,46 @@ def _collect_telegram_bot_snapshot(running_containers: list[str] | None) -> dict
     return dict(result)
 
 
-def _count_wifi_clients(interface: str | None) -> int | None:
-    if not interface:
-        return None
-    output = _run_host_network_command("iw", ["dev", interface, "station", "dump"], timeout=6)
-    if output is None:
-        return None
-    return sum(1 for line in output.splitlines() if line.lstrip().startswith("Station "))
+_WIFI_STATION_LINE = re.compile(r"^\s*Station\s+([0-9a-fA-F:]{17})")
+
+
+def _parse_wifi_associated_clients(output: str | None, *, max_clients: int = 32) -> list[dict[str, Any]]:
+    """Parse `iw dev <iface> station dump` into MAC + optional signal (dBm)."""
+    if not output:
+        return []
+    clients: list[dict[str, Any]] = []
+    current_mac: str | None = None
+    current_signal: int | None = None
+
+    def flush() -> None:
+        nonlocal current_mac, current_signal
+        if current_mac is not None and len(clients) < max_clients:
+            entry: dict[str, Any] = {"mac": current_mac}
+            if current_signal is not None:
+                entry["signal_dbm"] = current_signal
+            clients.append(entry)
+        current_mac = None
+        current_signal = None
+
+    for line in output.splitlines():
+        m = _WIFI_STATION_LINE.match(line)
+        if m:
+            flush()
+            current_mac = m.group(1).lower()
+            current_signal = None
+            continue
+        if current_mac is None:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("signal") and "dBm" in stripped:
+            sig_match = re.search(r"(-?\d+)\s*dBm", stripped)
+            if sig_match:
+                try:
+                    current_signal = int(sig_match.group(1))
+                except ValueError:
+                    pass
+    flush()
+    return clients
 
 
 def _collect_wifi_snapshot() -> dict[str, Any]:
@@ -1141,7 +1174,11 @@ def _collect_wifi_snapshot() -> dict[str, Any]:
         operstate_text = _read_host_text(f"/sys/class/net/{interface}/operstate")
         operstate = operstate_text.strip() if isinstance(operstate_text, str) and operstate_text.strip() else None
     hostapd_socket_present = interface is not None and _host_file_exists(f"/run/hostapd/{interface}")
-    client_count = _count_wifi_clients(interface)
+    iw_out = (
+        _run_host_network_command("iw", ["dev", interface, "station", "dump"], timeout=6) if interface else None
+    )
+    wifi_associated_clients = _parse_wifi_associated_clients(iw_out, max_clients=32)
+    client_count = len(wifi_associated_clients) if iw_out is not None else None
     dhcp_leases = _count_host_file_lines("/var/lib/misc/dnsmasq.leases")
 
     if interface and ssid and operstate == "up" and hostapd_socket_present:
@@ -1160,6 +1197,7 @@ def _collect_wifi_snapshot() -> dict[str, Any]:
         "wifi_ssid": ssid,
         "wifi_interface": interface,
         "wifi_client_count": client_count,
+        "wifi_associated_clients": wifi_associated_clients,
         "wifi_dhcp_lease_count": dhcp_leases,
         "wifi_operstate": operstate,
         "wifi_hostapd_socket_present": hostapd_socket_present if interface else None,

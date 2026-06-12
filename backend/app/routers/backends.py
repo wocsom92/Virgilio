@@ -13,7 +13,7 @@ from backend.app.schemas.backend import (
 )
 from backend.app.schemas.metrics import MetricsIngestResponse
 from backend.app.services.backend_ingest import MetricsPayloadError, ingest_backend_metrics
-from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
+from backend.app.services.backend_queries import delete_monitored_backend, fetch_backends_with_latest_snapshots
 from backend.app.services.monitor_client import MonitorClientError, fetch_metrics, request_monitor_reboot
 
 
@@ -218,8 +218,6 @@ async def delete_backend(
     backend_id: int,
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    backend = await session.get(MonitoredBackend, backend_id)
-    if not backend:
+    deleted = await delete_monitored_backend(session, backend_id)
+    if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
-    await session.delete(backend)
-    await session.commit()

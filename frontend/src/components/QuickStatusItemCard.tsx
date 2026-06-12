@@ -416,7 +416,9 @@ export function QuickStatusItemCard({
           ) : null}
         </svg>
       ) : (
-        <div className="quick-status-wide__empty">Waiting for 24h history.</div>
+        <div className="quick-status-wide__empty">
+          {tile.history_loaded ? 'Waiting for 24h history.' : 'Loading 24h history…'}
+        </div>
       )}
     </div>
   );

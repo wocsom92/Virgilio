@@ -11,8 +11,21 @@ from backend.app.models.monitors import (
     QuickStatusPingSample,
     QuickStatusPrometheusSample,
 )
+from backend.app.services import telegram_settings
 from backend.app.services.prometheus_client import PrometheusQueryValue
 from backend.app.services import quick_status
+
+
+@pytest.fixture(autouse=True)
+def quick_status_zero_alert_confirmation(monkeypatch):
+    real_get = telegram_settings.get_or_create_settings
+
+    async def wrapped(session):
+        row = await real_get(session)
+        row.quick_status_alert_confirmation_minutes = 0
+        return row
+
+    monkeypatch.setattr(quick_status, "get_or_create_settings", wrapped)
 
 
 def _snapshot(raw_payload: dict) -> MetricSnapshot:
@@ -49,6 +62,97 @@ def test_metric_value_reads_device_status_payload_fields():
     assert quick_status._metric_value(snapshot, "telegram_bot_status", None) == 1
     assert quick_status._metric_value(snapshot, "wifi_status", None) == 0
     assert quick_status._metric_value(snapshot, "vpn_status", None) == 2
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tile_summaries_returns_lightweight_tiles(db_session):
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token",
+        display_order=0,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+
+    snapshot = MetricSnapshot(
+        backend_id=backend.id,
+        reported_at=datetime.now(tz=timezone.utc),
+        ram_used_percent=42,
+        raw_payload={"sample": True},
+    )
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        label="RAM usage",
+        metric_key="ram_used_percent",
+        warning_threshold=80,
+        critical_threshold=90,
+        display_order=0,
+    )
+    item.backend = backend
+    db_session.add_all([snapshot, item])
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tile_summaries(
+        db_session,
+        [item],
+        include_heartbeat_tiles=False,
+        backends=[backend],
+    )
+
+    assert len(tiles) == 1
+    tile = tiles[0]
+    assert tile.display_value == "42%"
+    assert tile.history_loaded is False
+    assert tile.history == []
+    assert tile.series == []
+    assert tile.details is None
+    assert tile.has_details is False
+
+
+@pytest.mark.asyncio
+async def test_build_quick_status_tile_summaries_coerces_has_details_to_bool(db_session):
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token",
+        display_order=0,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+
+    db_session.add(
+        MetricSnapshot(
+            backend_id=backend.id,
+            reported_at=datetime.now(tz=timezone.utc),
+            raw_payload={
+                "ssh_last_unsuccessful_attempt_seconds": 3600,
+                "ssh_last_failure_auth_method": "invalid-user",
+            },
+        )
+    )
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        label="SSH failed login",
+        metric_key="ssh_last_unsuccessful_attempt",
+        warning_threshold=168,
+        critical_threshold=24,
+        display_order=0,
+    )
+    item.backend = backend
+    db_session.add(item)
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tile_summaries(
+        db_session,
+        [item],
+        include_heartbeat_tiles=False,
+        backends=[backend],
+    )
+
+    assert len(tiles) == 1
+    assert tiles[0].has_details is True
+    assert isinstance(tiles[0].has_details, bool)
 
 
 def test_metric_value_reads_mount_available_gb():
@@ -147,6 +251,10 @@ def test_build_detail_lines_for_device_status_tiles():
             "wifi_ssid": "lab-wifi",
             "wifi_interface": "wlan0",
             "wifi_client_count": 2,
+            "wifi_associated_clients": [
+                {"mac": "aa:bb:cc:dd:ee:01", "signal_dbm": -45},
+                {"mac": "aa:bb:cc:dd:ee:02"},
+            ],
             "wifi_dhcp_lease_count": 3,
             "wifi_operstate": "up",
             "wifi_hostapd_socket_present": True,
@@ -183,6 +291,8 @@ def test_build_detail_lines_for_device_status_tiles():
         "Operstate: up",
         "hostapd socket: present",
         "Associated clients: 2",
+        "Client: aa:bb:cc:dd:ee:01 · -45 dBm",
+        "Client: aa:bb:cc:dd:ee:02",
         "DHCP leases: 3",
     ]
     assert vpn_lines is not None
@@ -1140,3 +1250,50 @@ async def test_build_quick_status_tiles_includes_prometheus_series_for_temperatu
     assert tile.series_summary.min_value == 21.5
     assert tile.series_summary.max_value == 23.0
     assert tile.series_summary.delta_value == pytest.approx(0.9)
+
+
+@pytest.mark.asyncio
+async def test_quick_status_alert_suppression_keeps_ok_until_confirmation_elapses(db_session, monkeypatch):
+    monkeypatch.setattr(quick_status, "get_or_create_settings", telegram_settings.get_or_create_settings)
+
+    settings = await telegram_settings.get_or_create_settings(db_session)
+    settings.quick_status_alert_confirmation_minutes = 5
+    await db_session.commit()
+
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    backend = MonitoredBackend(
+        name="alpha",
+        base_url="http://alpha",
+        api_token="token-alpha",
+        display_order=1,
+        poll_interval_seconds=60,
+        last_seen_at=now,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+    db_session.add(
+        MetricSnapshot(
+            backend_id=backend.id,
+            reported_at=now,
+            raw_payload={},
+            ram_used_percent=95,
+        )
+    )
+    item = QuickStatusItem(
+        backend_id=backend.id,
+        backend=backend,
+        label="RAM",
+        metric_key="ram_used_percent",
+        warning_threshold=80,
+        critical_threshold=90,
+        display_order=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
+    assert tiles[0].status == "ok"
+
+    later = now + timedelta(minutes=6)
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=later)
+    assert tiles[0].status == "critical"

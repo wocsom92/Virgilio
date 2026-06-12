@@ -119,7 +119,7 @@ export function SiteMonitoring() {
       ) : sites.length === 0 ? (
         <div className="card-panel rounded-4 p-4">
           <div className="fw-semibold mb-1">No site checks configured</div>
-          <div className="text-secondary small">Add ping or HTTP checks from Administration to populate this view.</div>
+          <div className="text-secondary small">Add ping or HTTP checks from Settings to populate this view.</div>
         </div>
       ) : (
         <>

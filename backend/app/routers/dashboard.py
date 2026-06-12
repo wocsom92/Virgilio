@@ -15,7 +15,7 @@ from backend.app.schemas.project import ProjectRead
 from backend.app.schemas.quick_status import QuickStatusTileRead
 from backend.app.schemas.site_monitoring import SiteMonitorStatusRead
 from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
-from backend.app.services.quick_status import build_quick_status_tiles
+from backend.app.services.quick_status import build_quick_status_tile_summaries, build_quick_status_tiles
 from backend.app.services.site_monitoring import (
     build_site_monitor_statuses,
     list_site_monitors,
@@ -30,6 +30,34 @@ _RANGE_TO_DELTA = {
     "daily": timedelta(days=1),
     "weekly": timedelta(days=7),
 }
+
+
+async def _load_dashboard_quick_status_context(
+    session: AsyncSession,
+    project_id: int | None,
+) -> tuple[list[MonitoredBackend], list[QuickStatusItem]]:
+    if project_id is not None:
+        project = await session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+    backends_result = await session.execute(
+        select(MonitoredBackend)
+        .where(MonitoredBackend.is_active.is_(True))
+        .order_by(MonitoredBackend.display_order, MonitoredBackend.name, MonitoredBackend.id)
+    )
+    item_query = select(QuickStatusItem).options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
+    if project_id is None:
+        item_query = item_query.where(QuickStatusItem.project_id.is_(None))
+    else:
+        item_query = item_query.where(QuickStatusItem.project_id == project_id)
+    item_result = await session.execute(item_query.order_by(QuickStatusItem.display_order, QuickStatusItem.id))
+    items = [
+        item
+        for item in item_result.scalars()
+        if item.backend_id is None or (item.backend is not None and item.backend.is_active)
+    ]
+    return list(backends_result.scalars()), items
 
 
 @router.get("/", response_model=list[BackendWithLatestSnapshot])
@@ -58,37 +86,72 @@ async def fetch_quick_status_tiles(
     _: object = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[QuickStatusTileRead]:
-    if project_id is not None:
-        project = await session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-    backends_result = await session.execute(
-        select(MonitoredBackend)
-        .where(MonitoredBackend.is_active.is_(True))
-        .order_by(MonitoredBackend.display_order, MonitoredBackend.name, MonitoredBackend.id)
-    )
-    item_query = select(QuickStatusItem).options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
-    if project_id is None:
-        item_query = item_query.where(QuickStatusItem.project_id.is_(None))
-    else:
-        item_query = item_query.where(QuickStatusItem.project_id == project_id)
-    item_result = await session.execute(item_query.order_by(QuickStatusItem.display_order, QuickStatusItem.id))
-    items = [
-        item
-        for item in item_result.scalars()
-        if item.backend_id is None or (item.backend is not None and item.backend.is_active)
-    ]
-    backends = list(backends_result.scalars())
-    tiles = await build_quick_status_tiles(
+    backends, items = await _load_dashboard_quick_status_context(session, project_id)
+    tiles = await build_quick_status_tile_summaries(
         session,
         items,
         include_heartbeat_tiles=project_id is None,
         backends=backends,
-        persist_ping_history=True,
-        persist_prometheus_history=True,
     )
     await session.commit()
     return tiles
+
+
+@router.get("/quick-status/history", response_model=list[QuickStatusTileRead])
+async def fetch_quick_status_tile_history(
+    tile_ids: list[int] = Query(...),
+    project_id: int | None = Query(default=None, ge=1),
+    _: object = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[QuickStatusTileRead]:
+    requested_ids = [tile_id for tile_id in tile_ids if tile_id != 0]
+    if not requested_ids:
+        return []
+
+    backends, items = await _load_dashboard_quick_status_context(session, project_id)
+    positive_ids = {tile_id for tile_id in requested_ids if tile_id > 0}
+    scoped_items = [item for item in items if item.id in positive_ids]
+    include_heartbeat_tiles = project_id is None and any(tile_id < 0 for tile_id in requested_ids)
+
+    tiles = await build_quick_status_tiles(
+        session,
+        scoped_items,
+        include_heartbeat_tiles=include_heartbeat_tiles,
+        backends=backends,
+        persist_ping_history=False,
+        persist_prometheus_history=False,
+    )
+    await session.commit()
+
+    tiles_by_id = {tile.id: tile for tile in tiles if tile.id in set(requested_ids)}
+    return [tiles_by_id[tile_id] for tile_id in requested_ids if tile_id in tiles_by_id]
+
+
+@router.get("/quick-status/{tile_id}/detail", response_model=QuickStatusTileRead)
+async def fetch_quick_status_tile_detail(
+    tile_id: int,
+    project_id: int | None = Query(default=None, ge=1),
+    _: object = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> QuickStatusTileRead:
+    backends, items = await _load_dashboard_quick_status_context(session, project_id)
+    include_heartbeat_tiles = project_id is None and tile_id < 0
+    scoped_items = [item for item in items if item.id == tile_id] if tile_id > 0 else []
+
+    tiles = await build_quick_status_tiles(
+        session,
+        scoped_items,
+        include_heartbeat_tiles=include_heartbeat_tiles,
+        backends=backends,
+        persist_ping_history=False,
+        persist_prometheus_history=False,
+    )
+    await session.commit()
+
+    for tile in tiles:
+        if tile.id == tile_id:
+            return tile
+    raise HTTPException(status_code=404, detail="Quick status item not found")
 
 
 @router.get("/site-monitors", response_model=list[SiteMonitorStatusRead])

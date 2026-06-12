@@ -54,6 +54,15 @@ function formatUpdatedAge(reportedAt: string | null | undefined, nowMs: number):
 }
 
 function renderHistorySegments(tile: QuickStatusTile) {
+  if (!tile.history_loaded) {
+    return (
+      <div className="quick-status-history" aria-hidden="true">
+        {Array.from({ length: 12 }).map((_, index) => (
+          <span key={`${tile.id}:loading:${index}`} className="quick-status-history__segment quick-status--unknown" />
+        ))}
+      </div>
+    );
+  }
   if (!tile.history.length) {
     return null;
   }

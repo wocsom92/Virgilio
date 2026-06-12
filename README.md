@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `7.1.0`
+Current version: `8.0.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
 
@@ -39,7 +39,8 @@ Component docs:
 - Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
 - Temperature and humidity graph cards stay visible even when Prometheus sensor history is flat or only has isolated samples, which fixes Raspberry Pi climate cards that previously looked empty.
 - Projects can expose separate sidebar tabs, each with its own project-scoped quick tiles.
-- Quick status tiles now include a 24-hour history strip with hourly segments under each square tile.
+- Quick status tiles include a 24-hour history strip (twelve two-hour segments) under each square tile; when live polling changes a tile’s status or staleness, the strip is refetched so it stays aligned with the current reading after transient issues clear.
+- Quick-status **alert confirmation** (Admin → Telegram): a warning or error must last a configurable time (default **5 minutes**; use **0** for immediate alerts) before the tile turns amber/red and before Telegram or in-app notifications fire—reduces noise from brief threshold crossings.
 - Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
 - Quick tiles show a loading indicator during initial fetch instead of briefly displaying "No quick tiles configured".
 - Ping and Prometheus quick-status checks run concurrently on the backend, reducing dashboard load time when many network-checked tiles are configured.

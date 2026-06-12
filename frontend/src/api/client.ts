@@ -188,6 +188,7 @@ export interface TelegramSettings {
   default_chat_id?: string | null;
   notification_batch_window_seconds: number;
   notification_cooldown_minutes: number;
+  quick_status_alert_confirmation_minutes: number;
   is_active: boolean;
 }
 
@@ -331,6 +332,8 @@ export interface QuickStatusTile {
   status: StatusLevel;
   stale?: boolean;
   show_updated_age?: boolean;
+  history_loaded?: boolean;
+  has_details?: boolean;
   history: StatusLevel[];
   series?: QuickStatusSeriesPoint[];
   series_summary?: QuickStatusSeriesSummary | null;
@@ -378,6 +381,26 @@ export async function fetchDashboard(): Promise<MonitoredBackend[]> {
 
 export async function fetchQuickStatusTiles(projectId?: number | null): Promise<QuickStatusTile[]> {
   const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status', {
+    params: projectId ? { project_id: projectId } : undefined,
+  });
+  return data;
+}
+
+export async function fetchQuickStatusTileHistory(tileIds: number[], projectId?: number | null): Promise<QuickStatusTile[]> {
+  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status/history', {
+    params: {
+      tile_ids: tileIds,
+      ...(projectId ? { project_id: projectId } : {}),
+    },
+    paramsSerializer: {
+      indexes: null,
+    },
+  });
+  return data;
+}
+
+export async function fetchQuickStatusTileDetail(tileId: number, projectId?: number | null): Promise<QuickStatusTile> {
+  const { data } = await api.get<QuickStatusTile>(`/dashboard/quick-status/${tileId}/detail`, {
     params: projectId ? { project_id: projectId } : undefined,
   });
   return data;
