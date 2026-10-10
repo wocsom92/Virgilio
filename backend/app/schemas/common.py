@@ -58,3 +58,9 @@ class MetricSnapshotRead(MetricSnapshotBase):
 
     class Config:
         from_attributes = True
+
+
+class MetricSnapshotSummaryRead(MetricSnapshotRead):
+    """Snapshot for dashboard lists: identical to MetricSnapshotRead minus the raw payload."""
+
+    raw_payload: dict[str, Any] | None = Field(default=None, exclude=True)

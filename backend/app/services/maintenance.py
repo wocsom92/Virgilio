@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.db.session import engine, wal_checkpoint
@@ -12,6 +12,7 @@ from backend.app.models.monitors import (
     NotificationEvent,
     QuickStatusPingSample,
     QuickStatusPrometheusSample,
+    QuickStatusStatusEvent,
     SiteMonitorSample,
 )
 from backend.app.services.system_settings import metric_retention_timedelta
@@ -61,6 +62,30 @@ async def run_retention(
         if total:
             logger.info("Retention removed %s rows from %s older than %s", total, table_name, cutoff.isoformat())
         deleted[table_name] = total
+
+    # Status events: drop old rows but always keep each item's newest one (it anchors the strip).
+    newest_per_item = (
+        select(func.max(QuickStatusStatusEvent.id)).group_by(QuickStatusStatusEvent.quick_status_item_id)
+    ).scalar_subquery()
+    stale_events = (
+        select(QuickStatusStatusEvent.id)
+        .where(QuickStatusStatusEvent.started_at < cutoff, QuickStatusStatusEvent.id.not_in(newest_per_item))
+        .limit(batch_size)
+        .scalar_subquery()
+    )
+    events_total = 0
+    while True:
+        result = await session.execute(
+            delete(QuickStatusStatusEvent)
+            .where(QuickStatusStatusEvent.id.in_(stale_events))
+            .execution_options(synchronize_session=False)
+        )
+        count = int(result.rowcount or 0)
+        await session.commit()
+        events_total += count
+        if count < batch_size:
+            break
+    deleted[QuickStatusStatusEvent.__tablename__] = events_total
     return deleted
 
 

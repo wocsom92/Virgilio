@@ -62,3 +62,4 @@ class MetricSeriesResponse(BaseModel):
     next_offset_with_data: int | None = None
     points: list[MetricSeriesPoint]
     reboot_markers: list[datetime] | None = None
+    bucket_seconds: int | None = None  # set when points were averaged into fixed buckets

@@ -168,6 +168,8 @@ export interface MetricSeriesResponse {
   next_offset_with_data?: number | null;
   points: MetricSeriesPoint[];
   reboot_markers?: string[] | null;
+  /** Set when the backend averaged samples into fixed buckets of this many seconds. */
+  bucket_seconds?: number | null;
 }
 
 export interface MetricSnapshot {

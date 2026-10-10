@@ -17,6 +17,8 @@ from backend.app.services.http_metrics import install_http_metrics
 from backend.app.services.http_clients import close_http_clients
 from backend.app.version import BACKEND_VERSION
 from backend.app.services.reboot_service import notify_reboot_recovery
+from backend.app.services.system_settings import get_system_settings
+from backend.app.services.telegram_settings import get_or_create_settings
 
 
 poller = BackendPoller(async_session_factory)
@@ -29,6 +31,10 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_schema_compat)
+    # Seed the singleton settings rows once here so dashboard reads never have to create them.
+    async with async_session_factory() as session:
+        await get_system_settings(session)
+        await get_or_create_settings(session)
     await poller.start()
     async with async_session_factory() as session:
         try:

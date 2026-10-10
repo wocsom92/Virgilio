@@ -3,7 +3,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, HttpUrl
 
-from backend.app.schemas.common import MetricSnapshotRead
+from backend.app.schemas.common import MetricSnapshotRead, MetricSnapshotSummaryRead
 
 
 class MonitoredBackendBase(BaseModel):
@@ -46,6 +46,15 @@ class MonitoredBackendRead(MonitoredBackendBase):
 
 class BackendWithLatestSnapshot(MonitoredBackendRead):
     latest_snapshot: MetricSnapshotRead | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class BackendDashboardRead(MonitoredBackendRead):
+    """Dashboard list entry: the newest snapshot without its raw payload."""
+
+    latest_snapshot: MetricSnapshotSummaryRead | None = None
 
     class Config:
         from_attributes = True

@@ -14,6 +14,9 @@ All notable changes to this project will be documented in this file.
 - The 24-hour history builder only loads snapshots for the backends that actually own the requested metric tiles, and never decodes `raw_payload` unless an SSH/VPN/Wi-Fi tile needs it.
 - Frontend polling goes through one shared hook: requests pause while the tab is hidden, abort on unmount, back off after errors, and a 401 signs the session out once instead of every view showing its own error. The monitoring view no longer downloads the full backend list every 30 s, the Graphs view fetches each series once per cadence, the notification badge uses a new `GET /notifications/unread-count`, and 24-hour history is hydrated with a single request on first load.
 - Charts stay mounted across refreshes (no canvas teardown), animations are off, tiles and chart cards are memoised with one shared clock, and the admin console and Chart.js now load as separate chunks only when needed.
+- 24-hour tile history strips are now built from a run-length status event log (`quick_status_status_events`, one row per status change, written on ingest and rebuilt when a tile's thresholds change) instead of re-evaluating up to 1,440 snapshots per tile per request; heartbeat strips read timestamps only.
+- `GET /dashboard/{id}/series` loads only chart columns and downsamples to `max_points` (default 300) per window, averaging numeric metrics per bucket and computing network throughput from counter deltas; the response carries `bucket_seconds` when bucketing was applied.
+- `GET /dashboard/` no longer includes `raw_payload`, and `GET /metrics/{id}/latest` now requires an authenticated user.
 - Monitor backends are polled concurrently (bounded), site monitors honour their configured `check_interval_seconds` (minimum 30 s) and keep their latest result on the `site_monitors` row, and the poller sleeps until the next due check instead of waking every 5 s.
 
 ### Removed

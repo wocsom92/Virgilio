@@ -16,7 +16,7 @@ from backend.app.schemas.metrics import MetricSnapshotCreate
 from backend.app.services.metrics_service import build_snapshot_model
 from backend.app.db.schema_compat import ensure_schema_compat_async
 from backend.app.services.monitor_client import MonitorClientError, fetch_metrics
-from backend.app.services.quick_status import list_quick_status_items_for_backend
+from backend.app.services.quick_status import list_quick_status_items_for_backend, record_quick_status_status_events
 from backend.app.services.telegram_notifications import (
     dispatch_due_quick_status_notifications,
     maybe_send_unsuccessful_ssh_login_notification,
@@ -66,6 +66,7 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
 
     session.add(snapshot)
     session.add(backend)
+    await record_quick_status_status_events(session, quick_status_items, snapshot)
     await session.commit()
 
     await maybe_send_successful_ssh_login_notification(

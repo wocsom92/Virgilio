@@ -62,6 +62,7 @@ async def test_run_retention_deletes_only_rows_older_than_retention(db_session):
         "quick_status_prometheus_samples": 0,
         "site_monitor_samples": 1,
         "notification_events": 1,
+        "quick_status_status_events": 0,
     }
     assert await _count(db_session, MetricSnapshot) == 1
     assert await _count(db_session, QuickStatusPingSample) == 1

@@ -6,7 +6,7 @@ from typing import Iterable
 import asyncio
 import math
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
@@ -16,6 +16,7 @@ from backend.app.models.monitors import (
     QuickStatusItem,
     QuickStatusPingSample,
     QuickStatusPrometheusSample,
+    QuickStatusStatusEvent,
 )
 from backend.app.schemas.quick_status import (
     QuickStatusDetailLine,
@@ -168,12 +169,19 @@ class QuickStatusEvaluation:
 _PING_CACHE: dict[tuple[int, int | None, str], PingCheckResult] = {}
 _PROMETHEUS_CACHE: dict[tuple[int, int | None, str, str], PrometheusCheckResult] = {}
 _NETWORK_CHECK_CONCURRENCY = 8
+# Last status written to quick_status_status_events per item (primed from the DB on first use).
+_LAST_STATUS: dict[int, str] = {}
 
 
 def clear_quick_status_caches() -> None:
-    """Drop in-memory ping/Prometheus results (tests and admin edits)."""
+    """Drop in-memory ping/Prometheus results and the status-event cursor (tests, admin edits)."""
     _PING_CACHE.clear()
     _PROMETHEUS_CACHE.clear()
+    _LAST_STATUS.clear()
+
+
+def _is_metric_item(item: QuickStatusItem) -> bool:
+    return item.metric_key not in _PING_METRICS and item.metric_key not in _PROMETHEUS_METRICS
 
 
 def _loaded_relation(item: QuickStatusItem, relation_name: str):
@@ -1128,17 +1136,15 @@ def _build_prometheus_series_summary(points: list[QuickStatusSeriesPoint]) -> Qu
 
 def _build_heartbeat_history(
     backend: object,
-    snapshots: list[MetricSnapshot],
+    timestamps: list[datetime],
     window_start: datetime,
     window_end: datetime,
 ) -> list[str]:
+    """Heartbeat strip from snapshot timestamps only (the one before the window plus those inside)."""
     bucket_ranges = _history_segment_ranges(window_start)
     buckets = [{} for _ in range(_HISTORY_SEGMENT_COUNT)]
-    ordered_snapshots = sorted(
-        snapshots,
-        key=lambda snapshot: (_coerce_utc(snapshot.reported_at), snapshot.id),
-    )
-    if not ordered_snapshots:
+    ordered = sorted(_coerce_utc(value) for value in timestamps)
+    if not ordered:
         for bucket in buckets:
             bucket["unknown"] = _HISTORY_SEGMENT_DURATION.total_seconds()
         return _finalize_history_buckets(buckets)
@@ -1146,25 +1152,16 @@ def _build_heartbeat_history(
     freshness_seconds = max(getattr(backend, "poll_interval_seconds", 60) or 60, 30) * 3
     freshness_window = timedelta(seconds=freshness_seconds)
 
-    previous_snapshot = next(
-        (
-            snapshot
-            for snapshot in reversed(ordered_snapshots)
-            if _coerce_utc(snapshot.reported_at) < window_start
-        ),
-        None,
-    )
+    previous_reported_at = next((value for value in reversed(ordered) if value < window_start), None)
     current_start = window_start
     current_status = "unknown"
     fresh_until: datetime | None = None
 
-    if previous_snapshot is not None:
-        previous_reported_at = _coerce_utc(previous_snapshot.reported_at)
+    if previous_reported_at is not None:
         fresh_until = previous_reported_at + freshness_window
         current_status = "ok" if fresh_until > window_start else "critical"
 
-    for snapshot in ordered_snapshots:
-        reported_at = _coerce_utc(snapshot.reported_at)
+    for reported_at in ordered:
         if reported_at < window_start:
             continue
         if reported_at > window_end:
@@ -1189,37 +1186,86 @@ def _build_heartbeat_history(
     return _finalize_history_buckets(buckets)
 
 
-async def _load_history_snapshots(
+def _build_item_history_from_events(
+    events: list[tuple[datetime, str]],
+    window_start: datetime,
+    window_end: datetime,
+) -> list[str]:
+    """Same dominant-status-per-bucket rule as the snapshot algorithm, fed by the event log."""
+    bucket_ranges = _history_segment_ranges(window_start)
+    buckets = [{} for _ in range(_HISTORY_SEGMENT_COUNT)]
+    ordered = sorted(((_coerce_utc(started_at), status) for started_at, status in events), key=lambda entry: entry[0])
+
+    current_status = "unknown"
+    for started_at, status in ordered:
+        if started_at < window_start:
+            current_status = status
+            continue
+        break
+    current_start = window_start
+    for started_at, status in ordered:
+        if started_at < window_start:
+            continue
+        if started_at > window_end:
+            break
+        _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, started_at)
+        current_status = status
+        current_start = started_at
+    _accumulate_status_durations(buckets, bucket_ranges, current_status, current_start, window_end)
+    return _finalize_history_buckets(buckets)
+
+
+async def _load_history_events(
+    session: AsyncSession,
+    item_ids: set[int],
+    window_start: datetime,
+    window_end: datetime,
+) -> dict[int, list[tuple[datetime, str]]]:
+    """Status events inside the window plus the last one before it, per item."""
+    events: dict[int, list[tuple[datetime, str]]] = {item_id: [] for item_id in item_ids}
+    for item_id in sorted(item_ids):
+        previous = await session.execute(
+            select(QuickStatusStatusEvent.started_at, QuickStatusStatusEvent.status)
+            .where(
+                QuickStatusStatusEvent.quick_status_item_id == item_id,
+                QuickStatusStatusEvent.started_at < window_start,
+            )
+            .order_by(QuickStatusStatusEvent.started_at.desc(), QuickStatusStatusEvent.id.desc())
+            .limit(1)
+        )
+        events[item_id].extend((started_at, status) for started_at, status in previous.all())
+        current = await session.execute(
+            select(QuickStatusStatusEvent.started_at, QuickStatusStatusEvent.status)
+            .where(
+                QuickStatusStatusEvent.quick_status_item_id == item_id,
+                QuickStatusStatusEvent.started_at >= window_start,
+                QuickStatusStatusEvent.started_at <= window_end,
+            )
+            .order_by(QuickStatusStatusEvent.started_at, QuickStatusStatusEvent.id)
+        )
+        events[item_id].extend((started_at, status) for started_at, status in current.all())
+    return events
+
+
+async def _load_heartbeat_timestamps(
     session: AsyncSession,
     backend_ids: set[int],
     window_start: datetime,
     window_end: datetime,
-    *,
-    with_raw_payload: bool = False,
-) -> dict[int, list[MetricSnapshot]]:
-    """Snapshots in the 24h window plus the one just before it (per backend).
-
-    ``raw_payload`` stays deferred unless an item in the batch evaluates a raw-payload metric.
-    """
-    if not backend_ids:
-        return {}
-
-    snapshots_by_backend: dict[int, list[MetricSnapshot]] = {backend_id: [] for backend_id in backend_ids}
-    options = [undefer(MetricSnapshot.raw_payload)] if with_raw_payload else []
+) -> dict[int, list[datetime]]:
+    """Snapshot timestamps per backend (two narrow queries each; no row objects, no JSON)."""
+    timestamps: dict[int, list[datetime]] = {backend_id: [] for backend_id in backend_ids}
     for backend_id in sorted(backend_ids):
-        previous_result = await session.execute(
-            select(MetricSnapshot)
-            .options(*options)
+        previous = await session.scalar(
+            select(MetricSnapshot.reported_at)
             .where(MetricSnapshot.backend_id == backend_id, MetricSnapshot.reported_at < window_start)
             .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
             .limit(1)
         )
-        previous = previous_result.scalar_one_or_none()
         if previous is not None:
-            snapshots_by_backend[backend_id].append(previous)
-        current_result = await session.execute(
-            select(MetricSnapshot)
-            .options(*options)
+            timestamps[backend_id].append(previous)
+        current = await session.execute(
+            select(MetricSnapshot.reported_at)
             .where(
                 MetricSnapshot.backend_id == backend_id,
                 MetricSnapshot.reported_at >= window_start,
@@ -1227,8 +1273,105 @@ async def _load_history_snapshots(
             )
             .order_by(MetricSnapshot.reported_at, MetricSnapshot.id)
         )
-        snapshots_by_backend[backend_id].extend(current_result.scalars())
-    return snapshots_by_backend
+        timestamps[backend_id].extend(current.scalars())
+    return timestamps
+
+
+async def _latest_event_status(session: AsyncSession, item_id: int) -> str | None:
+    return await session.scalar(
+        select(QuickStatusStatusEvent.status)
+        .where(QuickStatusStatusEvent.quick_status_item_id == item_id)
+        .order_by(QuickStatusStatusEvent.started_at.desc(), QuickStatusStatusEvent.id.desc())
+        .limit(1)
+    )
+
+
+async def rebuild_status_events_for_item(
+    session: AsyncSession,
+    item: QuickStatusItem,
+    *,
+    now: datetime | None = None,
+) -> int:
+    """Recompute the item's event log from the last 24h of snapshots (item created/edited, or
+    first ingest on a database that predates the log). Returns the number of events written."""
+    if not _is_metric_item(item):
+        return 0
+    await session.execute(
+        delete(QuickStatusStatusEvent)
+        .where(QuickStatusStatusEvent.quick_status_item_id == item.id)
+        .execution_options(synchronize_session=False)
+    )
+    window_start, window_end = _history_window_bounds(now)
+    options = [undefer(MetricSnapshot.raw_payload)] if item.metric_key in _RAW_PAYLOAD_METRICS else []
+    previous = (
+        await session.execute(
+            select(MetricSnapshot)
+            .options(*options)
+            .where(MetricSnapshot.backend_id == item.backend_id, MetricSnapshot.reported_at < window_start)
+            .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    current = await session.execute(
+        select(MetricSnapshot)
+        .options(*options)
+        .where(
+            MetricSnapshot.backend_id == item.backend_id,
+            MetricSnapshot.reported_at >= window_start,
+            MetricSnapshot.reported_at <= window_end,
+        )
+        .order_by(MetricSnapshot.reported_at, MetricSnapshot.id)
+    )
+    snapshots = ([previous] if previous is not None else []) + list(current.scalars())
+    last_status: str | None = None
+    written = 0
+    for snapshot in snapshots:
+        status = evaluate_quick_status_item(item, snapshot).status
+        if status == last_status:
+            continue
+        session.add(
+            QuickStatusStatusEvent(
+                quick_status_item_id=item.id,
+                status=status,
+                started_at=_coerce_utc(snapshot.reported_at),
+            )
+        )
+        last_status = status
+        written += 1
+    await session.flush()
+    if last_status is not None:
+        _LAST_STATUS[item.id] = last_status
+    else:
+        _LAST_STATUS.pop(item.id, None)
+    return written
+
+
+async def record_quick_status_status_events(
+    session: AsyncSession,
+    items: Iterable[QuickStatusItem],
+    snapshot: MetricSnapshot,
+) -> int:
+    """Append an event for every metric item whose status changed with this snapshot."""
+    written = 0
+    reported_at = _coerce_utc(snapshot.reported_at)
+    for item in items:
+        if not _is_metric_item(item) or item.backend_id != snapshot.backend_id:
+            continue
+        if item.id not in _LAST_STATUS:
+            latest = await _latest_event_status(session, item.id)
+            if latest is None:
+                # No log yet for this item (fresh install or pre-9.0 data): seed it from history.
+                written += await rebuild_status_events_for_item(session, item, now=reported_at)
+                latest = _LAST_STATUS.get(item.id)
+            if latest is not None:
+                _LAST_STATUS[item.id] = latest
+        status = evaluate_quick_status_item(item, snapshot).status
+        if _LAST_STATUS.get(item.id) == status:
+            continue
+        session.add(QuickStatusStatusEvent(quick_status_item_id=item.id, status=status, started_at=reported_at))
+        _LAST_STATUS[item.id] = status
+        written += 1
+    return written
 
 
 async def _load_latest_snapshots(
@@ -1718,21 +1861,16 @@ async def build_quick_status_tiles(
     window_start, window_end = _history_window_bounds(now)
     ping_item_ids = {item.id for item in items_list if item.metric_key in _PING_METRICS}
     prometheus_item_ids = {item.id for item in items_list if item.metric_key in _PROMETHEUS_METRICS}
-    # Only backends that own metric-based items (or heartbeat tiles) need the 24h snapshot window.
-    history_backend_ids = {
-        item.backend_id
-        for item in items_list
-        if item.backend_id is not None and item.metric_key not in _PING_METRICS and item.metric_key not in _PROMETHEUS_METRICS
-    }
-    if include_heartbeat_tiles:
-        history_backend_ids |= backend_ids
-    needs_raw_payload = any(item.metric_key in _RAW_PAYLOAD_METRICS for item in items_list)
+    metric_item_ids = {item.id for item in items_list if _is_metric_item(item)}
     ping_history_by_item = await _load_ping_history_samples(session, ping_item_ids, window_start, window_end)
     prometheus_history_by_item = await _load_prometheus_history_samples(
         session, prometheus_item_ids, window_start, window_end
     )
-    history_snapshots_by_backend = await _load_history_snapshots(
-        session, history_backend_ids, window_start, window_end, with_raw_payload=needs_raw_payload
+    events_by_item = await _load_history_events(session, metric_item_ids, window_start, window_end)
+    heartbeat_timestamps = (
+        await _load_heartbeat_timestamps(session, backend_ids, window_start, window_end)
+        if include_heartbeat_tiles
+        else {}
     )
     latest_snapshots = await _load_latest_snapshots(
         session, {item.backend_id for item in items_list if item.backend_id is not None} | (backend_ids if include_heartbeat_tiles else set())
@@ -1781,7 +1919,7 @@ async def build_quick_status_tiles(
                     stale=is_stale,
                     history=_build_heartbeat_history(
                         backend,
-                        history_snapshots_by_backend.get(backend_id, []),
+                        heartbeat_timestamps.get(backend_id, []),
                         window_start,
                         window_end,
                     ),
@@ -1887,9 +2025,8 @@ async def build_quick_status_tiles(
                             window_end,
                         )
                         if item.metric_key in _PROMETHEUS_METRICS
-                        else _build_item_history(
-                            item,
-                            history_snapshots_by_backend.get(item.backend_id, []) if item.backend_id is not None else [],
+                        else _build_item_history_from_events(
+                            events_by_item.get(item.id, []),
                             window_start,
                             window_end,
                         )
@@ -2133,6 +2270,8 @@ async def create_quick_status_item(session: AsyncSession, payload: QuickStatusIt
     session.add(item)
     await session.commit()
     await session.refresh(item)
+    await rebuild_status_events_for_item(session, item)
+    await session.commit()
     return item
 
 
@@ -2162,4 +2301,6 @@ async def update_quick_status_item(
     session.add(item)
     await session.commit()
     await session.refresh(item)
+    await rebuild_status_events_for_item(session, item)
+    await session.commit()
     return item

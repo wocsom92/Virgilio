@@ -181,6 +181,26 @@ class QuickStatusItem(TimestampMixin, Base):
     )
 
 
+class QuickStatusStatusEvent(Base):
+    """Run-length log of a metric tile's status: one row per change, so 24h history strips are
+    rebuilt from a handful of rows instead of 1,440 snapshots."""
+
+    __tablename__ = "quick_status_status_events"
+    __table_args__ = (
+        Index("ix_quick_status_status_events_item_started", "quick_status_item_id", "started_at"),
+        {"schema": HISTORY_SCHEMA},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    quick_status_item_id: Mapped[int] = mapped_column(
+        ForeignKey(f"{CONFIG_SCHEMA}.quick_status_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class QuickStatusPingSample(TimestampMixin, Base):
     __tablename__ = "quick_status_ping_samples"
     __table_args__ = (

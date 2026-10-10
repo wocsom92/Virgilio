@@ -89,6 +89,11 @@ _INDEX_ADDITIONS: tuple[IndexAddition, ...] = (
         ("quick_status_item_id", "checked_at"),
     ),
     IndexAddition("site_monitor_samples", "ix_site_monitor_samples_monitor_checked", ("site_monitor_id", "checked_at")),
+    IndexAddition(
+        "quick_status_status_events",
+        "ix_quick_status_status_events_item_started",
+        ("quick_status_item_id", "started_at"),
+    ),
     IndexAddition("notification_events", "ix_notification_events_created_at", ("created_at",)),
     IndexAddition("quick_status_items", "ix_quick_status_items_pending_due", ("pending_notification_due_at",)),
 )

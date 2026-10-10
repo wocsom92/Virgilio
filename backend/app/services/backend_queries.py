@@ -15,7 +15,12 @@ from backend.app.models.monitors import (
     QuickStatusPrometheusSample,
 )
 from backend.app.schemas.backend import BackendWithLatestSnapshot, MonitoredBackendRead
-from backend.app.schemas.common import MetricSnapshotRead
+from backend.app.schemas.common import MetricSnapshotRead, MetricSnapshotSummaryRead
+
+# Everything on MetricSnapshot except the deferred raw_payload (reading it would trigger a lazy load).
+_SUMMARY_COLUMNS = tuple(
+    column.key for column in MetricSnapshot.__table__.columns if column.key != "raw_payload"
+)
 
 
 async def fetch_backends_with_latest_snapshots(
@@ -26,7 +31,13 @@ async def fetch_backends_with_latest_snapshots(
     backend_ids: Sequence[int] | None = None,
     backend_name: str | None = None,
     require_admin_ordering: bool = False,
+    include_raw_payload: bool = True,
 ) -> list[BackendWithLatestSnapshot]:
+    """Backends joined to their newest snapshot.
+
+    ``include_raw_payload=False`` leaves the deferred JSON column unloaded; callers that only
+    serialise ``BackendDashboardRead`` never need it.
+    """
     latest_snapshot_sq = (
         select(
             MetricSnapshot.backend_id.label("backend_id"),
@@ -38,7 +49,7 @@ async def fetch_backends_with_latest_snapshots(
 
     query: Select = (
         select(MonitoredBackend, MetricSnapshot)
-        .options(undefer(MetricSnapshot.raw_payload))
+        .options(*([undefer(MetricSnapshot.raw_payload)] if include_raw_payload else []))
         .outerjoin(latest_snapshot_sq, latest_snapshot_sq.c.backend_id == MonitoredBackend.id)
         .outerjoin(MetricSnapshot, MetricSnapshot.id == latest_snapshot_sq.c.snapshot_id)
     )
@@ -63,12 +74,15 @@ async def fetch_backends_with_latest_snapshots(
         base = MonitoredBackendRead.model_validate(backend)
         base_payload = base.model_dump()
         base_payload["api_token"] = None
-        payload.append(
-            BackendWithLatestSnapshot(
-                **base_payload,
-                latest_snapshot=MetricSnapshotRead.model_validate(latest_snapshot) if latest_snapshot else None,
-            )
-        )
+        snapshot_payload = None
+        if latest_snapshot is not None:
+            if include_raw_payload:
+                snapshot_payload = MetricSnapshotRead.model_validate(latest_snapshot)
+            else:
+                snapshot_payload = MetricSnapshotSummaryRead.model_validate(
+                    {column: getattr(latest_snapshot, column) for column in _SUMMARY_COLUMNS}
+                )
+        payload.append(BackendWithLatestSnapshot(**base_payload, latest_snapshot=snapshot_payload))
     return payload
 
 

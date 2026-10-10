@@ -3,7 +3,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
+from backend.app.core.security import get_current_user
 from backend.app.db.session import get_session
 from backend.app.models.monitors import MetricSnapshot, MonitoredBackend
 from backend.app.schemas.metrics import MetricSnapshotCreate, MetricsIngestResponse
@@ -54,6 +56,7 @@ async def ingest_metrics(
 @router.get("/{backend_id}/latest", response_model=MetricsIngestResponse)
 async def get_latest_snapshot(
     backend_id: int,
+    _: object = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> MetricsIngestResponse:
     backend = await session.get(MonitoredBackend, backend_id)
@@ -62,6 +65,7 @@ async def get_latest_snapshot(
 
     result = await session.execute(
         select(MetricSnapshot)
+        .options(undefer(MetricSnapshot.raw_payload))
         .where(MetricSnapshot.backend_id == backend_id)
         .order_by(MetricSnapshot.reported_at.desc())
         .limit(1)

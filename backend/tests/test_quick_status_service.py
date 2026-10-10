@@ -743,6 +743,9 @@ async def test_build_quick_status_tiles_history_uses_longest_status_duration_per
     db_session.add(item)
     await db_session.commit()
 
+    # Strips come from the status event log; seed it from the stored snapshots as ingest would.
+    written = await quick_status.rebuild_status_events_for_item(db_session, item, now=now)
+    assert written == 4  # ok -> critical -> warn -> unknown (the None sample)
     tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
 
     assert tiles[0].history == ["ok"] * 11 + ["critical"]
