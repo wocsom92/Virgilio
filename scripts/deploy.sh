@@ -296,6 +296,7 @@ if [[ "${PROFILE}" == "full" ]]; then
     scripts/post_deploy_check.sh
     docker
     docker-compose.yml
+    docker-compose.host-control.yml
     docker-compose.mysql-legacy.yml
     docker-compose.monitor.yml
     docker-compose.monitor.nginx.yml

@@ -3,16 +3,17 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 COPY frontend/package*.json ./
-RUN npm install
+RUN npm ci --no-audit --no-fund
 
 COPY frontend .
 
-ARG VITE_API_BASE_URL=http://localhost:8000
+# Same-origin by default: the bundled nginx proxies /api/ to the backend container.
+ARG VITE_API_BASE_URL=/api
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
 RUN npm run build
 
-FROM nginx:1.25-alpine AS runtime
+FROM nginx:1.27-alpine AS runtime
 
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=builder /app/dist /usr/share/nginx/html

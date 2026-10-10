@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.security import (
+    invalidate_user_cache,
     create_access_token,
     get_current_user,
     get_password_hash,
@@ -122,6 +123,7 @@ async def create_user(
     session.add(user)
     await session.commit()
     await session.refresh(user)
+    invalidate_user_cache(username)
     return UserRead.model_validate(user)
 
 
@@ -151,3 +153,4 @@ async def delete_user(
 
     await session.delete(user)
     await session.commit()
+    invalidate_user_cache(user.username)

@@ -3,12 +3,11 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 import hmac
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 
 from monitor.app.http_metrics import install_http_metrics
 from monitor.app import metrics, ping
 from monitor.app.config import settings
-from monitor.app.logging import bind_request_handler, reset_request_handler
 from monitor.app.schemas import MetricPayload, MetricResponse, PingResponse
 from monitor.app.storage import repository
 
@@ -32,22 +31,16 @@ def create_app() -> FastAPI:
     application = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
     install_http_metrics(application, service_name="monitor")
 
-    @application.middleware("http")
-    async def bind_log_handler(request: Request, call_next):
-        token = bind_request_handler(f"{request.method} {request.url.path}")
-        try:
-            return await call_next(request)
-        finally:
-            reset_request_handler(token)
-
     @application.get("/healthz", tags=["meta"])
     async def health() -> dict[str, str]:  # pragma: no cover - simple endpoint
         return {"status": "ok"}
 
     @application.get("/metrics", response_model=MetricResponse, dependencies=[Depends(verify_token)])
     async def get_metrics() -> MetricResponse:
-        raw = metrics.collect_metrics()
-        payload = MetricPayload.model_validate({**raw, "raw_payload": raw})
+        # Collection runs in a worker thread and is cached briefly; the payload is sent once
+        # (the backend keeps the extra keys it needs itself, so no duplicated raw_payload).
+        raw = await metrics.collect_metrics_cached()
+        payload = MetricPayload.model_validate(raw)
         await repository.record(payload)
         return MetricResponse(metrics=payload)
 
@@ -65,8 +58,8 @@ def create_app() -> FastAPI:
     async def latest_metrics() -> MetricResponse:
         latest = await repository.latest()
         if not latest:
-            raw = metrics.collect_metrics()
-            payload = MetricPayload.model_validate({**raw, "raw_payload": raw})
+            raw = await metrics.collect_metrics_cached()
+            payload = MetricPayload.model_validate(raw)
             return MetricResponse(metrics=payload)
         return MetricResponse(metrics=latest)
 

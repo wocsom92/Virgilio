@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `8.0.0`
+Current version: `9.0.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, SQLite, and Docker Compose, sized to run comfortably on a Raspberry Pi 5.
 
@@ -93,6 +93,7 @@ Common optional values:
 - `SERVER_MONITOR_LOG_LEVEL`
 - `SERVER_MONITOR_DB_PATH` (default `/app/data/virgilio.db`, stored on the `backend-data` volume)
 - `SERVER_MONITOR_TELEGRAM_BOT_ENABLED` (default `true`; the Telegram command bot runs inside the backend process)
+- `COMPOSE_FILE=docker-compose.yml:docker-compose.host-control.yml` to run the backend and monitor privileged (host reboot, chroot `journalctl`); omit it to run unprivileged
 - `SERVER_MONITOR_TELEGRAM_PROXY_URL`
 - `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE`
 - `SERVER_MONITOR_TELEGRAM_LOCAL_ADDRESS`
@@ -101,8 +102,6 @@ Common optional values:
 - `MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS`
 - `MONITOR_HOST_ROOT_SOURCE`
 - `MONITOR_HOST_ROOT_TARGET`
-- `MONITOR_HISTORY_RETENTION_SECONDS`
-- `MONITOR_HISTORY_MAX_ENTRIES`
 - `MONITOR_ALLOW_HOST_REBOOT`
 - `MONITOR_REBOOT_COMMAND`
 - `MONITOR_LOG_LEVEL`
@@ -112,7 +111,7 @@ Notes:
 
 - In production frontend builds, if `VITE_API_BASE_URL` is not set, frontend uses same-origin `/api` (proxied by frontend Nginx to `backend:8000`).
 - Use `VITE_API_BASE_URL=/api` for same-origin production deployments so the frontend keeps working when clients open the UI by IP, hostname, or reverse-proxied domain.
-- `docker-compose.yml` currently passes `VITE_API_BASE_URL` build arg with default `http://localhost:28000`. Override it for your target deployment, preferably with `/api` for same-origin routing.
+- `docker-compose.yml` builds the frontend with `VITE_API_BASE_URL=/api` by default, so the bundled Nginx proxies API calls to the backend container; override it only when the API is served from another origin.
 - In development, frontend defaults to `http://localhost:8000`.
 - SSH quick status checks require host filesystem bind mount (set `MONITOR_HOST_ROOT_SOURCE=/` and keep `MONITOR_HOST_ROOT_TARGET=/hostfs`).
 - Set `SERVER_MONITOR_TELEGRAM_PROXY_URL` when Telegram should egress through a local HTTP proxy such as Xray on `http://host.docker.internal:10809`.
@@ -121,7 +120,7 @@ Notes:
 - If both `SERVER_MONITOR_TELEGRAM_PROXY_URL` and `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE` are set, Telegram tries the proxy first and automatically falls back to the VPN interface when the proxy path is unavailable.
 - On host-network deployments, prefer the `telegram-egress-proxy` service and point `SERVER_MONITOR_TELEGRAM_PROXY_URL` at `http://host.docker.internal:18080`; set `TELEGRAM_EGRESS_PROXY_BIND_INTERFACE` in the local env file when that proxy should fall back through a specific VPN interface.
 - HTTP site-monitor targets entered as bare hostnames like `telegram.org` are stored as `https://telegram.org`.
-- Backend and monitor containers emit structured JSON logs to stdout. Frontend Nginx access logs are also written as JSON.
+- Containers run unprivileged with memory/CPU limits and capped json-file logs (5 MB × 3 per container). Backend and monitor containers emit structured JSON logs to stdout. Frontend Nginx access logs are also written as JSON.
 - All backend state lives in one SQLite file (`SERVER_MONITOR_DB_PATH`, WAL mode) on the `backend-data` volume. Back it up with `docker compose cp backend:/app/data/virgilio.db ./virgilio.db` while the stack runs (WAL mode keeps the copy consistent); restore by copying the file back and restarting the backend.
 
 ### Migrating from MySQL (releases before 9.0)
@@ -158,8 +157,6 @@ Use `monitor/.env.example` as baseline for monitor agent variables:
 - `MONITOR_MOUNTED_POINTS`
 - `MONITOR_HOST_ROOT_SOURCE`
 - `MONITOR_HOST_ROOT_TARGET`
-- `MONITOR_HISTORY_RETENTION_SECONDS`
-- `MONITOR_HISTORY_MAX_ENTRIES`
 - `MONITOR_ALLOW_HOST_REBOOT`
 - `MONITOR_REBOOT_COMMAND`
 

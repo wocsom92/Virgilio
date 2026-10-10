@@ -30,7 +30,7 @@ DISK_WARN_PERCENT = 90.0
 logger = logging.getLogger(__name__)
 
 _TOP_PROCESSES_CACHE_TTL_SECONDS = 5.0
-_SSH_SNAPSHOT_CACHE_TTL_SECONDS = 5.0
+_SSH_SNAPSHOT_CACHE_TTL_SECONDS = 60.0  # log tailing + subprocesses; once a minute is plenty
 _SSH_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _MOUNT_POINTS_CACHE_TTL_SECONDS = 30.0
 _OS_VERSION_CACHE_TTL_SECONDS = 300.0
@@ -186,11 +186,28 @@ def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] |
     return result
 
 
-def _get_cpu_temperature() -> float | None:
+_SHORT_MEMO_TTL_SECONDS = 1.0
+_sensor_memo: tuple[float, dict[str, list[Any]] | None] | None = None
+_docker_scan_memo: tuple[float, tuple[int, list[str]] | None] | None = None
+
+
+def _read_sensor_temperatures() -> dict[str, list[Any]] | None:
+    """psutil.sensors_temperatures(), shared by the CPU and disk readings of one collection."""
+    global _sensor_memo
+    now = time.monotonic()
+    if _sensor_memo is not None and now - _sensor_memo[0] <= _SHORT_MEMO_TTL_SECONDS:
+        return _sensor_memo[1]
     try:
-        temps = psutil.sensors_temperatures()
+        temps = psutil.sensors_temperatures() or None
     except (AttributeError, NotImplementedError):
-        return None
+        temps = None
+    _sensor_memo = (now, temps)
+    return temps
+
+
+def _get_cpu_temperature(temps: dict[str, list[Any]] | None = None) -> float | None:
+    if temps is None:
+        temps = _read_sensor_temperatures()
     if not temps:
         return None
     # Try common sensor labels
@@ -268,7 +285,7 @@ def _candidate_host_command_invocations(command: str, args: list[str], *, includ
     return deduped
 
 
-def _read_text_tail(path: str, max_bytes: int = 512_000) -> str:
+def _read_text_tail(path: str, max_bytes: int = 131_072) -> str:
     if path.endswith(".gz"):
         with gzip.open(path, "rt", encoding="utf-8", errors="ignore") as handle:
             return handle.read()
@@ -296,7 +313,7 @@ def _candidate_ssh_log_files() -> list[str]:
                 found.extend(matches)
     # Deduplicate and keep newest logs first
     unique = sorted(set(found), key=lambda path: os.path.getmtime(path) if os.path.exists(path) else 0, reverse=True)
-    return unique[:20]
+    return unique[:4]
 
 
 def _parse_syslog_timestamp(line: str, now: datetime) -> datetime | None:
@@ -1324,58 +1341,48 @@ def _mounted_usage(mount_points: list[str]) -> list[dict[str, Any]]:
     return usage
 
 
-def _count_docker_containers() -> int | None:
+_CONTAINER_DIR_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+
+
+def _docker_container_roots() -> list[str]:
     host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
     candidate_roots: list[str] = []
     if host_target and host_target != "/":
         candidate_roots.append(os.path.join(host_target, "var/lib/docker/containers"))
     candidate_roots.append("/var/lib/docker/containers")
-
-    container_name_pattern = re.compile(r"^[a-f0-9]{64}$")
-    for root in candidate_roots:
-        try:
-            entries = os.listdir(root)
-        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
-            continue
-        count = 0
-        for entry in entries:
-            if not container_name_pattern.match(entry):
-                continue
-            full_path = os.path.join(root, entry)
-            if os.path.isdir(full_path):
-                count += 1
-        return count
-
-    # Fallback: if direct container directory counting is unavailable on this host,
-    # reuse the running-container discovery path and return its count.
-    running = _list_running_docker_containers()
-    if isinstance(running, list):
-        names = [name for name in running if isinstance(name, str) and name.strip()]
-        return len(names)
-    return None
+    return candidate_roots
 
 
-def _list_running_docker_containers() -> list[str] | None:
-    host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
-    candidate_roots: list[str] = []
-    if host_target and host_target != "/":
-        candidate_roots.append(os.path.join(host_target, "var/lib/docker/containers"))
-    candidate_roots.append("/var/lib/docker/containers")
+def _scan_docker_containers() -> tuple[int, list[str]] | None:
+    """One pass over /var/lib/docker/containers: (total container dirs, running names).
 
-    container_name_pattern = re.compile(r"^[a-f0-9]{64}$")
-    for root in candidate_roots:
+    Memoised for a second so the count and the running list of one collection share a scan.
+    """
+    global _docker_scan_memo
+    now = time.monotonic()
+    if _docker_scan_memo is not None and now - _docker_scan_memo[0] <= _SHORT_MEMO_TTL_SECONDS:
+        return _docker_scan_memo[1]
+    result = _scan_docker_containers_uncached()
+    _docker_scan_memo = (now, result)
+    return result
+
+
+def _scan_docker_containers_uncached() -> tuple[int, list[str]] | None:
+    for root in _docker_container_roots():
         try:
             entries = os.listdir(root)
         except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
             continue
 
+        total = 0
         running: list[str] = []
         for entry in entries:
-            if not container_name_pattern.match(entry):
+            if not _CONTAINER_DIR_PATTERN.match(entry):
                 continue
             container_dir = os.path.join(root, entry)
             if not os.path.isdir(container_dir):
                 continue
+            total += 1
             config_path = os.path.join(container_dir, "config.v2.json")
             try:
                 with open(config_path, "r", encoding="utf-8") as handle:
@@ -1395,8 +1402,25 @@ def _list_running_docker_containers() -> list[str] | None:
             running.append(name)
 
         running.sort(key=str.lower)
-        return running
+        return total, running
     return None
+
+
+def _count_docker_containers() -> int | None:
+    scanned = _scan_docker_containers()
+    if scanned is None:
+        # Fallback: reuse the running-container discovery path (may be provided another way).
+        running = _list_running_docker_containers()
+        if isinstance(running, list):
+            return len([name for name in running if isinstance(name, str) and name.strip()])
+        return None
+    total, running = scanned
+    return total if total else len(running)
+
+
+def _list_running_docker_containers() -> list[str] | None:
+    scanned = _scan_docker_containers()
+    return scanned[1] if scanned is not None else None
 
 
 def _candidate_paths_for_mount(mount: str) -> list[str]:
@@ -1458,6 +1482,7 @@ def collect_metrics() -> dict[str, Any]:
         pass
 
     cpu_temp = _get_cpu_temperature()
+    sensor_temps = _read_sensor_temperatures()
     try:
         net_io = psutil.net_io_counters(pernic=True)
     except Exception:
@@ -1468,19 +1493,16 @@ def collect_metrics() -> dict[str, Any]:
     ] if net_io else None
 
     disk_temps: list[dict[str, Any]] | None = None
-    try:
-        temps = psutil.sensors_temperatures()
-        if temps:
-            disk_temps = []
-            for name, entries in temps.items():
-                for entry in entries:
-                    label = entry.label or name
-                    disk_temps.append({"device": label, "temperature_c": getattr(entry, "current", None)})
-    except (AttributeError, NotImplementedError):
-        disk_temps = None
+    if sensor_temps:
+        disk_temps = []
+        for name, entries in sensor_temps.items():
+            for entry in entries:
+                label = getattr(entry, "label", None) or name
+                disk_temps.append({"device": label, "temperature_c": getattr(entry, "current", None)})
 
     mount_points = _resolve_mount_points()
     running_containers = _list_running_docker_containers()
+    docker_container_count = _count_docker_containers()
     payload: dict[str, Any] = {
         "reported_at": datetime.now(tz=timezone.utc).isoformat(),
         "hostname": socket.gethostname(),
@@ -1490,7 +1512,7 @@ def collect_metrics() -> dict[str, Any]:
         "total_ram_gb": round(virtual_memory.total / (1024 ** 3), 2),
         "memory_available_gb": round(virtual_memory.available / (1024 ** 3), 2),
         "swap_used_percent": round(float(swap.percent), 2) if swap and swap.percent is not None else None,
-        "docker_container_count": _count_docker_containers(),
+        "docker_container_count": docker_container_count,
         "docker_running_containers": (running_containers if settings.expose_docker_running_containers else None),
         "disk_usage_percent": round(disk.percent, 2),
         "disk_total_gb": round(disk.total / (1024 ** 3), 2),
@@ -1514,6 +1536,34 @@ def collect_metrics() -> dict[str, Any]:
     if warnings:
         payload["warnings"] = warnings
     return payload
+
+
+_collect_cache: tuple[float, dict[str, Any]] | None = None
+_collect_lock: asyncio.Lock | None = None
+
+
+def clear_collect_cache() -> None:
+    global _collect_cache
+    _collect_cache = None
+
+
+async def collect_metrics_cached() -> dict[str, Any]:
+    """Run ``collect_metrics`` in a worker thread (it blocks on psutil and subprocesses) and
+    reuse the result for a few seconds so concurrent or rapid requests share one collection."""
+    global _collect_cache, _collect_lock
+    ttl = max(0.0, float(getattr(settings, "collect_cache_seconds", 5.0) or 0.0))
+    now = time.monotonic()
+    if _collect_cache is not None and ttl > 0 and now - _collect_cache[0] <= ttl:
+        return dict(_collect_cache[1])
+    if _collect_lock is None:
+        _collect_lock = asyncio.Lock()
+    async with _collect_lock:
+        now = time.monotonic()
+        if _collect_cache is not None and ttl > 0 and now - _collect_cache[0] <= ttl:
+            return dict(_collect_cache[1])
+        raw = await asyncio.to_thread(collect_metrics)
+        _collect_cache = (time.monotonic(), raw)
+        return dict(raw)
 
 
 async def reboot_host() -> None:

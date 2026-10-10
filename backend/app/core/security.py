@@ -1,3 +1,4 @@
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, HTTPException, Request, status
@@ -40,6 +41,32 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
     return jwt.encode(to_encode, secret, algorithm=settings.auth_algorithm)
 
 
+# username -> (expires_at monotonic, User). Saves one SELECT per request; invalidated on user edits.
+_USER_CACHE: dict[str, tuple[float, User]] = {}
+
+
+def invalidate_user_cache(username: str | None = None) -> None:
+    if username is None:
+        _USER_CACHE.clear()
+    else:
+        _USER_CACHE.pop(username, None)
+
+
+async def _load_user(username: str, session: AsyncSession) -> User | None:
+    ttl = max(0, int(settings.auth_user_cache_seconds or 0))
+    now = time.monotonic()
+    if ttl:
+        cached = _USER_CACHE.get(username)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+    result = await session.execute(select(User).where(User.username == username))
+    user = result.scalar_one_or_none()
+    if user is not None and ttl:
+        session.expunge(user)
+        _USER_CACHE[username] = (now + ttl, user)
+    return user
+
+
 async def _get_current_user(token: str, session: AsyncSession) -> User:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -55,8 +82,7 @@ async def _get_current_user(token: str, session: AsyncSession) -> User:
     except JWTError as exc:
         raise credentials_error from exc
 
-    result = await session.execute(select(User).where(User.username == username))
-    user = result.scalar_one_or_none()
+    user = await _load_user(username, session)
     if user is None:
         raise credentials_error
     return user

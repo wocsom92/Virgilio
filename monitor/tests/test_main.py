@@ -40,6 +40,7 @@ def _sample_metrics(**overrides: Any) -> dict[str, Any]:
 @pytest.fixture
 def client(monkeypatch):
     repo = DummyRepository()
+    main.metrics.clear_collect_cache()
     monkeypatch.setattr(main, "repository", repo, raising=False)
     app = main.create_app()
     with TestClient(app) as test_client:

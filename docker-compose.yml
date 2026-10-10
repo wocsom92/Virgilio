@@ -1,13 +1,28 @@
 name: server_monitor
 
+# Bounded container logs: the json-file driver otherwise grows without limit on the SD card.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "5m"
+    max-file: "3"
+
 services:
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
     container_name: server-monitor-backend
-    privileged: true
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if b'\"db\":\"ok\"' in urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read() else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     environment:
       SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG:-false}
       SERVER_MONITOR_LOG_LEVEL: ${SERVER_MONITOR_LOG_LEVEL:-INFO}
@@ -43,18 +58,18 @@ services:
       context: .
       dockerfile: monitor/Dockerfile
     container_name: "${MONITOR_CONTAINER_NAME:-server-monitor-agent}"
-    privileged: true
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 128m
+    cpus: 0.5
     environment:
-      MONITOR_DEBUG: ${MONITOR_DEBUG}
+      MONITOR_DEBUG: ${MONITOR_DEBUG:-false}
       MONITOR_LOG_LEVEL: ${MONITOR_LOG_LEVEL:-INFO}
       MONITOR_API_TOKEN: ${MONITOR_API_TOKEN}
       MONITOR_MOUNTED_POINTS: '${MONITOR_MOUNTED_POINTS:-["auto"]}'
       MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS: ${MONITOR_EXPOSE_DOCKER_RUNNING_CONTAINERS:-false}
       MONITOR_HOST_ROOT_SOURCE: ${MONITOR_HOST_ROOT_SOURCE:-}
       MONITOR_HOST_ROOT_TARGET: ${MONITOR_HOST_ROOT_TARGET:-/hostfs}
-      MONITOR_HISTORY_RETENTION_SECONDS: ${MONITOR_HISTORY_RETENTION_SECONDS:-86400}
-      MONITOR_HISTORY_MAX_ENTRIES: ${MONITOR_HISTORY_MAX_ENTRIES:-1440}
       MONITOR_ALLOW_HOST_REBOOT: ${MONITOR_ALLOW_HOST_REBOOT:-false}
       MONITOR_REBOOT_COMMAND: "${MONITOR_REBOOT_COMMAND:-/sbin/shutdown -r now}"
     ports:
@@ -72,9 +87,12 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-http://localhost:28000}"
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-/api}"
     container_name: server-monitor-frontend
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
+    cpus: 0.25
     depends_on:
       - backend
     ports:
@@ -88,9 +106,14 @@ services:
       dockerfile: backend/Dockerfile
     container_name: server-monitor-telegram-egress-proxy
     profiles: ["telegram-egress"]
-    privileged: true
+    # SO_BINDTODEVICE (binding to a VPN interface) needs these; full privileges are not required.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     network_mode: host
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 64m
     command: ["python", "-m", "backend.app.tools.telegram_egress_proxy"]
     environment:
       SERVER_MONITOR_LOG_LEVEL: ${SERVER_MONITOR_LOG_LEVEL:-INFO}

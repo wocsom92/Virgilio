@@ -2,11 +2,13 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import ORJSONResponse
+from sqlalchemy import text
 
 from backend.app.core.config import settings
-from backend.app.core.logging import bind_request_handler, bind_request_user_id, reset_request_handler, reset_request_user_id
 from backend.app.db.session import async_session_factory, engine
 from backend.app.db.schema_compat import ensure_schema_compat
 from backend.app.models.base import Base
@@ -64,18 +66,15 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    application = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+    application = FastAPI(
+        title=settings.app_name,
+        debug=settings.debug,
+        lifespan=lifespan,
+        default_response_class=ORJSONResponse,
+    )
+    # Outermost first: gzip wraps everything, the request context middleware logs/counts inside it.
+    application.add_middleware(GZipMiddleware, minimum_size=1024)
     install_http_metrics(application, service_name="backend")
-
-    @application.middleware("http")
-    async def bind_log_handler(request: Request, call_next):
-        handler_token = bind_request_handler(f"{request.method} {request.url.path}")
-        user_id_token = bind_request_user_id(None)
-        try:
-            return await call_next(request)
-        finally:
-            reset_request_user_id(user_id_token)
-            reset_request_handler(handler_token)
 
     allow_origins = settings.cors_allow_origins
     if allow_origins:
@@ -98,7 +97,14 @@ def create_app() -> FastAPI:
 
     @application.get("/healthz", tags=["meta"])
     async def healthcheck() -> dict[str, str]:
-        return {"status": "ok"}
+        try:
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            db_status = "ok"
+        except Exception as exc:  # pragma: no cover - surfaced through the health payload
+            logger.warning("Health check database probe failed: %s", exc)
+            db_status = "error"
+        return {"status": "ok" if db_status == "ok" else "degraded", "db": db_status}
 
     @application.get("/version", tags=["meta"])
     async def version() -> dict[str, str]:

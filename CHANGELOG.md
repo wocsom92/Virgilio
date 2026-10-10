@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [9.0.0] - 2026-10-11
 
 ### Changed
 - **Breaking:** the backend now stores everything in one SQLite file (`SERVER_MONITOR_DB_PATH`, WAL mode) instead of MySQL. The `db` container is gone; existing data is imported once with `backend/scripts/migrate_mysql_to_sqlite.py` (see README "Migrating from MySQL").
@@ -19,6 +19,9 @@ All notable changes to this project will be documented in this file.
 - `GET /dashboard/` no longer includes `raw_payload`, and `GET /metrics/{id}/latest` now requires an authenticated user.
 - New look: a token-based design system with light and dark themes (follows the OS by default, toggle in the header, remembered per browser), opaque surfaces without blur or gradients, system font with tabular numerals, a desktop sidebar plus a phone bottom tab bar, and status colours derived from one palette. Bootstrap is gone (stylesheet 258 KB → 28 KB).
 - The admin console loads each section's data the first time that section is opened instead of ~9 requests on mount.
+- Backend responses are serialised with orjson and gzip-compressed; the access log, Prometheus counter and log context now come from one pure-ASGI middleware; the authenticated user is cached for 60 s per request burst; `/healthz` probes the database.
+- The monitor agent collects in a worker thread with a short cache (requests never block its event loop), reads sensors and the Docker container directory once per collection, tails SSH logs once a minute from the newest 128 KB of at most four files, keeps only the newest sample in memory, and no longer duplicates the payload as `raw_payload`.
+- Deployment: `python:3.12-slim` multi-stage images built from wheels only (no compiler), containers run unprivileged by default (`docker-compose.host-control.yml` opts in for host reboot), memory/CPU limits, capped json-file logs, a backend health check, `npm ci`, and Nginx gzip plus immutable caching for hashed assets with `/api` same-origin proxying by default.
 - Monitor backends are polled concurrently (bounded), site monitors honour their configured `check_interval_seconds` (minimum 30 s) and keep their latest result on the `site_monitors` row, and the poller sleeps until the next due check instead of waking every 5 s.
 
 ### Removed

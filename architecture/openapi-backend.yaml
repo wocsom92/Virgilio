@@ -430,6 +430,8 @@ paths:
       - metrics
       summary: Get Latest Snapshot
       operationId: get_latest_snapshot_metrics__backend_id__latest_get
+      security:
+      - OAuth2PasswordBearer: []
       parameters:
       - name: backend_id
         in: path
@@ -455,6 +457,7 @@ paths:
       tags:
       - dashboard
       summary: Fetch Dashboard Data
+      description: Backends with their newest snapshot, without the raw monitor payload.
       operationId: fetch_dashboard_data_dashboard__get
       responses:
         '200':
@@ -463,27 +466,9 @@ paths:
             application/json:
               schema:
                 items:
-                  $ref: '#/components/schemas/BackendWithLatestSnapshot'
+                  $ref: '#/components/schemas/BackendDashboardRead'
                 type: array
                 title: Response Fetch Dashboard Data Dashboard  Get
-      security:
-      - OAuth2PasswordBearer: []
-  /dashboard/projects:
-    get:
-      tags:
-      - dashboard
-      summary: Fetch Dashboard Projects
-      operationId: fetch_dashboard_projects_dashboard_projects_get
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: '#/components/schemas/ProjectRead'
-                type: array
-                title: Response Fetch Dashboard Projects Dashboard Projects Get
       security:
       - OAuth2PasswordBearer: []
   /dashboard/quick-status:
@@ -492,60 +477,39 @@ paths:
       - dashboard
       summary: Fetch Quick Status Tiles
       operationId: fetch_quick_status_tiles_dashboard_quick_status_get
-      security:
-      - OAuth2PasswordBearer: []
-      parameters:
-      - name: project_id
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: integer
-            minimum: 1
-          - type: 'null'
-          title: Project Id
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
               schema:
-                type: array
                 items:
                   $ref: '#/components/schemas/QuickStatusTileRead'
+                type: array
                 title: Response Fetch Quick Status Tiles Dashboard Quick Status Get
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
   /dashboard/quick-status/history:
     get:
       tags:
       - dashboard
       summary: Fetch Quick Status Tile History
+      description: 24h strips/series for the requested tiles; without ``tile_ids``
+        every tile (and heartbeat).
       operationId: fetch_quick_status_tile_history_dashboard_quick_status_history_get
       security:
       - OAuth2PasswordBearer: []
       parameters:
       - name: tile_ids
         in: query
-        required: true
-        schema:
-          type: array
-          items:
-            type: integer
-          title: Tile Ids
-      - name: project_id
-        in: query
         required: false
         schema:
           anyOf:
-          - type: integer
-            minimum: 1
+          - type: array
+            items:
+              type: integer
           - type: 'null'
-          title: Project Id
+          title: Tile Ids
       responses:
         '200':
           description: Successful Response
@@ -578,15 +542,6 @@ paths:
         schema:
           type: integer
           title: Tile Id
-      - name: project_id
-        in: query
-        required: false
-        schema:
-          anyOf:
-          - type: integer
-            minimum: 1
-          - type: 'null'
-          title: Project Id
       responses:
         '200':
           description: Successful Response
@@ -649,6 +604,15 @@ paths:
           minimum: 0
           default: 0
           title: Offset
+      - name: max_points
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 10
+          default: 300
+          title: Max Points
       responses:
         '200':
           description: Successful Response
@@ -701,6 +665,26 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /notifications/unread-count:
+    get:
+      tags:
+      - notifications
+      summary: Unread Notifications Count
+      description: 'Cheap badge endpoint: one indexed COUNT, no page payload.'
+      operationId: unread_notifications_count_notifications_unread_count_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: integer
+                type: object
+                title: Response Unread Notifications Count Notifications Unread Count
+                  Get
+      security:
+      - OAuth2PasswordBearer: []
   /notifications/read-all:
     post:
       tags:
@@ -756,6 +740,7 @@ paths:
       tags:
       - system
       summary: Get Db Size
+      description: Return the on-disk size of the SQLite database file plus its WAL.
       operationId: get_db_size_system_db_size_get
       responses:
         '200':
@@ -850,107 +835,6 @@ paths:
                 $ref: '#/components/schemas/HTTPValidationError'
       security:
       - OAuth2PasswordBearer: []
-  /system/projects:
-    get:
-      tags:
-      - system
-      summary: List Projects
-      operationId: list_projects_system_projects_get
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                items:
-                  $ref: '#/components/schemas/ProjectRead'
-                type: array
-                title: Response List Projects System Projects Get
-      security:
-      - OAuth2PasswordBearer: []
-    post:
-      tags:
-      - system
-      summary: Create Project
-      operationId: create_project_system_projects_post
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ProjectCreate'
-        required: true
-      responses:
-        '201':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProjectRead'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-      security:
-      - OAuth2PasswordBearer: []
-  /system/projects/{project_id}:
-    put:
-      tags:
-      - system
-      summary: Update Project
-      operationId: update_project_system_projects__project_id__put
-      security:
-      - OAuth2PasswordBearer: []
-      parameters:
-      - name: project_id
-        in: path
-        required: true
-        schema:
-          type: integer
-          title: Project Id
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ProjectUpdate'
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ProjectRead'
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
-    delete:
-      tags:
-      - system
-      summary: Delete Project
-      operationId: delete_project_system_projects__project_id__delete
-      security:
-      - OAuth2PasswordBearer: []
-      parameters:
-      - name: project_id
-        in: path
-        required: true
-        schema:
-          type: integer
-          title: Project Id
-      responses:
-        '204':
-          description: Successful Response
-        '422':
-          description: Validation Error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/HTTPValidationError'
   /system/quick-status:
     get:
       tags:
@@ -1316,6 +1200,83 @@ components:
       required:
       - needs_bootstrap
       title: AuthStatusResponse
+    BackendDashboardRead:
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          title: Name
+        base_url:
+          type: string
+          maxLength: 2083
+          minLength: 1
+          format: uri
+          title: Base Url
+        api_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Token
+        is_active:
+          type: boolean
+          title: Is Active
+          default: true
+        display_order:
+          type: integer
+          title: Display Order
+          default: 0
+        poll_interval_seconds:
+          type: integer
+          minimum: 30.0
+          title: Poll Interval Seconds
+          description: Polling cadence in seconds (minimum 30)
+          default: 60
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        selected_metrics:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Selected Metrics
+        id:
+          type: integer
+          title: Id
+        last_seen_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Seen At
+        last_warning:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Warning
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        latest_snapshot:
+          anyOf:
+          - $ref: '#/components/schemas/MetricSnapshotSummaryRead'
+          - type: 'null'
+      type: object
+      required:
+      - name
+      - base_url
+      - id
+      - created_at
+      - updated_at
+      title: BackendDashboardRead
+      description: 'Dashboard list entry: the newest snapshot without its raw payload.'
     BackendWithLatestSnapshot:
       properties:
         name:
@@ -1572,6 +1533,11 @@ components:
             type: array
           - type: 'null'
           title: Reboot Markers
+        bucket_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Bucket Seconds
       type: object
       required:
       - backend_id
@@ -1817,6 +1783,115 @@ components:
       - id
       - backend_id
       title: MetricSnapshotRead
+    MetricSnapshotSummaryRead:
+      properties:
+        reported_at:
+          type: string
+          format: date-time
+          title: Reported At
+        cpu_temperature_c:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Cpu Temperature C
+        ram_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Ram Used Percent
+        total_ram_gb:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Total Ram Gb
+        memory_available_gb:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Memory Available Gb
+        swap_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Swap Used Percent
+        docker_container_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Docker Container Count
+        docker_running_containers:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Docker Running Containers
+        disk_usage_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Disk Usage Percent
+        mounted_usage:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/MountedVolume'
+            type: array
+          - type: 'null'
+          title: Mounted Usage
+        cpu_load:
+          anyOf:
+          - $ref: '#/components/schemas/CPULoad'
+          - type: 'null'
+        network_counters:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/NetworkCounter'
+            type: array
+          - type: 'null'
+          title: Network Counters
+        disk_temperatures:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/DiskTemperature'
+            type: array
+          - type: 'null'
+          title: Disk Temperatures
+        monitor_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Monitor Version
+        os_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Os Version
+        uptime_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Uptime Seconds
+        warnings:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Warnings
+        id:
+          type: integer
+          title: Id
+        backend_id:
+          type: integer
+          title: Backend Id
+      type: object
+      required:
+      - reported_at
+      - id
+      - backend_id
+      title: MetricSnapshotSummaryRead
+      description: 'Snapshot for dashboard lists: identical to MetricSnapshotRead
+        minus the raw payload.'
     MetricsIngestResponse:
       properties:
         snapshot:
@@ -2136,95 +2211,6 @@ components:
       - created_at
       - updated_at
       title: NotificationEventRead
-    ProjectCreate:
-      properties:
-        name:
-          type: string
-          maxLength: 120
-          minLength: 1
-          title: Name
-        display_order:
-          type: integer
-          minimum: 0.0
-          title: Display Order
-          default: 0
-      type: object
-      required:
-      - name
-      title: ProjectCreate
-    ProjectRead:
-      properties:
-        name:
-          type: string
-          maxLength: 120
-          minLength: 1
-          title: Name
-        display_order:
-          type: integer
-          minimum: 0.0
-          title: Display Order
-          default: 0
-        id:
-          type: integer
-          title: Id
-        created_at:
-          type: string
-          format: date-time
-          title: Created At
-        updated_at:
-          type: string
-          format: date-time
-          title: Updated At
-      type: object
-      required:
-      - name
-      - id
-      - created_at
-      - updated_at
-      title: ProjectRead
-    ProjectUpdate:
-      properties:
-        name:
-          anyOf:
-          - type: string
-            maxLength: 120
-            minLength: 1
-          - type: 'null'
-          title: Name
-        display_order:
-          anyOf:
-          - type: integer
-            minimum: 0.0
-          - type: 'null'
-          title: Display Order
-      type: object
-      title: ProjectUpdate
-    QuickStatusCardDatum:
-      properties:
-        label:
-          type: string
-          maxLength: 120
-          minLength: 1
-          title: Label
-        value:
-          type: string
-          maxLength: 120
-          minLength: 1
-          title: Value
-        severity:
-          type: string
-          enum:
-          - ok
-          - info
-          - warn
-          - critical
-          title: Severity
-          default: ok
-      type: object
-      required:
-      - label
-      - value
-      title: QuickStatusCardDatum
     QuickStatusDetailLine:
       properties:
         text:
@@ -2246,15 +2232,8 @@ components:
     QuickStatusItemCreate:
       properties:
         backend_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
+          type: integer
           title: Backend Id
-        project_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Project Id
         label:
           type: string
           maxLength: 120
@@ -2355,7 +2334,6 @@ components:
           - graph
           - temperature
           - humidity
-          - self_monitoring
           title: Display Variant
           default: tile
         display_unit:
@@ -2375,6 +2353,7 @@ components:
           default: 0
       type: object
       required:
+      - backend_id
       - label
       - metric_key
       - warning_threshold
@@ -2383,15 +2362,8 @@ components:
     QuickStatusItemRead:
       properties:
         backend_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
+          type: integer
           title: Backend Id
-        project_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Project Id
         label:
           type: string
           maxLength: 120
@@ -2492,7 +2464,6 @@ components:
           - graph
           - temperature
           - humidity
-          - self_monitoring
           title: Display Variant
           default: tile
         display_unit:
@@ -2515,6 +2486,7 @@ components:
           title: Id
       type: object
       required:
+      - backend_id
       - label
       - metric_key
       - warning_threshold
@@ -2566,15 +2538,8 @@ components:
           type: integer
           title: Id
         backend_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
+          type: integer
           title: Backend Id
-        project_id:
-          anyOf:
-          - type: integer
-          - type: 'null'
-          title: Project Id
         backend_display_order:
           type: integer
           title: Backend Display Order
@@ -2616,7 +2581,6 @@ components:
           - graph
           - temperature
           - humidity
-          - self_monitoring
           title: Display Variant
           default: tile
         display_unit:
@@ -2677,16 +2641,6 @@ components:
           anyOf:
           - $ref: '#/components/schemas/QuickStatusSeriesSummary'
           - type: 'null'
-        highlights:
-          items:
-            $ref: '#/components/schemas/QuickStatusCardDatum'
-          type: array
-          title: Highlights
-        breakdown:
-          items:
-            $ref: '#/components/schemas/QuickStatusCardDatum'
-          type: array
-          title: Breakdown
         reported_at:
           anyOf:
           - type: string
@@ -2703,6 +2657,7 @@ components:
       type: object
       required:
       - id
+      - backend_id
       - backend_display_order
       - backend_name
       - label

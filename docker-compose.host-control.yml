@@ -1,0 +1,9 @@
+# Opt-in override: host reboot (/sbin/shutdown through the host root bind mount) and the
+# monitor's chroot journalctl/last calls need full host privileges. Enable by setting
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.host-control.yml
+# in the deployed .env (see .env.raspi5). Without it the stack runs unprivileged.
+services:
+  backend:
+    privileged: true
+  monitor:
+    privileged: true

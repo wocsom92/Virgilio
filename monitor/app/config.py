@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Backend Monitor"
-    version: str = "8.0.0"
+    version: str = "9.0.0"
     debug: bool = False
     log_level: str = "INFO"
     log_service: str = "monitor"
@@ -42,8 +42,9 @@ class Settings(BaseSettings):
     reboot_command: str = "/sbin/shutdown -r now"
     mounted_points: List[str] = Field(default_factory=lambda: ["auto"])
     host_root_target: str = "/hostfs"
-    history_retention_seconds: int = 86_400  # 24 hours
-    history_max_entries: int = 1_440        # 1 day of 1-minute samples
+    history_retention_seconds: int = 86_400  # kept for env compatibility; only the latest sample is stored
+    history_max_entries: int = 1_440        # kept for env compatibility
+    collect_cache_seconds: float = 5.0      # reuse a collection for rapid/concurrent requests
 
     @field_validator("mounted_points", mode="before")
     @classmethod

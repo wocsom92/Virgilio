@@ -9,3 +9,4 @@ python-jose[cryptography]==3.3.0
 passlib==1.7.4
 psutil==5.9.8
 prometheus-client==0.20.0
+orjson==3.10.7
