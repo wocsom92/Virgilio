@@ -1,19 +1,17 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react';
 import type { IconType } from 'react-icons';
-import { FiActivity, FiBarChart2, FiChevronDown, FiChevronUp, FiFolder, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings } from 'react-icons/fi';
+import { FiActivity, FiBarChart2, FiChevronDown, FiChevronUp, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings } from 'react-icons/fi';
 import {
   AuthUser,
   NotificationEvent,
   fetchBackendVersion,
   fetchNotifications,
-  fetchProjects,
   markNotificationsRead,
-  Project,
 } from '../api/client';
 import { DEFAULT_BACKEND_VERSION, FRONTEND_VERSION } from '../constants/versions';
 import { formatNotificationDeliveryError, getUserFacingErrorMessage } from '../utils/errors';
 
-export type AppView = 'monitoring' | 'site-monitoring' | 'graphs' | 'notifications' | 'admin' | `project:${number}`;
+export type AppView = 'monitoring' | 'site-monitoring' | 'graphs' | 'notifications' | 'admin';
 
 interface LayoutProps {
   activeView: AppView;
@@ -23,10 +21,7 @@ interface LayoutProps {
   children: ReactNode;
 }
 
-const VIEW_META: Record<
-  Exclude<AppView, `project:${number}`>,
-  { label: string; description: string; navDescription: string; icon: IconType }
-> = {
+const VIEW_META: Record<AppView, { label: string; description: string; navDescription: string; icon: IconType }> = {
   monitoring: {
     label: 'Monitoring',
     description: 'Quick tiles and notifications for the current fleet state.',
@@ -59,14 +54,6 @@ const VIEW_META: Record<
   },
 };
 
-export function getProjectViewId(view: AppView): number | null {
-  if (!view.startsWith('project:')) {
-    return null;
-  }
-  const parsed = Number(view.replace('project:', ''));
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
 export function Layout({ activeView, onSwitch, currentUser, onLogout, children }: LayoutProps) {
   const notificationPageSize = 20;
   const [backendVersion, setBackendVersion] = useState(DEFAULT_BACKEND_VERSION);
@@ -79,72 +66,8 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
   const [notificationTotalPages, setNotificationTotalPages] = useState(1);
   const [notificationTotalItems, setNotificationTotalItems] = useState(0);
   const [expandedNotificationIds, setExpandedNotificationIds] = useState<Set<number>>(new Set());
-  const [projects, setProjects] = useState<Project[]>([]);
-
-  const activeProjectId = getProjectViewId(activeView);
-  const activeProject = activeProjectId !== null ? projects.find((project) => project.id === activeProjectId) ?? null : null;
-  const viewMeta =
-    activeProject && activeProjectId !== null
-      ? {
-          label: activeProject.name,
-          description: 'Custom quick tiles for this project.',
-          navDescription: 'Project tiles',
-          icon: FiFolder,
-        }
-      : VIEW_META[(activeView in VIEW_META ? activeView : 'monitoring') as Exclude<AppView, `project:${number}`>];
+  const viewMeta = VIEW_META[activeView];
   const canOpenAdmin = currentUser.role !== 'viewer';
-  const loadProjectsMenu = async () => {
-    try {
-      const data = await fetchProjects();
-      setProjects(
-        [...data].sort((a, b) => {
-          if (a.display_order !== b.display_order) {
-            return a.display_order - b.display_order;
-          }
-          return a.name.localeCompare(b.name);
-        })
-      );
-    } catch {
-      setProjects([]);
-    }
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    const handleProjectsUpdated = () => {
-      void loadProjectsMenu();
-    };
-    void (async () => {
-      try {
-        const data = await fetchProjects();
-        if (!cancelled) {
-          setProjects(
-            [...data].sort((a, b) => {
-              if (a.display_order !== b.display_order) {
-                return a.display_order - b.display_order;
-              }
-              return a.name.localeCompare(b.name);
-            })
-          );
-        }
-      } catch {
-        if (!cancelled) {
-          setProjects([]);
-        }
-      }
-    })();
-    window.addEventListener('projects-updated', handleProjectsUpdated);
-    return () => {
-      cancelled = true;
-      window.removeEventListener('projects-updated', handleProjectsUpdated);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (activeProjectId !== null && activeProject === null && projects.length > 0) {
-      onSwitch('monitoring');
-    }
-  }, [activeProject, activeProjectId, onSwitch, projects.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -400,11 +323,11 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
         <div className="app-sidebar__brand">
           <div className="app-sidebar__eyebrow">Virgilio</div>
           <div className="app-sidebar__title">Server Monitor</div>
-          <div className="app-sidebar__quote">Fleet health, projects, alerts, and configuration.</div>
+          <div className="app-sidebar__quote">Fleet health, alerts, and configuration.</div>
         </div>
 
         <nav className="app-sidebar__nav" aria-label="Primary">
-          {(Object.entries(VIEW_META) as Array<[Exclude<AppView, `project:${number}`>, (typeof VIEW_META)[Exclude<AppView, `project:${number}`>]]>).map(([view, meta]) => {
+          {(Object.entries(VIEW_META) as Array<[AppView, (typeof VIEW_META)[AppView]]>).map(([view, meta]) => {
             const Icon = meta.icon;
             const isActive = activeView === view;
             const isDisabled = view === 'admin' && !canOpenAdmin;
@@ -432,26 +355,6 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
                 {view === 'notifications' && unreadCount > 0 && (
                   <span className="app-nav-link__badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
                 )}
-              </button>
-            );
-          })}
-          {projects.map((project) => {
-            const view = `project:${project.id}` as AppView;
-            const isActive = activeView === view;
-            return (
-              <button
-                key={view}
-                type="button"
-                className={`app-nav-link ${isActive ? 'app-nav-link--active' : ''}`}
-                onClick={() => onSwitch(view)}
-              >
-                <span className="app-nav-link__icon">
-                  <FiFolder size={18} />
-                </span>
-                <span className="app-nav-link__copy">
-                  <span className="app-nav-link__title">{project.name}</span>
-                  <span className="app-nav-link__description">Project tiles</span>
-                </span>
               </button>
             );
           })}

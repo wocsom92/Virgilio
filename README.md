@@ -38,15 +38,12 @@ Component docs:
 - Reboot markers on charts (detected from uptime resets).
 - Quick status tiles with thresholds and statuses (`ok`, `info`, `warn`, `critical`, `unknown`).
 - Temperature and humidity graph cards stay visible even when Prometheus sensor history is flat or only has isolated samples, which fixes Raspberry Pi climate cards that previously looked empty.
-- Projects can expose separate sidebar tabs, each with its own project-scoped quick tiles.
 - Quick status tiles include a 24-hour history strip (twelve two-hour segments) under each square tile; when live polling changes a tile’s status or staleness, the strip is refetched so it stays aligned with the current reading after transient issues clear.
 - Quick-status **alert confirmation** (Admin → Telegram): a warning or error must last a configurable time (default **5 minutes**; use **0** for immediate alerts) before the tile turns amber/red and before Telegram or in-app notifications fire—reduces noise from brief threshold crossings.
 - Ping quick-status history is now persisted on the backend so ping tiles build the same 24-hour history as metric tiles.
 - Quick tiles show a loading indicator during initial fetch instead of briefly displaying "No quick tiles configured".
 - Ping and Prometheus quick-status checks run concurrently on the backend, reducing dashboard load time when many network-checked tiles are configured.
 - Prometheus quick-status tiles can query any Prometheus instant expression that returns exactly one numeric sample, with configurable refresh cadence and higher-is-worse or lower-is-worse thresholds.
-- Full-stack Compose now includes an internal Prometheus service that scrapes the `backend` and `monitor` APIs at `/prometheus`.
-- A default `Self-monitoring` project tab is auto-created on startup and shows backend/monitor API call totals plus last-hour `200`, `4xx`, and `5xx` response counts.
 - Dedicated Site Monitoring view with ping and HTTP checks, 48 half-hour status rectangles per site for the last 24 hours, and admin-managed timeout and failure thresholds.
 - Site Monitoring checks support ping reachability or HTTP GET validation with expected status codes and optional response-text matching.
 - Site Monitoring rows are compact by default for mobile/iPhone layouts and reveal check type, target, status text, response value, and last-check details on click.
@@ -60,7 +57,6 @@ Component docs:
   - Last failed SSH attempt (elapsed age with configurable warn/critical thresholds)
   - SSH posture (`PubkeyAuthentication` and `PermitRootLogin`) mapped to `ok`/`warn`/`critical`
 - Admin quick status management supports a separate Overview-style preview section plus search inside the paginated Existing Tiles list.
-- Admin project management lets you create ordered project tabs and assign quick tiles to either the main Monitoring tab or a specific project tab.
 - Quick status preview reordering is server-scoped and includes touch-friendly arrow controls for iPhone Safari.
 - Role-based auth (`admin`, `viewer`) with bootstrap flow for first admin user.
 - Persistent login sessions across browser restarts, with a 48-hour default auth session duration for new logins.
@@ -130,7 +126,6 @@ Notes:
 - If both `SERVER_MONITOR_TELEGRAM_PROXY_URL` and `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE` are set, Telegram tries the proxy first and automatically falls back to the VPN interface when the proxy path is unavailable.
 - On host-network deployments, prefer the `telegram-egress-proxy` service and point `SERVER_MONITOR_TELEGRAM_PROXY_URL` at `http://host.docker.internal:18080`; set `TELEGRAM_EGRESS_PROXY_BIND_INTERFACE` in the local env file when that proxy should fall back through a specific VPN interface.
 - HTTP site-monitor targets entered as bare hostnames like `telegram.org` are stored as `https://telegram.org`.
-- The full-stack deployment now includes Prometheus automatically. Self-monitoring project cards query it through the internal Compose URL `http://prometheus:9090`.
 - Backend, monitor, and Telegram bot containers now emit structured JSON logs to stdout. Frontend Nginx access logs are also written as JSON.
 - The backend stores slow-changing configuration/state in `SERVER_MONITOR_DB_NAME` and high-churn metric history in `SERVER_MONITOR_HISTORY_DB_NAME`. Restoring only the config database is enough to bring the app back; the history database will be recreated empty on startup.
 

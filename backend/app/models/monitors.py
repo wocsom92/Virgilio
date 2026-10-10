@@ -126,14 +126,9 @@ class QuickStatusItem(TimestampMixin, Base):
     __table_args__ = {"schema": CONFIG_SCHEMA}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    backend_id: Mapped[int | None] = mapped_column(
+    backend_id: Mapped[int] = mapped_column(
         ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id"),
-        nullable=True,
-        index=True,
-    )
-    project_id: Mapped[int | None] = mapped_column(
-        ForeignKey(f"{CONFIG_SCHEMA}.projects.id"),
-        nullable=True,
+        nullable=False,
         index=True,
     )
     label: Mapped[str] = mapped_column(String(120), nullable=False)
@@ -158,8 +153,7 @@ class QuickStatusItem(TimestampMixin, Base):
     pending_notification_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     alert_condition_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    backend: Mapped[MonitoredBackend | None] = relationship("MonitoredBackend")
-    project: Mapped["Project | None"] = relationship("Project", back_populates="quick_status_items")
+    backend: Mapped[MonitoredBackend] = relationship("MonitoredBackend")
     ping_samples: Mapped[list["QuickStatusPingSample"]] = relationship(
         "QuickStatusPingSample",
         back_populates="item",
@@ -207,22 +201,6 @@ class QuickStatusPrometheusSample(TimestampMixin, Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     item: Mapped[QuickStatusItem] = relationship("QuickStatusItem", back_populates="prometheus_samples")
-
-
-class Project(TimestampMixin, Base):
-    __tablename__ = "projects"
-    __table_args__ = {"schema": CONFIG_SCHEMA}
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
-    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-
-    quick_status_items: Mapped[list[QuickStatusItem]] = relationship(
-        "QuickStatusItem",
-        back_populates="project",
-        cascade="all, delete-orphan",
-        order_by="QuickStatusItem.display_order",
-    )
 
 
 class SiteMonitor(TimestampMixin, Base):

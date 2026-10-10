@@ -200,14 +200,6 @@ export interface AuthSessionSettings {
   auth_session_minutes: number;
 }
 
-export interface Project {
-  id: number;
-  name: string;
-  display_order: number;
-  created_at: string;
-  updated_at: string;
-}
-
 export type StatusLevel = 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
 
 export type SiteMonitorCheckType = 'ping' | 'http';
@@ -269,12 +261,11 @@ export type QuickStatusMetricKey =
   | 'prometheus_query';
 
 export type PrometheusThresholdDirection = 'higher' | 'lower';
-export type QuickStatusDisplayVariant = 'tile' | 'graph' | 'temperature' | 'humidity' | 'self_monitoring';
+export type QuickStatusDisplayVariant = 'tile' | 'graph' | 'temperature' | 'humidity';
 
 export interface QuickStatusItem {
   id: number;
-  backend_id?: number | null;
-  project_id?: number | null;
+  backend_id: number;
   label: string;
   metric_key: QuickStatusMetricKey;
   mount_path?: string | null;
@@ -311,16 +302,9 @@ export interface QuickStatusSeriesSummary {
   delta_value?: number | null;
 }
 
-export interface QuickStatusCardDatum {
-  label: string;
-  value: string;
-  severity: 'ok' | 'info' | 'warn' | 'critical';
-}
-
 export interface QuickStatusTile {
   id: number;
-  backend_id?: number | null;
-  project_id?: number | null;
+  backend_id: number;
   backend_display_order: number;
   backend_name: string;
   label: string;
@@ -337,8 +321,6 @@ export interface QuickStatusTile {
   history: StatusLevel[];
   series?: QuickStatusSeriesPoint[];
   series_summary?: QuickStatusSeriesSummary | null;
-  highlights?: QuickStatusCardDatum[];
-  breakdown?: QuickStatusCardDatum[];
   reported_at?: string | null;
   details?: QuickStatusDetailLine[] | null;
 }
@@ -379,19 +361,14 @@ export async function fetchDashboard(): Promise<MonitoredBackend[]> {
   return data;
 }
 
-export async function fetchQuickStatusTiles(projectId?: number | null): Promise<QuickStatusTile[]> {
-  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status', {
-    params: projectId ? { project_id: projectId } : undefined,
-  });
+export async function fetchQuickStatusTiles(): Promise<QuickStatusTile[]> {
+  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status');
   return data;
 }
 
-export async function fetchQuickStatusTileHistory(tileIds: number[], projectId?: number | null): Promise<QuickStatusTile[]> {
+export async function fetchQuickStatusTileHistory(tileIds: number[]): Promise<QuickStatusTile[]> {
   const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status/history', {
-    params: {
-      tile_ids: tileIds,
-      ...(projectId ? { project_id: projectId } : {}),
-    },
+    params: { tile_ids: tileIds },
     paramsSerializer: {
       indexes: null,
     },
@@ -399,15 +376,8 @@ export async function fetchQuickStatusTileHistory(tileIds: number[], projectId?:
   return data;
 }
 
-export async function fetchQuickStatusTileDetail(tileId: number, projectId?: number | null): Promise<QuickStatusTile> {
-  const { data } = await api.get<QuickStatusTile>(`/dashboard/quick-status/${tileId}/detail`, {
-    params: projectId ? { project_id: projectId } : undefined,
-  });
-  return data;
-}
-
-export async function fetchProjects(): Promise<Project[]> {
-  const { data } = await api.get<Project[]>('/dashboard/projects');
+export async function fetchQuickStatusTileDetail(tileId: number): Promise<QuickStatusTile> {
+  const { data } = await api.get<QuickStatusTile>(`/dashboard/quick-status/${tileId}/detail`);
   return data;
 }
 
@@ -540,25 +510,6 @@ export async function updateQuickStatusItem(id: number, payload: Omit<QuickStatu
 
 export async function deleteQuickStatusItem(id: number) {
   await api.delete(`/system/quick-status/${id}`);
-}
-
-export async function listProjects() {
-  const { data } = await api.get<Project[]>('/system/projects');
-  return data;
-}
-
-export async function createProject(payload: Pick<Project, 'name' | 'display_order'>) {
-  const { data } = await api.post<Project>('/system/projects', payload);
-  return data;
-}
-
-export async function updateProject(id: number, payload: Partial<Pick<Project, 'name' | 'display_order'>>) {
-  const { data } = await api.put<Project>(`/system/projects/${id}`, payload);
-  return data;
-}
-
-export async function deleteProject(id: number) {
-  await api.delete(`/system/projects/${id}`);
 }
 
 export async function listSiteMonitors() {

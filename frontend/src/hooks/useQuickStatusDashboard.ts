@@ -19,15 +19,10 @@ export interface QuickStatusGroup {
 function groupQuickStatusTiles(tiles: QuickStatusTile[]): QuickStatusGroup[] {
   const grouped = new Map<string, QuickStatusGroup>();
   for (const tile of tiles) {
-    const groupKey =
-      tile.backend_id !== null && tile.backend_id !== undefined
-        ? `backend:${tile.backend_id}`
-        : tile.project_id !== null && tile.project_id !== undefined
-          ? `project:${tile.project_id}`
-          : `tile:${tile.id}`;
+    const groupKey = `backend:${tile.backend_id}`;
     const current = grouped.get(groupKey) ?? {
       key: groupKey,
-      backendId: tile.backend_id ?? null,
+      backendId: tile.backend_id,
       backendName: tile.backend_name,
       displayOrder: tile.backend_display_order ?? 0,
       items: [],
@@ -84,15 +79,13 @@ function mergeSummaryTiles(current: QuickStatusTile[], incoming: QuickStatusTile
           ? existing.series_summary
           : summaryTile.series_summary
         : null,
-      highlights: keepHistory ? (existing.history_loaded ? existing.highlights : summaryTile.highlights) : [],
-      breakdown: keepHistory ? (existing.history_loaded ? existing.breakdown : summaryTile.breakdown) : [],
       details: existing.details ?? summaryTile.details,
       has_details: summaryTile.has_details ?? existing.has_details,
     };
   });
 }
 
-export function useQuickStatusDashboard(projectId: number | null) {
+export function useQuickStatusDashboard() {
   const [tiles, setTiles] = useState<QuickStatusTile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -103,7 +96,6 @@ export function useQuickStatusDashboard(projectId: number | null) {
 
   const summaryRequestIdRef = useRef(0);
   const hydrationRunIdRef = useRef(0);
-  const previousProjectId = useRef<number | null | undefined>(undefined);
 
   const loadSummary = useCallback(async () => {
     const requestId = summaryRequestIdRef.current + 1;
@@ -111,7 +103,7 @@ export function useQuickStatusDashboard(projectId: number | null) {
     setError(null);
 
     try {
-      const summary = await fetchQuickStatusTiles(projectId);
+      const summary = await fetchQuickStatusTiles();
       if (summaryRequestIdRef.current !== requestId) {
         return;
       }
@@ -128,24 +120,11 @@ export function useQuickStatusDashboard(projectId: number | null) {
         setInitialLoadDone(true);
       }
     }
-  }, [projectId]);
+  }, []);
 
   useEffect(() => {
-    const normalizedProjectId = projectId ?? null;
-    if (previousProjectId.current === undefined) {
-      previousProjectId.current = normalizedProjectId;
-    } else if (previousProjectId.current !== normalizedProjectId) {
-      previousProjectId.current = normalizedProjectId;
-      setTiles([]);
-      setLoading(true);
-      setInitialLoadDone(false);
-      setSelectedTileId(null);
-      setDetailLoadingId(null);
-      setHydratingGroups({});
-    }
-
     void loadSummary();
-  }, [loadSummary, projectId]);
+  }, [loadSummary]);
 
   const groups = useMemo(() => groupQuickStatusTiles(tiles), [tiles]);
 
@@ -176,7 +155,7 @@ export function useQuickStatusDashboard(projectId: number | null) {
 
         setHydratingGroups((current) => ({ ...current, [group.key]: true }));
         try {
-          const hydratedTiles = await fetchQuickStatusTileHistory(unresolvedIds, projectId);
+          const hydratedTiles = await fetchQuickStatusTileHistory(unresolvedIds);
           if (cancelled || hydrationRunIdRef.current !== runId) {
             return;
           }
@@ -202,7 +181,7 @@ export function useQuickStatusDashboard(projectId: number | null) {
     return () => {
       cancelled = true;
     };
-  }, [groups, initialLoadDone, projectId]);
+  }, [groups, initialLoadDone]);
 
   const toggleTileDetails = useCallback(
     async (tile: QuickStatusTile) => {
@@ -221,7 +200,7 @@ export function useQuickStatusDashboard(projectId: number | null) {
 
       setDetailLoadingId(tile.id);
       try {
-        const detailedTile = await fetchQuickStatusTileDetail(tile.id, projectId);
+        const detailedTile = await fetchQuickStatusTileDetail(tile.id);
         setTiles((current) => mergeHydratedTiles(current, [detailedTile]));
       } catch (err) {
         setError(getUserFacingErrorMessage(err, 'Could not load quick-tile details. Try again.'));
@@ -229,7 +208,7 @@ export function useQuickStatusDashboard(projectId: number | null) {
         setDetailLoadingId((current) => (current === tile.id ? null : current));
       }
     },
-    [projectId, selectedTileId]
+    [selectedTileId]
   );
 
   return {

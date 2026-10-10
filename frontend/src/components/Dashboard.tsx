@@ -9,10 +9,9 @@ import { QuickStatusLoadingShell, QuickStatusSections } from './QuickStatusSecti
 interface DashboardProps {
   canRefresh: boolean;
   mode: 'monitoring' | 'graphs';
-  projectId?: number | null;
 }
 
-export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps) {
+export function Dashboard({ canRefresh, mode }: DashboardProps) {
   const [backends, setBackends] = useState<MonitoredBackend[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +29,7 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
     reload: reloadQuickStatus,
     toggleTileDetails,
     closeTileDetails,
-  } = useQuickStatusDashboard(projectId);
+  } = useQuickStatusDashboard();
 
   const loadData = useCallback(
     async (options: { showSpinner?: boolean } = {}) => {
@@ -118,14 +117,8 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
   );
 
   const isMonitoringView = mode === 'monitoring';
-  const isProjectView = isMonitoringView && projectId !== null;
   const shouldShowDashboardError = !isMonitoringView || quickStatusGroups.length === 0;
-  const quickStatusShellGroupNames = useMemo(() => {
-    if (isProjectView) {
-      return ['Project quick tiles'];
-    }
-    return backends.map((backend) => backend.name);
-  }, [backends, isProjectView]);
+  const quickStatusShellGroupNames = useMemo(() => backends.map((backend) => backend.name), [backends]);
 
   return (
     <div className="dashboard-page d-flex flex-column gap-4">
@@ -134,9 +127,7 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
           <h2 className="page-intro__title">{isMonitoringView ? 'Quick Tiles' : 'All Graphs'}</h2>
           <p className="page-intro__description mb-0">
             {isMonitoringView
-              ? isProjectView
-                ? 'Project quick tiles and drill-down status details.'
-                : 'Server quick tiles and drill-down status details.'
+              ? 'Server quick tiles and drill-down status details.'
               : 'Historical metrics, snapshots, and warning states for every backend.'}
           </p>
         </div>
@@ -168,11 +159,7 @@ export function Dashboard({ canRefresh, mode, projectId = null }: DashboardProps
             !quickStatusError && (
               <div className="card-panel rounded-4 p-4">
                 <div className="fw-semibold mb-1">No quick tiles configured</div>
-                <div className="text-secondary small">
-                  {isProjectView
-                    ? 'Assign quick tiles to this project from Settings to populate this view.'
-                    : 'Add quick tiles from Settings to populate this view.'}
-                </div>
+                <div className="text-secondary small">Add quick tiles from Settings to populate this view.</div>
               </div>
             )
           )}

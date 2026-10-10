@@ -190,7 +190,7 @@ async def test_refresh_due_site_monitor_samples_persists_new_results(db_session,
     db_session.add(
         SiteMonitorSample(
             site_monitor_id=item.id,
-            checked_at=now - timedelta(minutes=2),
+            checked_at=now - timedelta(minutes=31),
             success=False,
             latency_ms=None,
             status_code=504,

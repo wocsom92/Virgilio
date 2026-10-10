@@ -140,20 +140,22 @@ function buildSparkline(points: Array<{ x: number; y: number | null }>, width = 
           : flatLineY,
   }));
 
-  const plottedPoints = mappedPoints.filter((point): point is SparklinePoint => point.y !== null);
+  const isPlotted = (point: SparklineMappedPoint): point is SparklinePoint =>
+    point.y !== null && point.rawY !== null;
+  const plottedPoints = mappedPoints.filter(isPlotted);
   const segments: SparklinePoint[][] = [];
   let currentSegment: SparklinePoint[] = [];
 
-  mappedPoints.forEach((point) => {
-    if (point.y === null) {
+  for (const point of mappedPoints) {
+    if (!isPlotted(point)) {
       if (currentSegment.length > 0) {
         segments.push(currentSegment);
         currentSegment = [];
       }
-      return;
+      continue;
     }
     currentSegment.push(point);
-  });
+  }
   if (currentSegment.length > 0) {
     segments.push(currentSegment);
   }
@@ -207,13 +209,6 @@ function statusLabel(status: QuickStatusTile['status']): string {
   if (status === 'info') return 'Info';
   if (status === 'unknown') return 'Unknown';
   return 'OK';
-}
-
-function getDatumClassName(severity: 'ok' | 'info' | 'warn' | 'critical'): string {
-  if (severity === 'critical') return 'quick-status-wide__datum quick-status-wide__datum--critical';
-  if (severity === 'warn') return 'quick-status-wide__datum quick-status-wide__datum--warn';
-  if (severity === 'info') return 'quick-status-wide__datum quick-status-wide__datum--info';
-  return 'quick-status-wide__datum quick-status-wide__datum--ok';
 }
 
 export function QuickStatusItemCard({
@@ -422,85 +417,6 @@ export function QuickStatusItemCard({
       )}
     </div>
   );
-
-  if (displayVariant === 'self_monitoring') {
-    const highlights = tile.highlights ?? [];
-    const breakdown = tile.breakdown ?? [];
-
-    const dashboardBody = (
-      <div className={statusClassName}>
-        {action ? <div className="quick-status-tile__action">{action}</div> : null}
-        <div className="quick-status-wide__header">
-          <div className="quick-status-wide__title-wrap">
-            <div className="quick-status-wide__title">{tile.label}</div>
-            <div className="quick-status-wide__subtitle">{updatedLabel}</div>
-          </div>
-          <div className="quick-status-wide__status">{statusLabel(tile.status)}</div>
-        </div>
-        <div
-          className={classNames('quick-status-wide__dashboard', {
-            'quick-status-wide__dashboard--breakdown': breakdown.length > 0,
-          })}
-        >
-          <div className="quick-status-wide__dashboard-main">
-            <div className="quick-status-wide__dashboard-value">
-              <div className="quick-status-wide__dashboard-eyebrow">{tile.backend_name}</div>
-              <div className="quick-status-wide__value">{tile.display_value}</div>
-              <div className="quick-status-wide__backend">
-                {breakdown.length > 0 ? 'Hottest handlers in the last hour' : 'Live self-monitoring trend'}
-              </div>
-            </div>
-            {chartShell}
-          </div>
-          {breakdown.length > 0 ? (
-            <div className="quick-status-wide__breakdown">
-              {breakdown.map((datum) => (
-                <div className={getDatumClassName(datum.severity)} key={`${datum.label}-${datum.value}`}>
-                  <span className="quick-status-wide__breakdown-label">{datum.label}</span>
-                  <span className="quick-status-wide__breakdown-value">{datum.value}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="quick-status-wide__dashboard-stats">
-              {highlights.map((datum) => (
-                <div className={getDatumClassName(datum.severity)} key={`${datum.label}-${datum.value}`}>
-                  <span className="quick-status-wide__datum-label">{datum.label}</span>
-                  <span className="quick-status-wide__datum-value">{datum.value}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        {tile.details && tile.details.length > 0 ? <div className="quick-status-hint">Details</div> : null}
-      </div>
-    );
-
-    if (onClick && !action && !draggable && !onDragStart && !onDragOver && !onDragEnd && !onDrop) {
-      return (
-        <button type="button" className={classNames(cardClassName, 'quick-status-card--button')} onClick={onClick}>
-          {dashboardBody}
-        </button>
-      );
-    }
-
-    return (
-      <div
-        className={cardClassName}
-        onClick={onClick}
-        draggable={draggable}
-        onDragStart={onDragStart}
-        onDragOver={onDragOver}
-        onDragEnd={onDragEnd}
-        onDrop={onDrop}
-        role={onClick ? 'button' : undefined}
-        tabIndex={onClick ? 0 : undefined}
-        onKeyDown={handleKeyDown}
-      >
-        {dashboardBody}
-      </div>
-    );
-  }
 
   const body = (
     <div className={statusClassName}>

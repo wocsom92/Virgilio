@@ -16,7 +16,6 @@ from backend.app.services.http_metrics import install_http_metrics
 from backend.app.services.http_clients import close_http_clients
 from backend.app.version import BACKEND_VERSION
 from backend.app.services.reboot_service import notify_reboot_recovery
-from backend.app.services.self_monitoring import ensure_self_monitoring_project
 
 
 poller = BackendPoller(async_session_factory)
@@ -30,11 +29,6 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(ensure_databases_exist)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_schema_compat)
-    async with async_session_factory() as session:
-        try:
-            await ensure_self_monitoring_project(session)
-        except Exception as exc:  # pragma: no cover - startup resilience
-            logger.warning("Self-monitoring project bootstrap failed during startup: %s", exc)
     await poller.start()
     async with async_session_factory() as session:
         try:

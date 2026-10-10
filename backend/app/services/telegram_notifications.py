@@ -21,6 +21,7 @@ from backend.app.services.monitor_client import MonitorClientError, fetch_metric
 from backend.app.services.notification_center import record_notification_event
 from backend.app.services.quick_status import (
     QuickStatusTransition,
+    build_quick_status_tile_summaries,
     build_quick_status_tiles,
     list_quick_status_items,
 )
@@ -264,7 +265,11 @@ async def send_compiled_message(
 
 async def _load_quick_status_tiles(session: AsyncSession) -> list[QuickStatusTileRead]:
     items = await list_quick_status_items(session)
-    return await build_quick_status_tiles(session, items, persist_prometheus_history=True)
+    # The /stats and /warn messages only render each tile's current status,
+    # label and display value, never the 24h history sparkline. Use the
+    # lightweight summary builder so we avoid loading (and ranking) the entire
+    # ping/prometheus/snapshot history tables on every command.
+    return await build_quick_status_tile_summaries(session, items)
 
 
 def _build_warn_message_from_tiles(
@@ -689,7 +694,7 @@ async def dispatch_due_quick_status_notifications(
 
     result = await session.execute(
         select(QuickStatusItem)
-        .options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
+        .options(selectinload(QuickStatusItem.backend))
         .where(
             QuickStatusItem.pending_notification_status.is_not(None),
             QuickStatusItem.pending_notification_due_at.is_not(None),

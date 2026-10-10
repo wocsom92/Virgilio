@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import {
   Chart as ChartJS,
-  CategoryScale,
+  ChartData,
+  ChartDataset,
   LinearScale,
   PointElement,
   LineElement,
@@ -14,7 +15,9 @@ import 'chartjs-adapter-date-fns';
 
 import type { MetricRange, MetricSeriesPoint } from '../api/client';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, TimeScale);
+type GapPoint = { x: number; y: number | null };
+
+ChartJS.register(LinearScale, PointElement, LineElement, Tooltip, Legend, TimeScale);
 
 interface DatasetConfig {
   label: string;
@@ -137,8 +140,8 @@ export function MetricsChart({
         borderWidth: 2,
         pointRadius: 0,
         spanGaps: false,
-        parsing: false,
-      };
+        parsing: false as const,
+      } satisfies ChartDataset<'line', GapPoint[]>;
     });
 
     return {
@@ -242,9 +245,7 @@ export function MetricsChart({
       <div style={{ minHeight: 160 }}>
         <Line
           options={options}
-          data={{
-            datasets: processed.datasets,
-          }}
+          data={{ datasets: processed.datasets } satisfies ChartData<'line', GapPoint[]>}
           plugins={[markerPlugin]}
         />
       </div>

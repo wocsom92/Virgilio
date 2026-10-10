@@ -59,7 +59,6 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
   return {
     id: overrides.id ?? 1,
     backend_id: overrides.backend_id ?? 1,
-    project_id: overrides.project_id ?? null,
     backend_display_order: overrides.backend_display_order ?? 1,
     backend_name: overrides.backend_name ?? 'Backend',
     label: overrides.label ?? 'Disk',
@@ -73,8 +72,6 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
     history: overrides.history ?? Array.from({ length: 12 }, () => 'ok' as const),
     series: overrides.series ?? [],
     series_summary: overrides.series_summary ?? null,
-    highlights: overrides.highlights ?? [],
-    breakdown: overrides.breakdown ?? [],
     reported_at: overrides.reported_at ?? '2024-01-01T00:00:00Z',
   };
 }
@@ -189,40 +186,6 @@ describe('Dashboard', () => {
     });
   });
 
-  it('requests project-scoped quick tiles when a project tab is active', async () => {
-    vi.mocked(fetchDashboard).mockResolvedValue([makeBackend({ id: 1, name: 'Alpha', display_order: 1 })]);
-    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
-      makeQuickStatusTile({ id: 10, backend_id: 1, backend_display_order: 1, backend_name: 'Alpha' }),
-    ]);
-
-    render(<Dashboard canRefresh={false} mode="monitoring" projectId={7} />);
-
-    await waitFor(() => {
-      expect(fetchQuickStatusTiles).toHaveBeenCalledWith(7);
-    });
-  });
-
-  it('renders project-only quick tile groups without a backend assignment', async () => {
-    vi.mocked(fetchDashboard).mockResolvedValue([]);
-    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
-      makeQuickStatusTile({
-        id: 10,
-        backend_id: null,
-        project_id: 7,
-        backend_name: 'Home',
-      }),
-    ]);
-
-    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" projectId={7} />);
-
-    await waitFor(() => {
-      const titles = Array.from(container.querySelectorAll('.quick-status-section__title')).map(
-        (node) => node.textContent
-      );
-      expect(titles).toEqual(['Home']);
-    });
-  });
-
   it('shows backend cards only in graphs view', async () => {
     vi.mocked(fetchDashboard).mockResolvedValue([makeBackend({ id: 1, name: 'Alpha', display_order: 1 })]);
     vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
@@ -243,13 +206,12 @@ describe('Dashboard', () => {
     });
   });
 
-  it('renders wide grid items for Prometheus graph cards in monitoring view', async () => {
+  it('renders wide grid items for graph and temperature cards in monitoring view', async () => {
     vi.mocked(fetchDashboard).mockResolvedValue([]);
     vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
       makeQuickStatusTile({
         id: 15,
-        backend_id: null,
-        project_id: 7,
+        backend_id: 1,
         backend_name: 'Home',
         metric_key: 'prometheus_query',
         display_variant: 'graph',
@@ -266,21 +228,19 @@ describe('Dashboard', () => {
       }),
       makeQuickStatusTile({
         id: 16,
-        backend_id: null,
-        project_id: 7,
+        backend_id: 1,
         backend_name: 'Home',
         metric_key: 'prometheus_query',
-        display_variant: 'self_monitoring',
-        display_value: '2.4k req/h',
+        display_variant: 'temperature',
+        display_value: '22.4 °C',
         series: [
-          { recorded_at: '2024-01-01T00:00:00Z', value: 1200 },
-          { recorded_at: '2024-01-01T12:00:00Z', value: 2400 },
+          { recorded_at: '2024-01-01T00:00:00Z', value: 21.5 },
+          { recorded_at: '2024-01-01T12:00:00Z', value: 22.4 },
         ],
-        highlights: [{ label: 'Backend', value: '1.7k req/h', severity: 'info' }],
       }),
     ]);
 
-    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" projectId={7} />);
+    const { container } = render(<Dashboard canRefresh={false} mode="monitoring" />);
 
     await waitFor(() => {
       expect(container.querySelectorAll('.quick-status-grid__item--wide')).toHaveLength(2);

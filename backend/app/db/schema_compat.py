@@ -51,6 +51,68 @@ def _get_columns(connection: Connection, table_name: str, *, schema: str | None)
     return {col["name"] for col in inspect(connection).get_columns(table_name, schema=schema)}
 
 
+def _get_foreign_keys(connection: Connection, table_name: str, *, schema: str | None) -> list[dict]:
+    return list(inspect(connection).get_foreign_keys(table_name, schema=schema))
+
+
+def remove_legacy_project_schema(connection: Connection) -> None:
+    """Remove the retired custom-project schema and project-only dashboard items."""
+    if connection.dialect.name != "mysql":
+        return
+
+    config_schema, history_schema = _resolved_schemas(connection)
+    quick_status_table = _qualified_table_name("quick_status_items", schema=config_schema)
+    projects_table = _qualified_table_name("projects", schema=config_schema)
+
+    if _has_table(connection, "quick_status_items", schema=config_schema):
+        columns = _get_columns(connection, "quick_status_items", schema=config_schema)
+        if "backend_id" in columns:
+            backendless_item_ids = f"SELECT id FROM {quick_status_table} WHERE backend_id IS NULL"
+            for history_table_name in ("quick_status_ping_samples", "quick_status_prometheus_samples"):
+                if not _has_table(connection, history_table_name, schema=history_schema):
+                    continue
+                history_table = _qualified_table_name(history_table_name, schema=history_schema)
+                connection.execute(
+                    text(
+                        f"DELETE FROM {history_table} "
+                        f"WHERE quick_status_item_id IN ({backendless_item_ids})"
+                    )
+                )
+            connection.execute(text(f"DELETE FROM {quick_status_table} WHERE backend_id IS NULL"))
+
+        if "project_id" in columns:
+            for foreign_key in _get_foreign_keys(
+                connection,
+                "quick_status_items",
+                schema=config_schema,
+            ):
+                if "project_id" not in (foreign_key.get("constrained_columns") or []):
+                    continue
+                constraint_name = foreign_key.get("name")
+                if constraint_name:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {quick_status_table} "
+                            f"DROP FOREIGN KEY {_quote_identifier(constraint_name)}"
+                        )
+                    )
+            connection.execute(text(f"ALTER TABLE {quick_status_table} DROP COLUMN project_id"))
+
+        backend_column = next(
+            (
+                column
+                for column in inspect(connection).get_columns("quick_status_items", schema=config_schema)
+                if column["name"] == "backend_id"
+            ),
+            None,
+        )
+        if backend_column is not None and backend_column.get("nullable") is True:
+            connection.execute(text(f"ALTER TABLE {quick_status_table} MODIFY COLUMN backend_id INT NOT NULL"))
+
+    if _has_table(connection, "projects", schema=config_schema):
+        connection.execute(text(f"DROP TABLE {projects_table}"))
+
+
 def _get_ordered_columns(connection: Connection, table_name: str, *, schema: str | None) -> list[str]:
     return [col["name"] for col in inspect(connection).get_columns(table_name, schema=schema)]
 
@@ -198,7 +260,6 @@ def ensure_databases_exist(connection: Connection) -> None:
 def ensure_schema_compat(connection: Connection) -> None:
     """Lightweight, safe migrations for small schema deltas."""
     config_schema, history_schema = _resolved_schemas(connection)
-    config_projects = _qualified_table_name("projects", schema=config_schema)
     config_quick_status_items = _qualified_table_name("quick_status_items", schema=config_schema)
     config_telegram_settings = _qualified_table_name("telegram_settings", schema=config_schema)
     config_reboot_events = _qualified_table_name("reboot_events", schema=config_schema)
@@ -212,20 +273,7 @@ def ensure_schema_compat(connection: Connection) -> None:
     history_prometheus_samples = _qualified_table_name("quick_status_prometheus_samples", schema=history_schema)
     history_site_monitor_samples = _qualified_table_name("site_monitor_samples", schema=history_schema)
 
-    if not _has_table(connection, "projects", schema=config_schema):
-        connection.execute(
-            text(
-                """
-                CREATE TABLE {config_projects} (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(120) NOT NULL UNIQUE,
-                    display_order INT NOT NULL DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                )
-                """.format(config_projects=config_projects)
-            )
-        )
+    remove_legacy_project_schema(connection)
 
     # Add backend_version column if missing (introduced in 2025-02, stores monitor version).
     if _has_table(connection, "metric_snapshots", schema=history_schema):
@@ -251,11 +299,6 @@ def ensure_schema_compat(connection: Connection) -> None:
             col["name"]: col for col in inspect(connection).get_columns("quick_status_items", schema=config_schema)
         }
         columns = set(quick_status_columns)
-        if "project_id" not in columns:
-            connection.execute(text(f"ALTER TABLE {config_quick_status_items} ADD COLUMN project_id INT NULL"))
-        backend_column = quick_status_columns.get("backend_id")
-        if backend_column is not None and backend_column.get("nullable") is False:
-            connection.execute(text(f"ALTER TABLE {config_quick_status_items} MODIFY COLUMN backend_id INT NULL"))
         if "lower_warning_threshold" not in columns:
             connection.execute(text(f"ALTER TABLE {config_quick_status_items} ADD COLUMN lower_warning_threshold FLOAT NULL"))
         if "lower_critical_threshold" not in columns:

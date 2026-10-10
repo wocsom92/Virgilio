@@ -20,7 +20,7 @@ function getStatusBadgeClass(status: SiteMonitorStatus['status']): string {
   return 'bg-secondary';
 }
 
-function formatCheckedAt(value: string | null): string {
+function formatCheckedAt(value: string | null | undefined): string {
   if (!value) {
     return 'No samples yet';
   }

@@ -6,7 +6,6 @@ from sqlalchemy import select
 from backend.app.models.monitors import (
     MonitoredBackend,
     MetricSnapshot,
-    Project,
     QuickStatusItem,
     QuickStatusPingSample,
     QuickStatusPrometheusSample,
@@ -1023,106 +1022,6 @@ async def test_build_quick_status_tiles_marks_stale_prometheus_metric_with_stale
 
 
 @pytest.mark.asyncio
-async def test_build_quick_status_tiles_supports_project_prometheus_tile_without_backend(db_session, monkeypatch):
-    now = datetime(2026, 3, 30, 12, 0, tzinfo=timezone.utc)
-    project = Project(name="Home", display_order=2)
-    db_session.add(project)
-    await db_session.flush()
-    item = QuickStatusItem(
-        backend_id=None,
-        project_id=project.id,
-        project=project,
-        label="Room temp",
-        metric_key="prometheus_query",
-        warning_threshold=26,
-        critical_threshold=28,
-        prometheus_url="http://prometheus:9090",
-        prometheus_query='room_temperature_celsius{room="bedroom"}',
-        prometheus_interval_seconds=300,
-        prometheus_threshold_direction="higher",
-        show_updated_age=True,
-        display_order=0,
-    )
-    db_session.add(item)
-    await db_session.commit()
-
-    async def fake_fetch_prometheus_query_value(base_url: str, query: str):
-        return PrometheusQueryValue(
-            value=23.4,
-            sampled_at=now - timedelta(minutes=5),
-        )
-
-    monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
-
-    tiles = await quick_status.build_quick_status_tiles(
-        db_session,
-        [item],
-        now=now,
-        persist_prometheus_history=True,
-    )
-
-    assert tiles[0].backend_id is None
-    assert tiles[0].project_id == project.id
-    assert tiles[0].backend_name == "Home"
-    assert tiles[0].show_updated_age is True
-
-
-@pytest.mark.asyncio
-async def test_run_due_quick_status_checks_samples_project_prometheus_items(db_session, monkeypatch):
-    now = datetime(2026, 3, 30, 12, 0, tzinfo=timezone.utc)
-    project = Project(name="Home", display_order=2)
-    db_session.add(project)
-    await db_session.flush()
-    item = QuickStatusItem(
-        backend_id=None,
-        project_id=project.id,
-        project=project,
-        label="Room temp",
-        metric_key="prometheus_query",
-        warning_threshold=26,
-        critical_threshold=28,
-        prometheus_url="http://prometheus:9090",
-        prometheus_query='background_room_temperature_celsius{room="bedroom"}',
-        prometheus_interval_seconds=60,
-        prometheus_threshold_direction="higher",
-        display_variant="temperature",
-        display_order=0,
-    )
-    db_session.add(item)
-    await db_session.commit()
-
-    calls: list[datetime] = []
-
-    async def fake_fetch_prometheus_query_value(base_url: str, query: str):
-        calls.append(now + timedelta(seconds=61 * len(calls)))
-        return PrometheusQueryValue(
-            value=23.4 + len(calls),
-            sampled_at=calls[-1],
-        )
-
-    monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
-
-    assert await quick_status.run_due_quick_status_checks(db_session, now=now) == 1
-    assert await quick_status.run_due_quick_status_checks(db_session, now=now + timedelta(seconds=30)) == 0
-    assert await quick_status.run_due_quick_status_checks(db_session, now=now + timedelta(seconds=61)) == 1
-
-    samples = (
-        await db_session.execute(
-            select(QuickStatusPrometheusSample)
-            .where(QuickStatusPrometheusSample.quick_status_item_id == item.id)
-            .order_by(QuickStatusPrometheusSample.checked_at.asc(), QuickStatusPrometheusSample.id.asc())
-        )
-    ).scalars().all()
-
-    assert len(calls) == 2
-    assert [quick_status._coerce_utc(sample.checked_at) for sample in samples] == [
-        now,
-        now + timedelta(seconds=61),
-    ]
-    assert [sample.value for sample in samples] == [24.4, 25.4]
-
-
-@pytest.mark.asyncio
 async def test_build_quick_status_tiles_aggregates_stored_prometheus_history(db_session):
     now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
     backend = MonitoredBackend(
@@ -1191,7 +1090,17 @@ async def test_build_quick_status_tiles_aggregates_stored_prometheus_history(db_
 
 @pytest.mark.asyncio
 async def test_build_quick_status_tiles_includes_prometheus_series_for_temperature_items(db_session, monkeypatch):
+    backend = MonitoredBackend(
+        name="home",
+        base_url="http://home",
+        api_token="token",
+        display_order=0,
+    )
+    db_session.add(backend)
+    await db_session.flush()
+
     item = QuickStatusItem(
+        backend_id=backend.id,
         label="Room temperature",
         metric_key="prometheus_query",
         display_variant="temperature",

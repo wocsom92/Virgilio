@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- Project tabs and the auto-seeded Self-monitoring project (quick tiles now always belong to a backend).
+- The bundled Prometheus container; Prometheus quick tiles still query any external Prometheus URL.
+
+### Fixed
+- Frontend build is now type-checked (`tsc --noEmit && vite build`) and the test runner provides an in-memory `localStorage` under Node 22+.
+
 ## [8.0.0] - 2026-04-20
 
 ### Added

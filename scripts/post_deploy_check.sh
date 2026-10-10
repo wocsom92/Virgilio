@@ -206,7 +206,6 @@ if [[ "${PROFILE}" == "full" ]]; then
   container_check "server-monitor-backend"
   container_check "server-monitor-frontend"
   container_check "server-monitor-telegram-bot"
-  container_check "server-monitor-prometheus"
   if [[ ",${compose_profiles}," == *",telegram-egress,"* ]]; then
     container_check "server-monitor-telegram-egress-proxy"
   fi

@@ -12,7 +12,7 @@ interface QuickStatusSectionsProps {
 }
 
 function getGridItemClassName(variant: QuickStatusTile['display_variant']) {
-  return variant === 'graph' || variant === 'temperature' || variant === 'humidity' || variant === 'self_monitoring'
+  return variant === 'graph' || variant === 'temperature' || variant === 'humidity'
     ? 'quick-status-grid__item quick-status-grid__item--wide'
     : 'quick-status-grid__item';
 }

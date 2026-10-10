@@ -4,7 +4,6 @@ import {
   MountDisplayEntry,
   MountMetricSelection,
   MonitoredBackend,
-  Project,
   SelectedMetrics,
   TelegramSettings,
   AuthUser,
@@ -19,11 +18,9 @@ import {
   fetchQuickStatusTiles,
   createQuickStatusItem,
   createBackend,
-  createProject,
   createUser,
   deleteQuickStatusItem,
   deleteBackend,
-  deleteProject,
   deleteUser,
   fetchBackendMounts,
   fetchAuthSessionSettings,
@@ -32,13 +29,11 @@ import {
   listQuickStatusItems,
   listBackends,
   listBackendsWithLatest,
-  listProjects,
   listUsers,
   sendTelegramStats,
   sendTelegramWarnings,
   updateAuthSessionSettings,
   updateBackend,
-  updateProject,
   updateQuickStatusItem,
   updateTelegramSettings,
   updateSystemSettings,
@@ -338,10 +333,10 @@ const quickStatusMetricOptions: Array<{
 ];
 
 const metricOptionKeys = new Set(metricOptions.map((option) => option.key));
+const isMetricOptionKey = (key: string): key is (typeof metricOptions)[number]['key'] => metricOptionKeys.has(key as (typeof metricOptions)[number]['key']);
 const extraSelectedKeys = ['network_interfaces'];
 const ADMIN_SECTIONS = [
   { id: 'manage-backends', label: 'Manage backends', description: 'Create, edit, and order monitored servers.' },
-  { id: 'projects', label: 'Projects', description: 'Create project tabs and assign custom dashboard items.' },
   {
     id: 'quick-status',
     label: 'Dashboard items',
@@ -431,7 +426,7 @@ const isMetricEnabled = (
 const sanitizeSelectedMetrics = (selected: SelectedMetrics): SelectedMetrics => {
   const sanitized: SelectedMetrics = createDefaultSelectedMetrics();
   for (const [key, value] of Object.entries(selected)) {
-    if (metricOptionKeys.has(key)) {
+    if (isMetricOptionKey(key)) {
       if (key === MOUNTED_USAGE_KEY) {
         const mountSelection = normalizeMountMetricSelection(value);
         sanitized[key] = {
@@ -495,14 +490,8 @@ type BackendFormState = Omit<BackendCreatePayload, 'display_order'> & {
   selected_metrics: SelectedMetrics;
 };
 
-type ProjectFormState = {
-  name: string;
-  display_order: number | '';
-};
-
 type QuickStatusFormState = {
   backend_id: number | '';
-  project_id: number | '';
   label: string;
   metric_key: QuickStatusMetricKey;
   display_variant: QuickStatusDisplayVariant;
@@ -561,9 +550,6 @@ const defaultQuickStatusLabel = (
   if (metric === 'prometheus_query' && displayVariant === 'graph') {
     return 'Prometheus graph';
   }
-  if (metric === 'prometheus_query' && displayVariant === 'self_monitoring') {
-    return 'Self-monitoring card';
-  }
   return quickStatusMetricOptions.find((option) => option.key === metric)?.label ?? metric;
 };
 
@@ -610,7 +596,6 @@ const createQuickStatusForm = (): QuickStatusFormState => {
   const defaults = defaultQuickStatusThresholds(metricKey);
   return {
     backend_id: '',
-    project_id: '',
     label: defaultQuickStatusLabel(metricKey, 'tile'),
     metric_key: metricKey,
     display_variant: 'tile',
@@ -631,28 +616,7 @@ const createQuickStatusForm = (): QuickStatusFormState => {
   };
 };
 
-const createProjectForm = (): ProjectFormState => ({
-  name: '',
-  display_order: 0,
-});
-
-const sortProjects = (items: Project[]): Project[] =>
-  [...items].sort((a, b) => {
-    if (a.display_order !== b.display_order) {
-      return a.display_order - b.display_order;
-    }
-    return a.name.localeCompare(b.name);
-  });
-
-const getQuickStatusGroupKey = (item: Pick<QuickStatusItem, 'backend_id' | 'project_id'>): string => {
-  if (item.backend_id !== null && item.backend_id !== undefined) {
-    return `backend:${item.backend_id}`;
-  }
-  if (item.project_id !== null && item.project_id !== undefined) {
-    return `project:${item.project_id}`;
-  }
-  return 'ungrouped';
-};
+const getQuickStatusGroupKey = (item: Pick<QuickStatusItem, 'backend_id'>): string => `backend:${item.backend_id}`;
 
 export function AdminPanel({ currentUser }: AdminPanelProps) {
   const extractErrorMessage = (err: unknown, fallback: string): string => {
@@ -675,10 +639,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const [retentionStatus, setRetentionStatus] = useState<string | null>(null);
   const [authSessionMinutes, setAuthSessionMinutes] = useState<number | ''>('');
   const [authSessionStatus, setAuthSessionStatus] = useState<string | null>(null);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [projectForm, setProjectForm] = useState<ProjectFormState>(() => createProjectForm());
-  const [projectEditingId, setProjectEditingId] = useState<number | null>(null);
-  const [projectStatus, setProjectStatus] = useState<string | null>(null);
   const [mountOptions, setMountOptions] = useState<string[]>([]);
   const [loadingMountOptions, setLoadingMountOptions] = useState(false);
   const [mountOptionsError, setMountOptionsError] = useState<string | null>(null);
@@ -732,11 +692,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     });
   };
 
-  const loadProjects = async () => {
-    const data = await listProjects();
-    setProjects(sortProjects(data));
-  };
-
   const loadMountOptions = async (backendId: number) => {
     setLoadingMountOptions(true);
     setMountOptionsError(null);
@@ -760,76 +715,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       );
     } finally {
       setLoadingMountOptions(false);
-    }
-  };
-
-  const resetProjectForm = () => {
-    setProjectForm(createProjectForm());
-    setProjectEditingId(null);
-    setProjectStatus(null);
-  };
-
-  const handleProjectSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!isAdmin) {
-      return;
-    }
-    if (!projectForm.name.trim()) {
-      setProjectStatus('Enter a project name.');
-      return;
-    }
-    const payload = {
-      name: projectForm.name.trim(),
-      display_order: Number(projectForm.display_order) || 0,
-    };
-    try {
-      if (projectEditingId) {
-        const updated = await updateProject(projectEditingId, payload);
-        setProjects((prev) => sortProjects(prev.map((item) => (item.id === updated.id ? updated : item))));
-        setProjectStatus('Project updated.');
-      } else {
-        const created = await createProject(payload);
-        setProjects((prev) => sortProjects([...prev, created]));
-        setProjectStatus('Project created.');
-      }
-      window.dispatchEvent(new Event('projects-updated'));
-      setProjectForm(createProjectForm());
-      setProjectEditingId(null);
-    } catch (err) {
-      setProjectStatus(extractErrorMessage(err, 'Could not save the project. Review the form and try again.'));
-    }
-  };
-
-  const handleProjectEdit = (project: Project) => {
-    setProjectEditingId(project.id);
-    setProjectForm({
-      name: project.name,
-      display_order: project.display_order,
-    });
-    setProjectStatus(null);
-    setActiveSection('projects');
-  };
-
-  const handleProjectDelete = async (project: Project) => {
-    if (!isAdmin) {
-      return;
-    }
-    if (!window.confirm(`Remove project ${project.name}? This also removes its quick tiles.`)) {
-      return;
-    }
-    try {
-      await deleteProject(project.id);
-      setProjects((prev) => prev.filter((item) => item.id !== project.id));
-      setQuickStatusItems((prev) => prev.filter((item) => item.project_id !== project.id));
-      setQuickStatusTiles((prev) => prev.filter((item) => item.project_id !== project.id));
-      setProjectStatus(`Removed ${project.name}.`);
-      setQuickStatusForm((prev) => (prev.project_id === project.id ? { ...prev, project_id: '' } : prev));
-      window.dispatchEvent(new Event('projects-updated'));
-      if (projectEditingId === project.id) {
-        resetProjectForm();
-      }
-    } catch (err) {
-      setProjectStatus(extractErrorMessage(err, 'Could not delete the project. Try again.'));
     }
   };
 
@@ -891,21 +776,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       } catch (err) {
         setTelegram(null);
         setTelegramStatus(extractErrorMessage(err, 'Could not load Telegram settings. Check your admin access and try again.'));
-      }
-    })();
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) {
-      setProjects([]);
-      return;
-    }
-    void (async () => {
-      try {
-        await loadProjects();
-      } catch (err) {
-        setProjects([]);
-        setProjectStatus(extractErrorMessage(err, 'Could not load projects. Check the API connection and try again.'));
       }
     })();
   }, [isAdmin]);
@@ -1234,12 +1104,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setQuickStatusStatus('Enter a label.');
       return;
     }
-    if (quickStatusForm.backend_id === '' && quickStatusForm.project_id === '') {
-      setQuickStatusStatus('Select a backend or assign the item to a project.');
-      return;
-    }
-    if (quickStatusForm.backend_id === '' && quickStatusForm.metric_key !== 'prometheus_query') {
-      setQuickStatusStatus('Backend-free items are supported only for Prometheus metrics.');
+    if (quickStatusForm.backend_id === '') {
+      setQuickStatusStatus('Select a backend.');
       return;
     }
     if (metricMeta?.requiresThresholds) {
@@ -1301,8 +1167,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     }
 
     const payload = {
-      backend_id: quickStatusForm.backend_id === '' ? null : Number(quickStatusForm.backend_id),
-      project_id: quickStatusForm.project_id === '' ? null : Number(quickStatusForm.project_id),
+      backend_id: Number(quickStatusForm.backend_id),
       label: quickStatusForm.label.trim(),
       metric_key: quickStatusForm.metric_key,
       display_variant: quickStatusForm.metric_key === 'prometheus_query' ? quickStatusForm.display_variant : 'tile',
@@ -1360,8 +1225,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   const handleQuickStatusEdit = (item: QuickStatusItem) => {
     setQuickStatusEditingId(item.id);
     setQuickStatusForm({
-      backend_id: item.backend_id ?? '',
-      project_id: item.project_id ?? '',
+      backend_id: item.backend_id,
       label: item.label,
       metric_key: item.metric_key,
       display_variant: item.display_variant ?? 'tile',
@@ -1401,7 +1265,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
 
   const toQuickStatusPayload = (item: QuickStatusItem): Omit<QuickStatusItem, 'id'> => ({
     backend_id: item.backend_id,
-    project_id: item.project_id,
     label: item.label,
     metric_key: item.metric_key,
     display_variant: item.display_variant ?? 'tile',
@@ -1496,6 +1359,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   };
 
   const handleQuickStatusDrop = async (backendId: string, targetId: number) => {
+    if (quickStatusDraggingId === null) {
+      return;
+    }
     await persistQuickStatusOrder(backendId, quickStatusDraggingId, targetId);
   };
 
@@ -1962,19 +1828,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     () => new Map(backends.map((backend) => [backend.id, backend.name])),
     [backends]
   );
-  const projectNameById = useMemo(
-    () => new Map(projects.map((project) => [project.id, project.name])),
-    [projects]
-  );
-  const getQuickStatusGroupName = (item: Pick<QuickStatusItem, 'backend_id' | 'project_id'>): string => {
-    if (item.backend_id !== null && item.backend_id !== undefined) {
-      return backendNameById.get(item.backend_id) ?? `Backend #${item.backend_id}`;
-    }
-    if (item.project_id !== null && item.project_id !== undefined) {
-      return projectNameById.get(item.project_id) ?? `Project #${item.project_id}`;
-    }
-    return 'Ungrouped';
-  };
+  const getQuickStatusGroupName = (item: Pick<QuickStatusItem, 'backend_id'>): string =>
+    backendNameById.get(item.backend_id) ?? `Backend #${item.backend_id}`;
 
   const quickStatusPreviewGroups = useMemo(() => {
     const grouped = new Map<string, QuickStatusItem[]>();
@@ -2003,7 +1858,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               ({
                 id: item.id,
                 backend_id: item.backend_id,
-                project_id: item.project_id,
                 backend_display_order: 0,
                 backend_name: backendName,
                 label: item.label,
@@ -2030,7 +1884,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         return a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
       })
       .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [backendNameById, projectNameById, quickStatusItems, quickStatusTiles]);
+  }, [backendNameById, quickStatusItems, quickStatusTiles]);
 
   const quickStatusListGroups = useMemo(() => {
     const search = quickStatusListSearch.trim().toLocaleLowerCase();
@@ -2059,7 +1913,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   item.ping_endpoint ?? '',
                   item.prometheus_url ?? '',
                   item.prometheus_query ?? '',
-                  item.project_id ? projectNameById.get(item.project_id) ?? '' : '',
                 ]
                   .join(' ')
                   .toLocaleLowerCase();
@@ -2088,7 +1941,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         return a.backendName.localeCompare(b.backendName, undefined, { sensitivity: 'base' });
       })
       .filter((group): group is NonNullable<typeof group> => group !== null);
-  }, [backendNameById, projectNameById, quickStatusItems, quickStatusListSearch, quickStatusPageByBackend]);
+  }, [backendNameById, quickStatusItems, quickStatusListSearch, quickStatusPageByBackend]);
 
   const quickStatusMetricMeta = quickStatusMetricOptions.find(
     (option) => option.key === quickStatusForm.metric_key
@@ -2453,102 +2306,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             </div>
           </section>
         )}
-        {activeSection === 'projects' && (
-          <section id="projects" className="d-flex flex-column gap-3">
-            <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
-              <div>
-                <h5 className="mb-0">Projects</h5>
-                <p className="text-secondary small mb-0">Create menu tabs that hold their own custom quick tiles.</p>
-              </div>
-              {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
-            </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Existing Projects</div>
-              <div className="card-body d-flex flex-column gap-3">
-                {projects.length === 0 ? (
-                  <div className="text-secondary small">No projects configured yet.</div>
-                ) : (
-                  projects.map((project) => {
-                    const tileCount = quickStatusItems.filter((item) => item.project_id === project.id).length;
-                    return (
-                      <div className="card-panel rounded-3 p-3 d-flex justify-content-between align-items-center gap-3 flex-wrap" key={project.id}>
-                        <div>
-                          <div className="fw-semibold">{project.name}</div>
-                          <div className="text-secondary small">
-                            Order {project.display_order} · {tileCount} {tileCount === 1 ? 'tile' : 'tiles'}
-                          </div>
-                        </div>
-                        <div className="d-flex gap-2">
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-light"
-                            onClick={() => handleProjectEdit(project)}
-                            disabled={!isAdmin}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-danger"
-                            onClick={() => void handleProjectDelete(project)}
-                            disabled={!isAdmin}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">
-                {projectEditingId ? 'Edit project' : 'Add project'}
-              </div>
-              <div className="card-body">
-                <form className="d-flex flex-column gap-3" onSubmit={handleProjectSubmit}>
-                  <div className="row g-3">
-                    <div className="col-md-8">
-                      <label className="form-label">Project name</label>
-                      <input
-                        className="form-control bg-dark text-light border-secondary"
-                        value={projectForm.name}
-                        onChange={(event) => setProjectForm((prev) => ({ ...prev, name: event.target.value }))}
-                        placeholder="Infrastructure"
-                        required
-                      />
-                    </div>
-                    <div className="col-md-4">
-                      <label className="form-label">Display order</label>
-                      <input
-                        type="number"
-                        className="form-control bg-dark text-light border-secondary"
-                        value={projectForm.display_order}
-                        onChange={(event) =>
-                          setProjectForm((prev) => ({
-                            ...prev,
-                            display_order: event.target.value === '' ? '' : Number(event.target.value),
-                          }))
-                        }
-                        min={0}
-                      />
-                    </div>
-                  </div>
-                  <div className="d-flex gap-2 flex-wrap">
-                    <button className="btn btn-light text-dark" type="submit" disabled={!isAdmin}>
-                      {projectEditingId ? 'Save project' : 'Add project'}
-                    </button>
-                    <button className="btn btn-outline-light" type="button" onClick={resetProjectForm}>
-                      Reset
-                    </button>
-                    {projectStatus && <span className="text-secondary align-self-center">{projectStatus}</span>}
-                  </div>
-                </form>
-              </div>
-            </div>
-          </section>
-        )}
         {activeBackend &&
           renderBackendSection({
             title: `Backend settings: ${activeBackend.name}`,
@@ -2619,8 +2376,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             className={
                               tile.display_variant === 'graph' ||
                               tile.display_variant === 'temperature' ||
-                              tile.display_variant === 'humidity' ||
-                              tile.display_variant === 'self_monitoring'
+                              tile.display_variant === 'humidity'
                                 ? 'quick-status-grid__item quick-status-grid__item--wide'
                                 : 'quick-status-grid__item'
                             }
@@ -2787,13 +2543,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                 <div className="card-panel rounded-3 p-3">
                                   <div className="d-flex flex-wrap align-items-center gap-2">
                                     <div className="fw-semibold">{item.label}</div>
-                                    {item.project_id ? (
-                                      <span className="badge bg-secondary-subtle text-secondary border border-secondary">
-                                        {projectNameById.get(item.project_id) ?? `Project #${item.project_id}`}
-                                      </span>
-                                    ) : (
-                                      <span className="badge bg-dark-subtle text-secondary border border-secondary">Global</span>
-                                    )}
                                   </div>
                                   <div className="text-secondary small">{getQuickStatusMetricLabel(item.metric_key)}</div>
                                   <div className="text-secondary small">
@@ -2805,7 +2554,6 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                     item.mount_path
                                       ? ` · ${item.mount_path}`
                                       : ''}
-                                    {item.backend_id == null ? ' · project-only item' : ''}
                                     {meta?.requiresPing
                                       ? ` · ${item.ping_endpoint ?? 'target missing'} · ${item.ping_interval_seconds ?? 60}s`
                                       : ''}
@@ -2900,7 +2648,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           }))
                         }
                       >
-                        <option value="">No backend (project-only Prometheus item)</option>
+                        <option value="">Select a backend</option>
                         {backends.map((backend) => (
                           <option key={backend.id} value={backend.id}>
                             {backend.name}
@@ -2908,28 +2656,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         ))}
                       </select>
                       <div className="form-text text-secondary small">
-                        Required for monitor-backed metrics. Leave empty only for project-level Prometheus items.
+                        Required. The item reads metrics from this backend.
                       </div>
-                    </div>
-                    <div className="col-md-6">
-                      <label className="form-label">Project tab</label>
-                      <select
-                        className="form-select bg-dark text-light border-secondary"
-                        value={quickStatusForm.project_id}
-                        onChange={(event) =>
-                          setQuickStatusForm((prev) => ({
-                            ...prev,
-                            project_id: event.target.value === '' ? '' : Number(event.target.value),
-                          }))
-                        }
-                      >
-                        <option value="">Main Monitoring tab</option>
-                        {projects.map((project) => (
-                          <option key={project.id} value={project.id}>
-                            {project.name}
-                          </option>
-                        ))}
-                      </select>
                     </div>
                     <div className="col-md-6">
                       <label className="form-label">Metric</label>
@@ -2964,10 +2692,9 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           <option value="graph">Graph card (4x2)</option>
                           <option value="temperature">Temperature card (4x2)</option>
                           <option value="humidity">Humidity card (4x2)</option>
-                          <option value="self_monitoring">Self-monitoring card (4x2)</option>
                         </select>
                         <div className="form-text text-secondary small">
-                          Temperature and humidity cards use comfort bands. Self-monitoring cards use a Kibana-style summary layout.
+                          Temperature and humidity cards use comfort bands.
                         </div>
                       </div>
                     )}
@@ -3266,7 +2993,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <button className="btn btn-light text-dark" type="submit" disabled={!isAdmin}>
                       {quickStatusEditingId ? 'Save item' : 'Add item'}
                     </button>
-                    <button className="btn btn-outline-light" type="button" onClick={resetQuickStatusForm}>
+                    <button className="btn btn-outline-light" type="button" onClick={() => resetQuickStatusForm()}>
                       Reset
                     </button>
                     {quickStatusStatus && <span className="text-secondary align-self-center">{quickStatusStatus}</span>}

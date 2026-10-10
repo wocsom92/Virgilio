@@ -8,7 +8,6 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
   return {
     id: overrides.id ?? 1,
     backend_id: overrides.backend_id ?? 1,
-    project_id: overrides.project_id ?? null,
     backend_display_order: overrides.backend_display_order ?? 1,
     backend_name: overrides.backend_name ?? 'Home',
     label: overrides.label ?? 'Bedroom',
@@ -40,8 +39,6 @@ function makeQuickStatusTile(overrides: Partial<QuickStatusTile> = {}): QuickSta
     reported_at: overrides.reported_at ?? '2024-01-01T23:00:00Z',
     stale: overrides.stale ?? false,
     show_updated_age: overrides.show_updated_age ?? false,
-    highlights: overrides.highlights ?? [],
-    breakdown: overrides.breakdown ?? [],
     details: overrides.details ?? [],
   };
 }
@@ -95,39 +92,6 @@ describe('QuickStatusItemCard', () => {
 
     fireEvent.mouseLeave(chart);
     expect(screen.queryByTestId('quick-status-chart-probe')).not.toBeInTheDocument();
-  });
-
-  it('renders self-monitoring dashboard highlights and endpoint breakdown', () => {
-    const highlightTile = makeQuickStatusTile({
-      display_variant: 'self_monitoring',
-      display_value: '2.4k req/h',
-      display_unit: 'req/h',
-      highlights: [
-        { label: 'Backend', value: '1.7k req/h', severity: 'info' },
-        { label: '4xx+5xx', value: '3 req/h', severity: 'warn' },
-      ],
-    });
-
-    const breakdownTile = makeQuickStatusTile({
-      id: 2,
-      display_variant: 'self_monitoring',
-      display_value: '2.4k req/h',
-      display_unit: 'req/h',
-      breakdown: [
-        { label: 'Backend /dashboard', value: '1.1k req/h', severity: 'info' },
-        { label: 'Monitor /healthz', value: '220 req/h', severity: 'ok' },
-      ],
-    });
-
-    const { rerender } = render(<QuickStatusItemCard tile={highlightTile} />);
-
-    expect(screen.getByText('2.4k req/h')).toBeInTheDocument();
-    expect(screen.getByText('1.7k req/h')).toBeInTheDocument();
-
-    rerender(<QuickStatusItemCard tile={breakdownTile} />);
-
-    expect(screen.getByText('Backend /dashboard')).toBeInTheDocument();
-    expect(screen.getByText('Monitor /healthz')).toBeInTheDocument();
   });
 
   it('renders split line segments when the 24h series contains gaps', () => {

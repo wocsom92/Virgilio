@@ -9,12 +9,10 @@ from backend.app.core.config import settings
 from backend.app.core.security import require_admin_user
 from backend.app.db.session import get_session
 from backend.app.services.reboot_service import request_reboot
-from backend.app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 from backend.app.schemas.system import AuthSessionSettings, RetentionSettings
-from backend.app.models.monitors import MonitoredBackend, Project, QuickStatusItem, SiteMonitor
+from backend.app.models.monitors import MonitoredBackend, QuickStatusItem, SiteMonitor
 from backend.app.schemas.quick_status import QuickStatusItemCreate, QuickStatusItemRead, is_supported_quick_status_metric
 from backend.app.schemas.site_monitoring import SiteMonitorCreate, SiteMonitorRead
-from backend.app.services.backend_queries import delete_project as delete_project_with_dependents
 from backend.app.services.quick_status import create_quick_status_item, update_quick_status_item
 from backend.app.services.site_monitoring import create_site_monitor, list_site_monitors, update_site_monitor
 from backend.app.services.system_settings import (
@@ -103,60 +101,10 @@ async def update_auth_session_settings(
     return AuthSessionSettings(auth_session_minutes=settings.auth_session_minutes)
 
 
-@router.get("/projects", response_model=list[ProjectRead])
-async def list_projects(session: AsyncSession = Depends(get_session)) -> list[ProjectRead]:
-    result = await session.execute(select(Project).order_by(Project.display_order, Project.name, Project.id))
-    return [ProjectRead.model_validate(item) for item in result.scalars()]
-
-
-@router.post("/projects", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
-async def create_project(
-    payload: ProjectCreate,
-    session: AsyncSession = Depends(get_session),
-) -> ProjectRead:
-    existing = await session.execute(select(Project).where(Project.name == payload.name))
-    if existing.scalar_one_or_none() is not None:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A project with this name already exists")
-    project = Project(**payload.model_dump())
-    session.add(project)
-    await session.commit()
-    await session.refresh(project)
-    return ProjectRead.model_validate(project)
-
-
-@router.put("/projects/{project_id}", response_model=ProjectRead)
-async def update_project(
-    project_id: int,
-    payload: ProjectUpdate,
-    session: AsyncSession = Depends(get_session),
-) -> ProjectRead:
-    project = await session.get(Project, project_id)
-    if not project:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    updates = payload.model_dump(exclude_unset=True)
-    next_name = updates.get("name")
-    if next_name:
-        existing = await session.execute(select(Project).where(Project.name == next_name, Project.id != project_id))
-        if existing.scalar_one_or_none() is not None:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A project with this name already exists")
-    for key, value in updates.items():
-        setattr(project, key, value)
-    await session.commit()
-    await session.refresh(project)
-    return ProjectRead.model_validate(project)
-
-
-@router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_project(project_id: int, session: AsyncSession = Depends(get_session)) -> None:
-    deleted = await delete_project_with_dependents(session, project_id)
-    if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-
-
 @router.get("/quick-status", response_model=list[QuickStatusItemRead])
 async def list_quick_status_items(session: AsyncSession = Depends(get_session)) -> list[QuickStatusItemRead]:
     result = await session.execute(
-        select(QuickStatusItem).order_by(QuickStatusItem.project_id, QuickStatusItem.backend_id, QuickStatusItem.display_order, QuickStatusItem.id)
+        select(QuickStatusItem).order_by(QuickStatusItem.backend_id, QuickStatusItem.display_order, QuickStatusItem.id)
     )
     items = []
     for item in result.scalars():
@@ -171,14 +119,9 @@ async def create_quick_status(
     payload: QuickStatusItemCreate,
     session: AsyncSession = Depends(get_session),
 ) -> QuickStatusItemRead:
-    if payload.backend_id is not None:
-        backend = await session.get(MonitoredBackend, payload.backend_id)
-        if not backend:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
-    if payload.project_id is not None:
-        project = await session.get(Project, payload.project_id)
-        if not project:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    backend = await session.get(MonitoredBackend, payload.backend_id)
+    if not backend:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
     item = await create_quick_status_item(session, payload)
     return QuickStatusItemRead.model_validate(item)
 
@@ -192,14 +135,9 @@ async def update_quick_status(
     item = await session.get(QuickStatusItem, item_id)
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quick status item not found")
-    if payload.backend_id is not None:
-        backend = await session.get(MonitoredBackend, payload.backend_id)
-        if not backend:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
-    if payload.project_id is not None:
-        project = await session.get(Project, payload.project_id)
-        if not project:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    backend = await session.get(MonitoredBackend, payload.backend_id)
+    if not backend:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
     item = await update_quick_status_item(session, item, payload)
     return QuickStatusItemRead.model_validate(item)
 

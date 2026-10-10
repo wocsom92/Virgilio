@@ -9,7 +9,6 @@ from backend.app.models.monitors import (
     MetricSnapshot,
     MonitoredBackend,
     NotificationEvent,
-    Project,
     QuickStatusItem,
     QuickStatusPingSample,
     QuickStatusPrometheusSample,
@@ -99,30 +98,5 @@ async def delete_monitored_backend(session: AsyncSession, backend_id: int) -> bo
     await session.execute(delete(MetricSnapshot).where(MetricSnapshot.backend_id == backend_id))
     await session.execute(delete(QuickStatusItem).where(QuickStatusItem.backend_id == backend_id))
     await session.delete(backend)
-    await session.commit()
-    return True
-
-
-async def delete_project(session: AsyncSession, project_id: int) -> bool:
-    """Remove a project and all dependent quick-status data."""
-    project = await session.get(Project, project_id)
-    if project is None:
-        return False
-
-    item_ids = list(
-        (
-            await session.execute(select(QuickStatusItem.id).where(QuickStatusItem.project_id == project_id))
-        ).scalars()
-    )
-    if item_ids:
-        await session.execute(
-            delete(QuickStatusPingSample).where(QuickStatusPingSample.quick_status_item_id.in_(item_ids))
-        )
-        await session.execute(
-            delete(QuickStatusPrometheusSample).where(QuickStatusPrometheusSample.quick_status_item_id.in_(item_ids))
-        )
-
-    await session.execute(delete(QuickStatusItem).where(QuickStatusItem.project_id == project_id))
-    await session.delete(project)
     await session.commit()
     return True

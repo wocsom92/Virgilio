@@ -18,7 +18,6 @@ from backend.app.models.monitors import (
     QuickStatusPrometheusSample,
 )
 from backend.app.schemas.quick_status import (
-    QuickStatusCardDatum,
     QuickStatusDetailLine,
     QuickStatusItemCreate,
     QuickStatusSeriesPoint,
@@ -30,9 +29,7 @@ from backend.app.services.monitor_client import MonitorClientError, fetch_ping
 from backend.app.services.prometheus_client import (
     PrometheusQueryError,
     fetch_prometheus_query_value,
-    fetch_prometheus_query_vector,
 )
-from backend.app.services.self_monitoring import ENDPOINTS_LABEL, PEAKS_LABEL, TOTALS_LABEL
 from backend.app.services.system_settings import metric_retention_timedelta
 from backend.app.services.telegram_settings import get_or_create_settings
 
@@ -175,9 +172,8 @@ def _prometheus_cache_key(item: QuickStatusItem) -> tuple[int, int | None, str, 
 
 def _quick_status_item_sort_key(item: QuickStatusItem) -> tuple[int, str, int, int, int]:
     backend = _loaded_relation(item, "backend")
-    project = _loaded_relation(item, "project")
-    backend_order = backend.display_order if backend is not None else (project.display_order if project is not None else 0)
-    backend_name = backend.name if backend is not None else (project.name if project is not None else "")
+    backend_order = backend.display_order if backend is not None else 0
+    backend_name = backend.name if backend is not None else ""
     return (
         backend_order,
         backend_name.casefold(),
@@ -447,7 +443,7 @@ def _build_detail_lines(
                     severity="warn" if status == "unknown" else severity,
                 )
             )
-        if getattr(item, "display_variant", "tile") in {"graph", "temperature", "self_monitoring"} and prometheus_summary is not None:
+        if getattr(item, "display_variant", "tile") in {"graph", "temperature"} and prometheus_summary is not None:
             if prometheus_summary.min_value is not None:
                 lines.append(
                     QuickStatusDetailLine(
@@ -1109,167 +1105,6 @@ def _build_prometheus_series_summary(points: list[QuickStatusSeriesPoint]) -> Qu
     )
 
 
-def _self_monitoring_stat_severity(
-    value: float | None,
-    *,
-    warning_threshold: float | None = None,
-    critical_threshold: float | None = None,
-    default: str = "ok",
-) -> str:
-    if value is None:
-        return "warn"
-    if critical_threshold is not None and value >= critical_threshold:
-        return "critical"
-    if warning_threshold is not None and value >= warning_threshold:
-        return "warn"
-    return default
-
-
-async def _fetch_prometheus_card_datum(
-    item: QuickStatusItem,
-    label: str,
-    query: str,
-    *,
-    display_unit: str | None = None,
-    warning_threshold: float | None = None,
-    critical_threshold: float | None = None,
-    default_severity: str = "ok",
-) -> QuickStatusCardDatum:
-    try:
-        result = await fetch_prometheus_query_value(item.prometheus_url or "", query)
-    except PrometheusQueryError:
-        return QuickStatusCardDatum(label=label, value="ERR", severity="warn")
-    return QuickStatusCardDatum(
-        label=label,
-        value=_format_prometheus_unit_value(result.value, display_unit or getattr(item, "display_unit", None)),
-        severity=_self_monitoring_stat_severity(
-            result.value,
-            warning_threshold=warning_threshold,
-            critical_threshold=critical_threshold,
-            default=default_severity,
-        ),
-    )
-
-
-def _format_self_monitoring_handler(labels: dict[str, str]) -> str:
-    service = labels.get("service", "").strip()
-    handler = labels.get("handler", "").strip() or "unmatched"
-    if not service:
-        return handler
-    return f"{service.title()} {handler}"
-
-
-async def _build_self_monitoring_totals_highlights(item: QuickStatusItem) -> list[QuickStatusCardDatum]:
-    return list(
-        await asyncio.gather(
-            _fetch_prometheus_card_datum(
-                item,
-                "Backend",
-                'sum(increase(server_monitor_http_requests_total{service="backend"}[1h]))',
-                display_unit="req/h",
-                default_severity="info",
-            ),
-            _fetch_prometheus_card_datum(
-                item,
-                "Monitor",
-                'sum(increase(server_monitor_http_requests_total{service="monitor"}[1h]))',
-                display_unit="req/h",
-                default_severity="info",
-            ),
-            _fetch_prometheus_card_datum(
-                item,
-                "2xx",
-                'sum(increase(server_monitor_http_requests_total{status_class="2xx"}[1h]))',
-                display_unit="req/h",
-            ),
-            _fetch_prometheus_card_datum(
-                item,
-                "4xx+5xx",
-                'sum(increase(server_monitor_http_requests_total{status_class=~"4xx|5xx"}[1h]))',
-                display_unit="req/h",
-                warning_threshold=1,
-                critical_threshold=5,
-            ),
-        )
-    )
-
-
-async def _build_self_monitoring_peaks_highlights(
-    item: QuickStatusItem,
-    summary: QuickStatusSeriesSummary | None,
-) -> list[QuickStatusCardDatum]:
-    highlights = list(
-        await asyncio.gather(
-            _fetch_prometheus_card_datum(
-                item,
-                "Backend now",
-                'sum(rate(server_monitor_http_requests_total{service="backend"}[5m])) * 60',
-                display_unit="req/min",
-                default_severity="info",
-            ),
-            _fetch_prometheus_card_datum(
-                item,
-                "Monitor now",
-                'sum(rate(server_monitor_http_requests_total{service="monitor"}[5m])) * 60',
-                display_unit="req/min",
-                default_severity="info",
-            ),
-            _fetch_prometheus_card_datum(
-                item,
-                "Errors now",
-                'sum(rate(server_monitor_http_requests_total{status_class=~"4xx|5xx"}[5m])) * 60',
-                display_unit="req/min",
-                warning_threshold=1,
-                critical_threshold=3,
-            ),
-        )
-    )
-    highlights.append(
-        QuickStatusCardDatum(
-            label="24h high",
-            value=_format_prometheus_unit_value(summary.max_value, getattr(item, "display_unit", None))
-            if summary is not None and summary.max_value is not None
-            else "—",
-            severity="ok",
-        )
-    )
-    return highlights
-
-
-async def _build_self_monitoring_endpoint_breakdown(item: QuickStatusItem) -> list[QuickStatusCardDatum]:
-    try:
-        rows = await fetch_prometheus_query_vector(
-            item.prometheus_url or "",
-            'topk(5, sum by (service, handler) (increase(server_monitor_http_requests_total[1h])))',
-        )
-    except PrometheusQueryError:
-        return [QuickStatusCardDatum(label="Endpoints", value="Prometheus unavailable", severity="warn")]
-    return [
-        QuickStatusCardDatum(
-            label=_format_self_monitoring_handler(row.labels),
-            value=_format_prometheus_unit_value(row.value, "req/h"),
-            severity="info" if index == 0 else "ok",
-        )
-        for index, row in enumerate(rows)
-    ]
-
-
-async def _build_self_monitoring_card_data(
-    item: QuickStatusItem,
-    *,
-    summary: QuickStatusSeriesSummary | None,
-) -> tuple[list[QuickStatusCardDatum], list[QuickStatusCardDatum]]:
-    if getattr(item, "display_variant", "tile") != "self_monitoring":
-        return [], []
-    if item.label == TOTALS_LABEL:
-        return await _build_self_monitoring_totals_highlights(item), []
-    if item.label == PEAKS_LABEL:
-        return await _build_self_monitoring_peaks_highlights(item, summary), []
-    if item.label == ENDPOINTS_LABEL:
-        return [], await _build_self_monitoring_endpoint_breakdown(item)
-    return [], []
-
-
 def _build_heartbeat_history(
     backend: object,
     snapshots: list[MetricSnapshot],
@@ -1390,23 +1225,21 @@ async def _load_latest_snapshots(
     if not backend_ids:
         return {}
 
-    ranked_snapshots = (
-        select(
-            MetricSnapshot.id.label("snapshot_id"),
-            func.row_number().over(
-                partition_by=MetricSnapshot.backend_id,
-                order_by=(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc()),
-            ).label("row_number"),
-        )
-        .where(MetricSnapshot.backend_id.in_(backend_ids))
-        .subquery()
+    # Resolve the newest snapshot per backend via MAX(id) grouped by backend.
+    # Rows are inserted in chronological order, so the highest id per backend is
+    # always the most recent reading. This lets MySQL satisfy the lookup with a
+    # covering index skip scan (one row per backend) instead of ranking the
+    # entire metric_snapshots table with a window function.
+    max_id_result = await session.execute(
+        select(MetricSnapshot.backend_id, func.max(MetricSnapshot.id)).group_by(MetricSnapshot.backend_id)
     )
+    latest_ids = [
+        max_id for backend_id, max_id in max_id_result.all() if backend_id in backend_ids and max_id is not None
+    ]
+    if not latest_ids:
+        return {}
 
-    result = await session.execute(
-        select(MetricSnapshot)
-        .join(ranked_snapshots, MetricSnapshot.id == ranked_snapshots.c.snapshot_id)
-        .where(ranked_snapshots.c.row_number == 1)
-    )
+    result = await session.execute(select(MetricSnapshot).where(MetricSnapshot.id.in_(latest_ids)))
     return {snapshot.backend_id: snapshot for snapshot in result.scalars()}
 
 
@@ -1521,23 +1354,21 @@ async def _load_latest_ping_samples(
     if not item_ids:
         return {}
 
-    ranked_samples = (
-        select(
-            QuickStatusPingSample.id.label("sample_id"),
-            func.row_number().over(
-                partition_by=QuickStatusPingSample.quick_status_item_id,
-                order_by=(QuickStatusPingSample.checked_at.desc(), QuickStatusPingSample.id.desc()),
-            ).label("row_number"),
+    # See _load_latest_snapshots: the newest sample per item is the one with the
+    # highest id, so MAX(id) grouped by item resolves via a covering index skip
+    # scan rather than ranking the whole quick_status_ping_samples table.
+    max_id_result = await session.execute(
+        select(QuickStatusPingSample.quick_status_item_id, func.max(QuickStatusPingSample.id)).group_by(
+            QuickStatusPingSample.quick_status_item_id
         )
-        .where(QuickStatusPingSample.quick_status_item_id.in_(item_ids))
-        .subquery()
     )
+    latest_ids = [
+        max_id for item_id, max_id in max_id_result.all() if item_id in item_ids and max_id is not None
+    ]
+    if not latest_ids:
+        return {}
 
-    result = await session.execute(
-        select(QuickStatusPingSample)
-        .join(ranked_samples, QuickStatusPingSample.id == ranked_samples.c.sample_id)
-        .where(ranked_samples.c.row_number == 1)
-    )
+    result = await session.execute(select(QuickStatusPingSample).where(QuickStatusPingSample.id.in_(latest_ids)))
     return {sample.quick_status_item_id: sample for sample in result.scalars()}
 
 
@@ -1548,22 +1379,22 @@ async def _load_latest_prometheus_samples(
     if not item_ids:
         return {}
 
-    ranked_samples = (
-        select(
-            QuickStatusPrometheusSample.id.label("sample_id"),
-            func.row_number().over(
-                partition_by=QuickStatusPrometheusSample.quick_status_item_id,
-                order_by=(QuickStatusPrometheusSample.checked_at.desc(), QuickStatusPrometheusSample.id.desc()),
-            ).label("row_number"),
+    # See _load_latest_snapshots: MAX(id) grouped by item resolves the newest
+    # sample per item with a covering index skip scan instead of ranking the
+    # whole quick_status_prometheus_samples table with a window function.
+    max_id_result = await session.execute(
+        select(QuickStatusPrometheusSample.quick_status_item_id, func.max(QuickStatusPrometheusSample.id)).group_by(
+            QuickStatusPrometheusSample.quick_status_item_id
         )
-        .where(QuickStatusPrometheusSample.quick_status_item_id.in_(item_ids))
-        .subquery()
     )
+    latest_ids = [
+        max_id for item_id, max_id in max_id_result.all() if item_id in item_ids and max_id is not None
+    ]
+    if not latest_ids:
+        return {}
 
     result = await session.execute(
-        select(QuickStatusPrometheusSample)
-        .join(ranked_samples, QuickStatusPrometheusSample.id == ranked_samples.c.sample_id)
-        .where(ranked_samples.c.row_number == 1)
+        select(QuickStatusPrometheusSample).where(QuickStatusPrometheusSample.id.in_(latest_ids))
     )
     return {sample.quick_status_item_id: sample for sample in result.scalars()}
 
@@ -1804,7 +1635,7 @@ async def _check_prometheus(
 async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem]:
     result = await session.execute(
         select(QuickStatusItem)
-        .options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
+        .options(selectinload(QuickStatusItem.backend))
         .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
     )
     return [item for item in result.scalars() if is_supported_quick_status_metric(getattr(item, "metric_key", None))]
@@ -1813,7 +1644,7 @@ async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem
 async def list_quick_status_items_for_backend(session: AsyncSession, backend_id: int) -> list[QuickStatusItem]:
     result = await session.execute(
         select(QuickStatusItem)
-        .options(selectinload(QuickStatusItem.backend), selectinload(QuickStatusItem.project))
+        .options(selectinload(QuickStatusItem.backend))
         .where(QuickStatusItem.backend_id == backend_id)
         .order_by(QuickStatusItem.display_order, QuickStatusItem.id)
     )
@@ -1994,7 +1825,6 @@ async def build_quick_status_tiles(
                 QuickStatusTileRead(
                     id=-backend_id,
                     backend_id=backend_id,
-                    project_id=None,
                     backend_display_order=getattr(backend, "display_order", 0),
                     backend_name=getattr(backend, "name", f"Backend #{backend_id}"),
                     label="HB",
@@ -2041,28 +1871,9 @@ async def build_quick_status_tiles(
         prometheus_series_by_item[item.id] = series_points
         prometheus_summary_by_item[item.id] = _build_prometheus_series_summary(series_points)
 
-    self_monitoring_items = [
-        item for item in items_list if getattr(item, "display_variant", "tile") == "self_monitoring"
-    ]
-    self_monitoring_card_data: dict[int, tuple[list[QuickStatusCardDatum], list[QuickStatusCardDatum]]] = {}
-    if self_monitoring_items:
-        sm_results = await asyncio.gather(
-            *[
-                _build_self_monitoring_card_data(
-                    item,
-                    summary=prometheus_summary_by_item.get(item.id),
-                )
-                for item in self_monitoring_items
-            ]
-        )
-        self_monitoring_card_data = {
-            item.id: sm_results[index] for index, item in enumerate(self_monitoring_items)
-        }
-
     for item in items_list:
         backend = _loaded_relation(item, "backend")
-        project = _loaded_relation(item, "project")
-        snapshot = latest_snapshots.get(item.backend_id) if item.backend_id is not None else None
+        snapshot = latest_snapshots.get(item.backend_id)
         ping_result = ping_results_by_item.get(item.id) if item.metric_key in _PING_METRICS else None
         prometheus_result = (
             prometheus_results_by_item.get(item.id) if item.metric_key in _PROMETHEUS_METRICS else None
@@ -2093,7 +1904,6 @@ async def build_quick_status_tiles(
                 if prometheus_result is not None and prometheus_result.sampled_at is not None
                 else (_coerce_utc(prometheus_result.checked_at) if prometheus_result is not None else None)
             )
-        highlights, breakdown = self_monitoring_card_data.get(item.id, ([], []))
         stale = _is_reference_stale(reported_at, now=window_end)
         details = _build_detail_lines(
             item,
@@ -2107,9 +1917,8 @@ async def build_quick_status_tiles(
             QuickStatusTileRead(
                 id=item.id,
                 backend_id=item.backend_id,
-                project_id=item.project_id,
-                backend_display_order=backend.display_order if backend else (project.display_order if project else 0),
-                backend_name=backend.name if backend else (project.name if project else "Project"),
+                backend_display_order=backend.display_order if backend else 0,
+                backend_name=backend.name if backend else f"Backend #{item.backend_id}",
                 label=item.label,
                 metric_key=item.metric_key,
                 display_variant=getattr(item, "display_variant", "tile"),
@@ -2142,8 +1951,6 @@ async def build_quick_status_tiles(
                 ),
                 series=prometheus_series_by_item.get(item.id, []),
                 series_summary=prometheus_summary_by_item.get(item.id),
-                highlights=highlights,
-                breakdown=breakdown,
                 reported_at=reported_at,
                 details=details,
             )
@@ -2233,7 +2040,6 @@ async def build_quick_status_tile_summaries(
                 QuickStatusTileRead(
                     id=-backend_id,
                     backend_id=backend_id,
-                    project_id=None,
                     backend_display_order=getattr(backend, "display_order", 0),
                     backend_name=getattr(backend, "name", f"Backend #{backend_id}"),
                     label="HB",
@@ -2250,8 +2056,7 @@ async def build_quick_status_tile_summaries(
 
     for item in items_list:
         backend = _loaded_relation(item, "backend")
-        project = _loaded_relation(item, "project")
-        snapshot = latest_snapshots_by_backend.get(item.backend_id) if item.backend_id is not None else None
+        snapshot = latest_snapshots_by_backend.get(item.backend_id)
         ping_result = ping_results_by_item.get(item.id) if item.metric_key in _PING_METRICS else None
         prometheus_result = (
             prometheus_results_by_item.get(item.id) if item.metric_key in _PROMETHEUS_METRICS else None
@@ -2288,9 +2093,8 @@ async def build_quick_status_tile_summaries(
             QuickStatusTileRead(
                 id=item.id,
                 backend_id=item.backend_id,
-                project_id=item.project_id,
-                backend_display_order=backend.display_order if backend else (project.display_order if project else 0),
-                backend_name=backend.name if backend else (project.name if project else "Project"),
+                backend_display_order=backend.display_order if backend else 0,
+                backend_name=backend.name if backend else f"Backend #{item.backend_id}",
                 label=item.label,
                 metric_key=item.metric_key,
                 display_variant=getattr(item, "display_variant", "tile"),
@@ -2360,7 +2164,6 @@ def detect_quick_status_transitions_for_snapshot(
 async def create_quick_status_item(session: AsyncSession, payload: QuickStatusItemCreate) -> QuickStatusItem:
     item = QuickStatusItem(
         backend_id=payload.backend_id,
-        project_id=payload.project_id,
         label=payload.label,
         metric_key=payload.metric_key,
         mount_path=payload.mount_path,
@@ -2391,7 +2194,6 @@ async def update_quick_status_item(
     payload: QuickStatusItemCreate,
 ) -> QuickStatusItem:
     item.backend_id = payload.backend_id
-    item.project_id = payload.project_id
     item.label = payload.label
     item.metric_key = payload.metric_key
     item.mount_path = payload.mount_path

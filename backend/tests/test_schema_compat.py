@@ -102,3 +102,53 @@ def test_migrate_legacy_history_tables_raises_when_rows_remain_unmigrated(monkey
 
     assert len(connection.executed_sql) == 1
     assert "INSERT INTO `backend_monitor`.`metric_snapshots`" in connection.executed_sql[0]
+
+
+@pytest.mark.parametrize("dialect_name", ["sqlite", "postgresql"])
+def test_remove_legacy_project_schema_is_noop_for_non_mysql(dialect_name):
+    connection = _FakeConnection(dialect_name=dialect_name)
+
+    schema_compat.remove_legacy_project_schema(connection)
+
+    assert connection.executed_sql == []
+
+
+def test_remove_legacy_project_schema_removes_project_items_and_tables(monkeypatch):
+    connection = _FakeConnection()
+
+    monkeypatch.setattr(
+        schema_compat,
+        "_resolved_schemas",
+        lambda connection: ("server_monitor", "backend_monitor"),
+    )
+    monkeypatch.setattr(schema_compat, "_has_table", lambda connection, table_name, schema=None: True)
+    monkeypatch.setattr(
+        schema_compat,
+        "_get_columns",
+        lambda connection, table_name, schema=None: {"id", "backend_id", "project_id"},
+    )
+    monkeypatch.setattr(
+        schema_compat,
+        "_get_foreign_keys",
+        lambda connection, table_name, schema=None: [
+            {"name": "quick_status_items_ibfk_2", "constrained_columns": ["project_id"]}
+        ],
+    )
+    monkeypatch.setattr(
+        schema_compat,
+        "inspect",
+        lambda connection: SimpleNamespace(
+            get_columns=lambda table_name, schema=None: [{"name": "backend_id", "nullable": True}]
+        ),
+    )
+
+    schema_compat.remove_legacy_project_schema(connection)
+
+    sql = "\n".join(connection.executed_sql)
+    assert "DELETE FROM `backend_monitor`.`quick_status_ping_samples`" in sql
+    assert "DELETE FROM `backend_monitor`.`quick_status_prometheus_samples`" in sql
+    assert "DELETE FROM `server_monitor`.`quick_status_items` WHERE backend_id IS NULL" in sql
+    assert "DROP FOREIGN KEY `quick_status_items_ibfk_2`" in sql
+    assert "DROP COLUMN project_id" in sql
+    assert "MODIFY COLUMN backend_id INT NOT NULL" in sql
+    assert "DROP TABLE `server_monitor`.`projects`" in sql

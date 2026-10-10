@@ -359,11 +359,11 @@ async def _persist_site_sample(
     site_monitor: SiteMonitor,
     result: SiteCheckResult,
     latest_sample: SiteMonitorSample | None,
+    retention_window: timedelta,
 ) -> SiteMonitorSample | None:
     if latest_sample is not None and _coerce_utc(latest_sample.checked_at) >= result.checked_at:
         return None
 
-    retention_window = await metric_retention_timedelta(session)
     cutoff = result.checked_at - retention_window
     await session.execute(
         SiteMonitorSample.__table__.delete()
@@ -497,17 +497,36 @@ async def refresh_due_site_monitor_samples(
 
     check_time = _coerce_utc(now or datetime.now(tz=timezone.utc))
     latest_samples = await _load_latest_samples(session, {item.id for item in items_list})
+    # Resolve the retention window once per tick (this may commit to seed the
+    # default system settings) so the per-monitor savepoints below only wrap
+    # the sample writes themselves.
+    retention_window = await metric_retention_timedelta(session)
     for item in items_list:
         latest_sample = latest_samples.get(item.id)
         if not force and not _is_due(item, latest_sample, check_time):
             continue
         try:
             result = await _run_site_check(item, check_time)
-            persisted_sample = await _persist_site_sample(session, item, result, latest_sample)
         except Exception:
-            await session.rollback()
             logger.exception(
                 "Site monitor check failed during polling tick: id=%s name=%r check_type=%s target=%r",
+                item.id,
+                item.name,
+                item.check_type,
+                item.target,
+            )
+            continue
+        try:
+            # Isolate each monitor's writes in a savepoint so a single failed
+            # persist cannot poison the session or discard samples already
+            # stored for other monitors during the same tick.
+            async with session.begin_nested():
+                persisted_sample = await _persist_site_sample(
+                    session, item, result, latest_sample, retention_window
+                )
+        except Exception:
+            logger.exception(
+                "Failed to persist site monitor sample: id=%s name=%r check_type=%s target=%r",
                 item.id,
                 item.name,
                 item.check_type,

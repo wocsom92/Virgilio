@@ -1,0 +1,3206 @@
+openapi: 3.1.0
+info:
+  title: Server Monitor API
+  version: 0.1.0
+paths:
+  /auth/status:
+    get:
+      tags:
+      - auth
+      summary: Auth Status
+      operationId: auth_status_auth_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthStatusResponse'
+  /auth/bootstrap:
+    post:
+      tags:
+      - auth
+      summary: Bootstrap Admin
+      operationId: bootstrap_admin_auth_bootstrap_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BootstrapRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/login:
+    post:
+      tags:
+      - auth
+      summary: Login
+      operationId: login_auth_login_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /auth/me:
+    get:
+      tags:
+      - auth
+      summary: Get Me
+      operationId: get_me_auth_me_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+      security:
+      - OAuth2PasswordBearer: []
+  /auth/users:
+    get:
+      tags:
+      - auth
+      summary: List Users
+      operationId: list_users_auth_users_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/UserRead'
+                type: array
+                title: Response List Users Auth Users Get
+      security:
+      - OAuth2PasswordBearer: []
+    post:
+      tags:
+      - auth
+      summary: Create User
+      operationId: create_user_auth_users_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /auth/users/{user_id}:
+    delete:
+      tags:
+      - auth
+      summary: Delete User
+      operationId: delete_user_auth_users__user_id__delete
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: User Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /backends/:
+    get:
+      tags:
+      - backends
+      summary: List Backends
+      operationId: list_backends_backends__get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/MonitoredBackendRead'
+                type: array
+                title: Response List Backends Backends  Get
+      security:
+      - OAuth2PasswordBearer: []
+    post:
+      tags:
+      - backends
+      summary: Create Backend
+      operationId: create_backend_backends__post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MonitoredBackendCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoredBackendRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /backends/with-latest:
+    get:
+      tags:
+      - backends
+      summary: List Backends With Latest
+      operationId: list_backends_with_latest_backends_with_latest_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/BackendWithLatestSnapshot'
+                type: array
+                title: Response List Backends With Latest Backends With Latest Get
+      security:
+      - OAuth2PasswordBearer: []
+  /backends/{backend_id}:
+    get:
+      tags:
+      - backends
+      summary: Get Backend
+      operationId: get_backend_backends__backend_id__get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoredBackendRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    put:
+      tags:
+      - backends
+      summary: Update Backend
+      operationId: update_backend_backends__backend_id__put
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MonitoredBackendUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MonitoredBackendRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - backends
+      summary: Delete Backend
+      operationId: delete_backend_backends__backend_id__delete
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /backends/{backend_id}/refresh:
+    post:
+      tags:
+      - backends
+      summary: Refresh Backend Metrics
+      operationId: refresh_backend_metrics_backends__backend_id__refresh_post
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /backends/{backend_id}/reboot:
+    post:
+      tags:
+      - backends
+      summary: Reboot Monitor Host
+      operationId: reboot_monitor_host_backends__backend_id__reboot_post
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Reboot Monitor Host Backends  Backend Id  Reboot Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /backends/{backend_id}/mounts:
+    get:
+      tags:
+      - backends
+      summary: List Backend Mounts
+      operationId: list_backend_mounts_backends__backend_id__mounts_get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+                title: Response List Backend Mounts Backends  Backend Id  Mounts Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /metrics/{backend_id}:
+    post:
+      tags:
+      - metrics
+      summary: Ingest Metrics
+      operationId: ingest_metrics_metrics__backend_id__post
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      - name: Authorization
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Authorization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MetricSnapshotCreate'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /metrics/{backend_id}/latest:
+    get:
+      tags:
+      - metrics
+      summary: Get Latest Snapshot
+      operationId: get_latest_snapshot_metrics__backend_id__latest_get
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsIngestResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /dashboard/:
+    get:
+      tags:
+      - dashboard
+      summary: Fetch Dashboard Data
+      operationId: fetch_dashboard_data_dashboard__get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/BackendWithLatestSnapshot'
+                type: array
+                title: Response Fetch Dashboard Data Dashboard  Get
+      security:
+      - OAuth2PasswordBearer: []
+  /dashboard/projects:
+    get:
+      tags:
+      - dashboard
+      summary: Fetch Dashboard Projects
+      operationId: fetch_dashboard_projects_dashboard_projects_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ProjectRead'
+                type: array
+                title: Response Fetch Dashboard Projects Dashboard Projects Get
+      security:
+      - OAuth2PasswordBearer: []
+  /dashboard/quick-status:
+    get:
+      tags:
+      - dashboard
+      summary: Fetch Quick Status Tiles
+      operationId: fetch_quick_status_tiles_dashboard_quick_status_get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/QuickStatusTileRead'
+                title: Response Fetch Quick Status Tiles Dashboard Quick Status Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /dashboard/quick-status/history:
+    get:
+      tags:
+      - dashboard
+      summary: Fetch Quick Status Tile History
+      operationId: fetch_quick_status_tile_history_dashboard_quick_status_history_get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: tile_ids
+        in: query
+        required: true
+        schema:
+          type: array
+          items:
+            type: integer
+          title: Tile Ids
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/QuickStatusTileRead'
+                title: Response Fetch Quick Status Tile History Dashboard Quick Status
+                  History Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /dashboard/quick-status/{tile_id}/detail:
+    get:
+      tags:
+      - dashboard
+      summary: Fetch Quick Status Tile Detail
+      operationId: fetch_quick_status_tile_detail_dashboard_quick_status__tile_id__detail_get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: tile_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Tile Id
+      - name: project_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            minimum: 1
+          - type: 'null'
+          title: Project Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickStatusTileRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /dashboard/site-monitors:
+    get:
+      tags:
+      - dashboard
+      summary: Fetch Site Monitor Statuses
+      operationId: fetch_site_monitor_statuses_dashboard_site_monitors_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/SiteMonitorStatusRead'
+                type: array
+                title: Response Fetch Site Monitor Statuses Dashboard Site Monitors
+                  Get
+      security:
+      - OAuth2PasswordBearer: []
+  /dashboard/{backend_id}/series:
+    get:
+      tags:
+      - dashboard
+      summary: Fetch Backend Series
+      operationId: fetch_backend_series_dashboard__backend_id__series_get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: backend_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Backend Id
+      - name: range_name
+        in: query
+        required: false
+        schema:
+          type: string
+          default: hourly
+          title: Range Name
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricSeriesResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /notifications/:
+    get:
+      tags:
+      - notifications
+      summary: List Notifications
+      operationId: list_notifications_notifications__get
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          default: 1
+          title: Page
+      - name: page_size
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Page Size
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationCenterResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /notifications/read-all:
+    post:
+      tags:
+      - notifications
+      summary: Mark All Notifications Read
+      operationId: mark_all_notifications_read_notifications_read_all_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  anyOf:
+                  - type: integer
+                  - type: string
+                type: object
+                title: Response Mark All Notifications Read Notifications Read All
+                  Post
+      security:
+      - OAuth2PasswordBearer: []
+  /system/reboot:
+    post:
+      tags:
+      - system
+      summary: Reboot Host
+      operationId: reboot_host_system_reboot_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RebootRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Reboot Host System Reboot Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /system/db-size:
+    get:
+      tags:
+      - system
+      summary: Get Db Size
+      operationId: get_db_size_system_db_size_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Get Db Size System Db Size Get
+      security:
+      - OAuth2PasswordBearer: []
+  /system/retention:
+    get:
+      tags:
+      - system
+      summary: Get Retention Settings
+      operationId: get_retention_settings_system_retention_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionSettings'
+      security:
+      - OAuth2PasswordBearer: []
+    put:
+      tags:
+      - system
+      summary: Update Retention Settings
+      operationId: update_retention_settings_system_retention_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetentionSettings'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetentionSettings'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /system/auth-session:
+    get:
+      tags:
+      - system
+      summary: Get Auth Session Settings
+      operationId: get_auth_session_settings_system_auth_session_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionSettings'
+      security:
+      - OAuth2PasswordBearer: []
+    put:
+      tags:
+      - system
+      summary: Update Auth Session Settings
+      operationId: update_auth_session_settings_system_auth_session_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuthSessionSettings'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionSettings'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /system/projects:
+    get:
+      tags:
+      - system
+      summary: List Projects
+      operationId: list_projects_system_projects_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/ProjectRead'
+                type: array
+                title: Response List Projects System Projects Get
+      security:
+      - OAuth2PasswordBearer: []
+    post:
+      tags:
+      - system
+      summary: Create Project
+      operationId: create_project_system_projects_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /system/projects/{project_id}:
+    put:
+      tags:
+      - system
+      summary: Update Project
+      operationId: update_project_system_projects__project_id__put
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Project Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectUpdate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - system
+      summary: Delete Project
+      operationId: delete_project_system_projects__project_id__delete
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: project_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Project Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /system/quick-status:
+    get:
+      tags:
+      - system
+      summary: List Quick Status Items
+      operationId: list_quick_status_items_system_quick_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/QuickStatusItemRead'
+                type: array
+                title: Response List Quick Status Items System Quick Status Get
+      security:
+      - OAuth2PasswordBearer: []
+    post:
+      tags:
+      - system
+      summary: Create Quick Status
+      operationId: create_quick_status_system_quick_status_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuickStatusItemCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickStatusItemRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /system/quick-status/{item_id}:
+    put:
+      tags:
+      - system
+      summary: Update Quick Status
+      operationId: update_quick_status_system_quick_status__item_id__put
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuickStatusItemCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuickStatusItemRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - system
+      summary: Delete Quick Status
+      operationId: delete_quick_status_system_quick_status__item_id__delete
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Item Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /system/site-monitors:
+    get:
+      tags:
+      - system
+      summary: List Site Monitor Items
+      operationId: list_site_monitor_items_system_site_monitors_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/SiteMonitorRead'
+                type: array
+                title: Response List Site Monitor Items System Site Monitors Get
+      security:
+      - OAuth2PasswordBearer: []
+    post:
+      tags:
+      - system
+      summary: Create Site Monitor Item
+      operationId: create_site_monitor_item_system_site_monitors_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteMonitorCreate'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteMonitorRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /system/site-monitors/{item_id}:
+    put:
+      tags:
+      - system
+      summary: Update Site Monitor Item
+      operationId: update_site_monitor_item_system_site_monitors__item_id__put
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Item Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SiteMonitorCreate'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SiteMonitorRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - system
+      summary: Delete Site Monitor Item
+      operationId: delete_site_monitor_item_system_site_monitors__item_id__delete
+      security:
+      - OAuth2PasswordBearer: []
+      parameters:
+      - name: item_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Item Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /telegram/settings:
+    get:
+      tags:
+      - telegram
+      summary: Read Settings
+      operationId: read_settings_telegram_settings_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramSettingsRead'
+      security:
+      - OAuth2PasswordBearer: []
+    put:
+      tags:
+      - telegram
+      summary: Update Settings
+      operationId: update_settings_telegram_settings_put
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramSettingsUpdate'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelegramSettingsRead'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - OAuth2PasswordBearer: []
+  /telegram/send/stats:
+    post:
+      tags:
+      - telegram
+      summary: Send Stats Via Telegram
+      operationId: send_stats_via_telegram_telegram_send_stats_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Send Stats Via Telegram Telegram Send Stats Post
+      security:
+      - OAuth2PasswordBearer: []
+  /telegram/send/warn:
+    post:
+      tags:
+      - telegram
+      summary: Send Warnings Via Telegram
+      operationId: send_warnings_via_telegram_telegram_send_warn_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Send Warnings Via Telegram Telegram Send Warn Post
+      security:
+      - OAuth2PasswordBearer: []
+  /telegram/webhook:
+    post:
+      tags:
+      - telegram
+      summary: Telegram Webhook
+      operationId: telegram_webhook_telegram_webhook_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelegramUpdate'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Telegram Webhook Telegram Webhook Post
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /healthz:
+    get:
+      tags:
+      - meta
+      summary: Healthcheck
+      operationId: healthcheck_healthz_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Healthcheck Healthz Get
+  /version:
+    get:
+      tags:
+      - meta
+      summary: Version
+      operationId: version_version_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: string
+                type: object
+                title: Response Version Version Get
+components:
+  schemas:
+    AuthRole:
+      type: string
+      enum:
+      - admin
+      - viewer
+      title: AuthRole
+    AuthSessionSettings:
+      properties:
+        auth_session_minutes:
+          type: integer
+          maximum: 43200.0
+          minimum: 15.0
+          title: Auth Session Minutes
+          description: Number of minutes before access tokens expire
+      type: object
+      required:
+      - auth_session_minutes
+      title: AuthSessionSettings
+    AuthStatusResponse:
+      properties:
+        needs_bootstrap:
+          type: boolean
+          title: Needs Bootstrap
+      type: object
+      required:
+      - needs_bootstrap
+      title: AuthStatusResponse
+    BackendWithLatestSnapshot:
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          title: Name
+        base_url:
+          type: string
+          maxLength: 2083
+          minLength: 1
+          format: uri
+          title: Base Url
+        api_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Token
+        is_active:
+          type: boolean
+          title: Is Active
+          default: true
+        display_order:
+          type: integer
+          title: Display Order
+          default: 0
+        poll_interval_seconds:
+          type: integer
+          minimum: 30.0
+          title: Poll Interval Seconds
+          description: Polling cadence in seconds (minimum 30)
+          default: 60
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        selected_metrics:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Selected Metrics
+        id:
+          type: integer
+          title: Id
+        last_seen_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Seen At
+        last_warning:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Warning
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        latest_snapshot:
+          anyOf:
+          - $ref: '#/components/schemas/MetricSnapshotRead'
+          - type: 'null'
+      type: object
+      required:
+      - name
+      - base_url
+      - id
+      - created_at
+      - updated_at
+      title: BackendWithLatestSnapshot
+    BootstrapRequest:
+      properties:
+        username:
+          type: string
+          maxLength: 120
+          minLength: 3
+          title: Username
+        password:
+          type: string
+          minLength: 8
+          title: Password
+      type: object
+      required:
+      - username
+      - password
+      title: BootstrapRequest
+    CPULoad:
+      properties:
+        one:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: One
+          description: 1 minute load average
+        five:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Five
+          description: 5 minute load average
+        fifteen:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Fifteen
+          description: 15 minute load average
+      type: object
+      title: CPULoad
+    DiskTemperature:
+      properties:
+        device:
+          type: string
+          title: Device
+        temperature_c:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Temperature C
+      type: object
+      required:
+      - device
+      title: DiskTemperature
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    LoginRequest:
+      properties:
+        username:
+          type: string
+          maxLength: 120
+          minLength: 3
+          title: Username
+        password:
+          type: string
+          minLength: 6
+          title: Password
+      type: object
+      required:
+      - username
+      - password
+      title: LoginRequest
+    MetricSeriesPoint:
+      properties:
+        reported_at:
+          type: string
+          format: date-time
+          title: Reported At
+        cpu_temperature_c:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Cpu Temperature C
+        ram_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Ram Used Percent
+        memory_available_gb:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Memory Available Gb
+        swap_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Swap Used Percent
+        disk_usage_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Disk Usage Percent
+        cpu_load:
+          anyOf:
+          - $ref: '#/components/schemas/CPULoad'
+          - type: 'null'
+        mounted_usage:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/MountedVolume'
+            type: array
+          - type: 'null'
+          title: Mounted Usage
+        disk_temperatures:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/DiskTemperature'
+            type: array
+          - type: 'null'
+          title: Disk Temperatures
+        network_bps:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Network Bps
+      type: object
+      required:
+      - reported_at
+      title: MetricSeriesPoint
+    MetricSeriesResponse:
+      properties:
+        backend_id:
+          type: integer
+          title: Backend Id
+        range:
+          type: string
+          title: Range
+        window_offset:
+          type: integer
+          title: Window Offset
+        window_start:
+          type: string
+          format: date-time
+          title: Window Start
+        window_end:
+          type: string
+          format: date-time
+          title: Window End
+        previous_offset_with_data:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Previous Offset With Data
+        next_offset_with_data:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Next Offset With Data
+        points:
+          items:
+            $ref: '#/components/schemas/MetricSeriesPoint'
+          type: array
+          title: Points
+        reboot_markers:
+          anyOf:
+          - items:
+              type: string
+              format: date-time
+            type: array
+          - type: 'null'
+          title: Reboot Markers
+      type: object
+      required:
+      - backend_id
+      - range
+      - window_offset
+      - window_start
+      - window_end
+      - points
+      title: MetricSeriesResponse
+    MetricSnapshotCreate:
+      properties:
+        reported_at:
+          type: string
+          format: date-time
+          title: Reported At
+        cpu_temperature_c:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Cpu Temperature C
+        ram_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Ram Used Percent
+        total_ram_gb:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Total Ram Gb
+        memory_available_gb:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Memory Available Gb
+        swap_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Swap Used Percent
+        docker_container_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Docker Container Count
+        docker_running_containers:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Docker Running Containers
+        disk_usage_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Disk Usage Percent
+        mounted_usage:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/MountedVolume'
+            type: array
+          - type: 'null'
+          title: Mounted Usage
+        cpu_load:
+          anyOf:
+          - $ref: '#/components/schemas/CPULoad'
+          - type: 'null'
+        network_counters:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/NetworkCounter'
+            type: array
+          - type: 'null'
+          title: Network Counters
+        disk_temperatures:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/DiskTemperature'
+            type: array
+          - type: 'null'
+          title: Disk Temperatures
+        monitor_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Monitor Version
+        os_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Os Version
+        uptime_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Uptime Seconds
+        ssh_pubkey_auth_line:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh Pubkey Auth Line
+        ssh_password_auth_line:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh Password Auth Line
+        ssh_kbd_interactive_auth_line:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh Kbd Interactive Auth Line
+        ssh_permit_root_login_line:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ssh Permit Root Login Line
+        warnings:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Warnings
+        raw_payload:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Raw Payload
+      type: object
+      title: MetricSnapshotCreate
+    MetricSnapshotRead:
+      properties:
+        reported_at:
+          type: string
+          format: date-time
+          title: Reported At
+        cpu_temperature_c:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Cpu Temperature C
+        ram_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Ram Used Percent
+        total_ram_gb:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Total Ram Gb
+        memory_available_gb:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Memory Available Gb
+        swap_used_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Swap Used Percent
+        docker_container_count:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Docker Container Count
+        docker_running_containers:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Docker Running Containers
+        disk_usage_percent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Disk Usage Percent
+        mounted_usage:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/MountedVolume'
+            type: array
+          - type: 'null'
+          title: Mounted Usage
+        cpu_load:
+          anyOf:
+          - $ref: '#/components/schemas/CPULoad'
+          - type: 'null'
+        network_counters:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/NetworkCounter'
+            type: array
+          - type: 'null'
+          title: Network Counters
+        disk_temperatures:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/DiskTemperature'
+            type: array
+          - type: 'null'
+          title: Disk Temperatures
+        monitor_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Monitor Version
+        os_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Os Version
+        uptime_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Uptime Seconds
+        warnings:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Warnings
+        raw_payload:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Raw Payload
+        id:
+          type: integer
+          title: Id
+        backend_id:
+          type: integer
+          title: Backend Id
+      type: object
+      required:
+      - reported_at
+      - id
+      - backend_id
+      title: MetricSnapshotRead
+    MetricsIngestResponse:
+      properties:
+        snapshot:
+          $ref: '#/components/schemas/MetricSnapshotRead'
+      type: object
+      required:
+      - snapshot
+      title: MetricsIngestResponse
+    MonitoredBackendCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          title: Name
+        base_url:
+          type: string
+          maxLength: 2083
+          minLength: 1
+          format: uri
+          title: Base Url
+        api_token:
+          type: string
+          minLength: 10
+          title: Api Token
+        is_active:
+          type: boolean
+          title: Is Active
+          default: true
+        display_order:
+          type: integer
+          title: Display Order
+          default: 0
+        poll_interval_seconds:
+          type: integer
+          minimum: 30.0
+          title: Poll Interval Seconds
+          description: Polling cadence in seconds (minimum 30)
+          default: 60
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        selected_metrics:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Selected Metrics
+      type: object
+      required:
+      - name
+      - base_url
+      - api_token
+      title: MonitoredBackendCreate
+    MonitoredBackendRead:
+      properties:
+        name:
+          type: string
+          maxLength: 100
+          title: Name
+        base_url:
+          type: string
+          maxLength: 2083
+          minLength: 1
+          format: uri
+          title: Base Url
+        api_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Token
+        is_active:
+          type: boolean
+          title: Is Active
+          default: true
+        display_order:
+          type: integer
+          title: Display Order
+          default: 0
+        poll_interval_seconds:
+          type: integer
+          minimum: 30.0
+          title: Poll Interval Seconds
+          description: Polling cadence in seconds (minimum 30)
+          default: 60
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        selected_metrics:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Selected Metrics
+        id:
+          type: integer
+          title: Id
+        last_seen_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Seen At
+        last_warning:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Warning
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - name
+      - base_url
+      - id
+      - created_at
+      - updated_at
+      title: MonitoredBackendRead
+    MonitoredBackendUpdate:
+      properties:
+        name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Name
+        base_url:
+          anyOf:
+          - type: string
+            maxLength: 2083
+            minLength: 1
+            format: uri
+          - type: 'null'
+          title: Base Url
+        api_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Api Token
+        is_active:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          title: Is Active
+        display_order:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Display Order
+        poll_interval_seconds:
+          anyOf:
+          - type: integer
+            minimum: 30.0
+          - type: 'null'
+          title: Poll Interval Seconds
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        selected_metrics:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Selected Metrics
+      type: object
+      title: MonitoredBackendUpdate
+    MountedVolume:
+      properties:
+        mount_point:
+          type: string
+          title: Mount Point
+          examples:
+          - /mnt/storage
+        total_gb:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Total Gb
+        used_percent:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: 'null'
+          title: Used Percent
+      type: object
+      required:
+      - mount_point
+      title: MountedVolume
+    NetworkCounter:
+      properties:
+        interface:
+          type: string
+          title: Interface
+        bytes_sent:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Bytes Sent
+        bytes_recv:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Bytes Recv
+      type: object
+      required:
+      - interface
+      title: NetworkCounter
+    NotificationCenterResponse:
+      properties:
+        unread_count:
+          type: integer
+          title: Unread Count
+        page:
+          type: integer
+          title: Page
+        page_size:
+          type: integer
+          title: Page Size
+        total_items:
+          type: integer
+          title: Total Items
+        total_pages:
+          type: integer
+          title: Total Pages
+        items:
+          items:
+            $ref: '#/components/schemas/NotificationEventRead'
+          type: array
+          title: Items
+      type: object
+      required:
+      - unread_count
+      - page
+      - page_size
+      - total_items
+      - total_pages
+      - items
+      title: NotificationCenterResponse
+    NotificationEventRead:
+      properties:
+        id:
+          type: integer
+          title: Id
+        channel:
+          type: string
+          title: Channel
+        category:
+          type: string
+          title: Category
+        severity:
+          type: string
+          title: Severity
+        title:
+          type: string
+          title: Title
+        body:
+          type: string
+          title: Body
+        backend_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Backend Id
+        backend_name:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Backend Name
+        delivery_status:
+          type: string
+          title: Delivery Status
+        target:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Target
+        error_message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Error Message
+        read_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Read At
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - id
+      - channel
+      - category
+      - severity
+      - title
+      - body
+      - delivery_status
+      - created_at
+      - updated_at
+      title: NotificationEventRead
+    ProjectCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Name
+        display_order:
+          type: integer
+          minimum: 0.0
+          title: Display Order
+          default: 0
+      type: object
+      required:
+      - name
+      title: ProjectCreate
+    ProjectRead:
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Name
+        display_order:
+          type: integer
+          minimum: 0.0
+          title: Display Order
+          default: 0
+        id:
+          type: integer
+          title: Id
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - name
+      - id
+      - created_at
+      - updated_at
+      title: ProjectRead
+    ProjectUpdate:
+      properties:
+        name:
+          anyOf:
+          - type: string
+            maxLength: 120
+            minLength: 1
+          - type: 'null'
+          title: Name
+        display_order:
+          anyOf:
+          - type: integer
+            minimum: 0.0
+          - type: 'null'
+          title: Display Order
+      type: object
+      title: ProjectUpdate
+    QuickStatusCardDatum:
+      properties:
+        label:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Label
+        value:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Value
+        severity:
+          type: string
+          enum:
+          - ok
+          - info
+          - warn
+          - critical
+          title: Severity
+          default: ok
+      type: object
+      required:
+      - label
+      - value
+      title: QuickStatusCardDatum
+    QuickStatusDetailLine:
+      properties:
+        text:
+          type: string
+          minLength: 1
+          title: Text
+        severity:
+          type: string
+          enum:
+          - ok
+          - warn
+          - critical
+          title: Severity
+      type: object
+      required:
+      - text
+      - severity
+      title: QuickStatusDetailLine
+    QuickStatusItemCreate:
+      properties:
+        backend_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Backend Id
+        project_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Project Id
+        label:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Label
+        metric_key:
+          type: string
+          enum:
+          - disk_usage_percent
+          - ram_used_percent
+          - memory_available_gb
+          - swap_used_percent
+          - docker_container_count
+          - cpu_temperature_c
+          - cpu_load_one
+          - cpu_load_five
+          - cpu_load_fifteen
+          - mount_used_percent
+          - mount_available_gb
+          - last_restart
+          - ping_result
+          - ping_delay_ms
+          - ssh_last_successful_login
+          - ssh_last_unsuccessful_attempt
+          - ssh_status
+          - telegram_bot_status
+          - wifi_status
+          - vpn_status
+          - prometheus_query
+          title: Metric Key
+        mount_path:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Mount Path
+        lower_warning_threshold:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Lower Warning Threshold
+        lower_critical_threshold:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Lower Critical Threshold
+        warning_threshold:
+          type: number
+          minimum: 0.0
+          title: Warning Threshold
+        critical_threshold:
+          type: number
+          minimum: 0.0
+          title: Critical Threshold
+        ping_endpoint:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Ping Endpoint
+        ping_interval_seconds:
+          type: integer
+          maximum: 86400.0
+          minimum: 5.0
+          title: Ping Interval Seconds
+          default: 60
+        prometheus_url:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: Prometheus Url
+        prometheus_query:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Prometheus Query
+        prometheus_interval_seconds:
+          type: integer
+          maximum: 86400.0
+          minimum: 5.0
+          title: Prometheus Interval Seconds
+          default: 60
+        prometheus_threshold_direction:
+          type: string
+          enum:
+          - higher
+          - lower
+          title: Prometheus Threshold Direction
+          default: higher
+        display_variant:
+          type: string
+          enum:
+          - tile
+          - graph
+          - temperature
+          - humidity
+          - self_monitoring
+          title: Display Variant
+          default: tile
+        display_unit:
+          anyOf:
+          - type: string
+            maxLength: 16
+          - type: 'null'
+          title: Display Unit
+        show_updated_age:
+          type: boolean
+          title: Show Updated Age
+          default: false
+        display_order:
+          type: integer
+          minimum: 0.0
+          title: Display Order
+          default: 0
+      type: object
+      required:
+      - label
+      - metric_key
+      - warning_threshold
+      - critical_threshold
+      title: QuickStatusItemCreate
+    QuickStatusItemRead:
+      properties:
+        backend_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Backend Id
+        project_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Project Id
+        label:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Label
+        metric_key:
+          type: string
+          enum:
+          - disk_usage_percent
+          - ram_used_percent
+          - memory_available_gb
+          - swap_used_percent
+          - docker_container_count
+          - cpu_temperature_c
+          - cpu_load_one
+          - cpu_load_five
+          - cpu_load_fifteen
+          - mount_used_percent
+          - mount_available_gb
+          - last_restart
+          - ping_result
+          - ping_delay_ms
+          - ssh_last_successful_login
+          - ssh_last_unsuccessful_attempt
+          - ssh_status
+          - telegram_bot_status
+          - wifi_status
+          - vpn_status
+          - prometheus_query
+          title: Metric Key
+        mount_path:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Mount Path
+        lower_warning_threshold:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Lower Warning Threshold
+        lower_critical_threshold:
+          anyOf:
+          - type: number
+            minimum: 0.0
+          - type: 'null'
+          title: Lower Critical Threshold
+        warning_threshold:
+          type: number
+          minimum: 0.0
+          title: Warning Threshold
+        critical_threshold:
+          type: number
+          minimum: 0.0
+          title: Critical Threshold
+        ping_endpoint:
+          anyOf:
+          - type: string
+            maxLength: 255
+          - type: 'null'
+          title: Ping Endpoint
+        ping_interval_seconds:
+          type: integer
+          maximum: 86400.0
+          minimum: 5.0
+          title: Ping Interval Seconds
+          default: 60
+        prometheus_url:
+          anyOf:
+          - type: string
+            maxLength: 500
+          - type: 'null'
+          title: Prometheus Url
+        prometheus_query:
+          anyOf:
+          - type: string
+            minLength: 1
+          - type: 'null'
+          title: Prometheus Query
+        prometheus_interval_seconds:
+          type: integer
+          maximum: 86400.0
+          minimum: 5.0
+          title: Prometheus Interval Seconds
+          default: 60
+        prometheus_threshold_direction:
+          type: string
+          enum:
+          - higher
+          - lower
+          title: Prometheus Threshold Direction
+          default: higher
+        display_variant:
+          type: string
+          enum:
+          - tile
+          - graph
+          - temperature
+          - humidity
+          - self_monitoring
+          title: Display Variant
+          default: tile
+        display_unit:
+          anyOf:
+          - type: string
+            maxLength: 16
+          - type: 'null'
+          title: Display Unit
+        show_updated_age:
+          type: boolean
+          title: Show Updated Age
+          default: false
+        display_order:
+          type: integer
+          minimum: 0.0
+          title: Display Order
+          default: 0
+        id:
+          type: integer
+          title: Id
+      type: object
+      required:
+      - label
+      - metric_key
+      - warning_threshold
+      - critical_threshold
+      - id
+      title: QuickStatusItemRead
+    QuickStatusSeriesPoint:
+      properties:
+        recorded_at:
+          type: string
+          format: date-time
+          title: Recorded At
+        value:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Value
+      type: object
+      required:
+      - recorded_at
+      title: QuickStatusSeriesPoint
+    QuickStatusSeriesSummary:
+      properties:
+        min_value:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Min Value
+        max_value:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Max Value
+        average_value:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Average Value
+        delta_value:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Delta Value
+      type: object
+      title: QuickStatusSeriesSummary
+    QuickStatusTileRead:
+      properties:
+        id:
+          type: integer
+          title: Id
+        backend_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Backend Id
+        project_id:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Project Id
+        backend_display_order:
+          type: integer
+          title: Backend Display Order
+        backend_name:
+          type: string
+          title: Backend Name
+        label:
+          type: string
+          title: Label
+        metric_key:
+          type: string
+          enum:
+          - disk_usage_percent
+          - ram_used_percent
+          - memory_available_gb
+          - swap_used_percent
+          - docker_container_count
+          - cpu_temperature_c
+          - cpu_load_one
+          - cpu_load_five
+          - cpu_load_fifteen
+          - mount_used_percent
+          - mount_available_gb
+          - last_restart
+          - ping_result
+          - ping_delay_ms
+          - ssh_last_successful_login
+          - ssh_last_unsuccessful_attempt
+          - ssh_status
+          - telegram_bot_status
+          - wifi_status
+          - vpn_status
+          - prometheus_query
+          title: Metric Key
+        display_variant:
+          type: string
+          enum:
+          - tile
+          - graph
+          - temperature
+          - humidity
+          - self_monitoring
+          title: Display Variant
+          default: tile
+        display_unit:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Display Unit
+        value:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Value
+        display_value:
+          type: string
+          title: Display Value
+        status:
+          type: string
+          enum:
+          - ok
+          - info
+          - warn
+          - critical
+          - unknown
+          title: Status
+        stale:
+          type: boolean
+          title: Stale
+          default: false
+        show_updated_age:
+          type: boolean
+          title: Show Updated Age
+          default: false
+        history_loaded:
+          type: boolean
+          title: History Loaded
+          default: false
+        has_details:
+          type: boolean
+          title: Has Details
+          default: false
+        history:
+          items:
+            type: string
+            enum:
+            - ok
+            - info
+            - warn
+            - critical
+            - unknown
+          type: array
+          title: History
+        series:
+          items:
+            $ref: '#/components/schemas/QuickStatusSeriesPoint'
+          type: array
+          title: Series
+        series_summary:
+          anyOf:
+          - $ref: '#/components/schemas/QuickStatusSeriesSummary'
+          - type: 'null'
+        highlights:
+          items:
+            $ref: '#/components/schemas/QuickStatusCardDatum'
+          type: array
+          title: Highlights
+        breakdown:
+          items:
+            $ref: '#/components/schemas/QuickStatusCardDatum'
+          type: array
+          title: Breakdown
+        reported_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Reported At
+        details:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/QuickStatusDetailLine'
+            type: array
+          - type: 'null'
+          title: Details
+      type: object
+      required:
+      - id
+      - backend_display_order
+      - backend_name
+      - label
+      - metric_key
+      - value
+      - display_value
+      - status
+      title: QuickStatusTileRead
+    RebootRequest:
+      properties:
+        reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reason
+        chat_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Chat Id
+      type: object
+      title: RebootRequest
+    RetentionSettings:
+      properties:
+        retention_days:
+          type: integer
+          maximum: 90.0
+          minimum: 1.0
+          title: Retention Days
+          description: Number of days to retain metric history
+      type: object
+      required:
+      - retention_days
+      title: RetentionSettings
+    SiteMonitorCreate:
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Name
+        check_type:
+          type: string
+          enum:
+          - ping
+          - http
+          title: Check Type
+        target:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Target
+        expected_status_codes:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Expected Status Codes
+        expected_response_substring:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Expected Response Substring
+        timeout_ms:
+          type: integer
+          maximum: 600000.0
+          minimum: 100.0
+          title: Timeout Ms
+          default: 3000
+        warning_consecutive_failures:
+          type: integer
+          maximum: 50.0
+          minimum: 1.0
+          title: Warning Consecutive Failures
+          default: 3
+        critical_consecutive_failures:
+          type: integer
+          maximum: 50.0
+          minimum: 1.0
+          title: Critical Consecutive Failures
+          default: 5
+        check_interval_seconds:
+          type: integer
+          maximum: 86400.0
+          minimum: 5.0
+          title: Check Interval Seconds
+          default: 1800
+        display_order:
+          type: integer
+          minimum: 0.0
+          title: Display Order
+          default: 0
+        is_active:
+          type: boolean
+          title: Is Active
+          default: true
+      type: object
+      required:
+      - name
+      - check_type
+      - target
+      title: SiteMonitorCreate
+    SiteMonitorRead:
+      properties:
+        name:
+          type: string
+          maxLength: 120
+          minLength: 1
+          title: Name
+        check_type:
+          type: string
+          enum:
+          - ping
+          - http
+          title: Check Type
+        target:
+          type: string
+          maxLength: 500
+          minLength: 1
+          title: Target
+        expected_status_codes:
+          anyOf:
+          - items:
+              type: integer
+            type: array
+          - type: 'null'
+          title: Expected Status Codes
+        expected_response_substring:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Expected Response Substring
+        timeout_ms:
+          type: integer
+          maximum: 600000.0
+          minimum: 100.0
+          title: Timeout Ms
+          default: 3000
+        warning_consecutive_failures:
+          type: integer
+          maximum: 50.0
+          minimum: 1.0
+          title: Warning Consecutive Failures
+          default: 3
+        critical_consecutive_failures:
+          type: integer
+          maximum: 50.0
+          minimum: 1.0
+          title: Critical Consecutive Failures
+          default: 5
+        check_interval_seconds:
+          type: integer
+          maximum: 86400.0
+          minimum: 5.0
+          title: Check Interval Seconds
+          default: 1800
+        display_order:
+          type: integer
+          minimum: 0.0
+          title: Display Order
+          default: 0
+        is_active:
+          type: boolean
+          title: Is Active
+          default: true
+        id:
+          type: integer
+          title: Id
+      type: object
+      required:
+      - name
+      - check_type
+      - target
+      - id
+      title: SiteMonitorRead
+    SiteMonitorStatusRead:
+      properties:
+        id:
+          type: integer
+          title: Id
+        name:
+          type: string
+          title: Name
+        check_type:
+          type: string
+          enum:
+          - ping
+          - http
+          title: Check Type
+        target:
+          type: string
+          title: Target
+        status:
+          type: string
+          enum:
+          - ok
+          - warn
+          - critical
+          - unknown
+          title: Status
+        display_value:
+          type: string
+          title: Display Value
+        history:
+          items:
+            type: string
+            enum:
+            - ok
+            - warn
+            - critical
+            - unknown
+          type: array
+          title: History
+        checked_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Checked At
+        latency_ms:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Latency Ms
+        status_code:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Status Code
+        detail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Detail
+        consecutive_failures:
+          type: integer
+          title: Consecutive Failures
+          default: 0
+      type: object
+      required:
+      - id
+      - name
+      - check_type
+      - target
+      - status
+      - display_value
+      title: SiteMonitorStatusRead
+    TelegramSettingsRead:
+      properties:
+        bot_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bot Token
+        default_chat_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Default Chat Id
+          description: Chat id for default notifications
+        notification_batch_window_seconds:
+          type: integer
+          maximum: 3600.0
+          minimum: 0.0
+          title: Notification Batch Window Seconds
+          description: How long to wait before sending a new automatic quick-status
+            alert so related issues can batch together
+          default: 60
+        notification_cooldown_minutes:
+          type: integer
+          maximum: 10080.0
+          minimum: 0.0
+          title: Notification Cooldown Minutes
+          description: Minimum number of minutes between automatic quick-status notifications
+          default: 15
+        quick_status_alert_confirmation_minutes:
+          type: integer
+          maximum: 10080.0
+          minimum: 0.0
+          title: Quick Status Alert Confirmation Minutes
+          description: How long a warning or error must persist before tile color
+            changes and notifications are sent
+          default: 5
+        warn_thresholds:
+          anyOf:
+          - $ref: '#/components/schemas/WarnThresholds'
+          - type: 'null'
+          description: Warning-level thresholds that control when alerts are emitted
+        is_active:
+          type: boolean
+          title: Is Active
+          default: false
+        id:
+          type: integer
+          title: Id
+      type: object
+      required:
+      - id
+      title: TelegramSettingsRead
+    TelegramSettingsUpdate:
+      properties:
+        bot_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bot Token
+          description: Bot token provided by @BotFather
+        default_chat_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Default Chat Id
+          description: Chat id for default notifications
+        notification_batch_window_seconds:
+          type: integer
+          maximum: 3600.0
+          minimum: 0.0
+          title: Notification Batch Window Seconds
+          description: How long to wait before sending a new automatic quick-status
+            alert so related issues can batch together
+          default: 60
+        notification_cooldown_minutes:
+          type: integer
+          maximum: 10080.0
+          minimum: 0.0
+          title: Notification Cooldown Minutes
+          description: Minimum number of minutes between automatic quick-status notifications
+          default: 15
+        quick_status_alert_confirmation_minutes:
+          type: integer
+          maximum: 10080.0
+          minimum: 0.0
+          title: Quick Status Alert Confirmation Minutes
+          description: How long a warning or error must persist before tile color
+            changes and notifications are sent
+          default: 5
+        warn_thresholds:
+          anyOf:
+          - $ref: '#/components/schemas/WarnThresholds'
+          - type: 'null'
+          description: Warning-level thresholds that control when alerts are emitted
+        is_active:
+          type: boolean
+          title: Is Active
+          default: false
+      type: object
+      title: TelegramSettingsUpdate
+    TelegramUpdate:
+      properties:
+        message:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Message
+        edited_message:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Edited Message
+        channel_post:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Channel Post
+        edited_channel_post:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Edited Channel Post
+      type: object
+      title: TelegramUpdate
+    TokenResponse:
+      properties:
+        access_token:
+          type: string
+          title: Access Token
+        token_type:
+          type: string
+          title: Token Type
+          default: bearer
+        username:
+          type: string
+          title: Username
+        role:
+          $ref: '#/components/schemas/AuthRole'
+        user_id:
+          type: integer
+          title: User Id
+      type: object
+      required:
+      - access_token
+      - username
+      - role
+      - user_id
+      title: TokenResponse
+    UserCreate:
+      properties:
+        username:
+          type: string
+          maxLength: 120
+          minLength: 3
+          title: Username
+        password:
+          type: string
+          minLength: 8
+          title: Password
+        role:
+          $ref: '#/components/schemas/AuthRole'
+          default: viewer
+      type: object
+      required:
+      - username
+      - password
+      title: UserCreate
+    UserRead:
+      properties:
+        id:
+          type: integer
+          title: Id
+        username:
+          type: string
+          title: Username
+        role:
+          $ref: '#/components/schemas/AuthRole'
+      type: object
+      required:
+      - id
+      - username
+      - role
+      title: UserRead
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    WarnThresholds:
+      properties:
+        cpu_temperature_c:
+          anyOf:
+          - type: number
+            maximum: 150.0
+            minimum: 0.0
+          - type: 'null'
+          title: Cpu Temperature C
+          description: "Trigger warnings at or above this CPU temperature (\xB0C)"
+        ram_used_percent:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: 'null'
+          title: Ram Used Percent
+          description: Trigger warnings at or above this RAM usage percentage
+        disk_usage_percent:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: 'null'
+          title: Disk Usage Percent
+          description: Trigger warnings at or above this root disk usage percentage
+        mounted_usage_percent:
+          anyOf:
+          - type: number
+            maximum: 100.0
+            minimum: 0.0
+          - type: 'null'
+          title: Mounted Usage Percent
+          description: Trigger warnings at or above this mounted volume usage percentage
+      type: object
+      title: WarnThresholds
+  securitySchemes:
+    OAuth2PasswordBearer:
+      type: oauth2
+      flows:
+        password:
+          scopes: {}
+          tokenUrl: /auth/login

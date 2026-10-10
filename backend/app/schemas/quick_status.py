@@ -29,7 +29,7 @@ QuickStatusMetricKey = Literal[
 ]
 
 PrometheusThresholdDirection = Literal["higher", "lower"]
-QuickStatusDisplayVariant = Literal["tile", "graph", "temperature", "humidity", "self_monitoring"]
+QuickStatusDisplayVariant = Literal["tile", "graph", "temperature", "humidity"]
 
 SUPPORTED_QUICK_STATUS_METRIC_KEYS: set[str] = {
     "disk_usage_percent",
@@ -77,8 +77,7 @@ def is_supported_quick_status_metric(metric_key: str | None) -> bool:
 
 
 class QuickStatusItemBase(BaseModel):
-    backend_id: int | None = None
-    project_id: int | None = None
+    backend_id: int
     label: str = Field(..., min_length=1, max_length=120)
     metric_key: QuickStatusMetricKey
     mount_path: str | None = Field(default=None, max_length=255)
@@ -99,11 +98,6 @@ class QuickStatusItemBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_item(self) -> "QuickStatusItemBase":
-        if self.backend_id is None:
-            if self.project_id is None:
-                raise ValueError("project_id is required when backend_id is not set")
-            if self.metric_key not in _PROMETHEUS_METRICS:
-                raise ValueError("a backend is required for non-Prometheus tiles")
         if self.metric_key in _REQUIRES_PING_ENDPOINT:
             if not (self.ping_endpoint or "").strip():
                 raise ValueError("ping_endpoint is required for ping tiles")
@@ -125,7 +119,7 @@ class QuickStatusItemBase(BaseModel):
             self.prometheus_threshold_direction = "higher"
 
         if self.display_variant != "tile" and self.metric_key not in _PROMETHEUS_METRICS:
-            raise ValueError("graph, temperature, humidity, and self-monitoring items are supported only for Prometheus metrics")
+            raise ValueError("graph, temperature, and humidity items are supported only for Prometheus metrics")
         if self.display_unit is not None:
             self.display_unit = self.display_unit.strip() or None
         if self.display_variant == "humidity" and not self.display_unit:
@@ -203,16 +197,9 @@ class QuickStatusSeriesSummary(BaseModel):
     delta_value: float | None = None
 
 
-class QuickStatusCardDatum(BaseModel):
-    label: str = Field(..., min_length=1, max_length=120)
-    value: str = Field(..., min_length=1, max_length=120)
-    severity: Literal["ok", "info", "warn", "critical"] = "ok"
-
-
 class QuickStatusTileRead(BaseModel):
     id: int
-    backend_id: int | None = None
-    project_id: int | None = None
+    backend_id: int
     backend_display_order: int
     backend_name: str
     label: str
@@ -229,7 +216,5 @@ class QuickStatusTileRead(BaseModel):
     history: list[Literal["ok", "info", "warn", "critical", "unknown"]] = Field(default_factory=list)
     series: list[QuickStatusSeriesPoint] = Field(default_factory=list)
     series_summary: QuickStatusSeriesSummary | None = None
-    highlights: list[QuickStatusCardDatum] = Field(default_factory=list)
-    breakdown: list[QuickStatusCardDatum] = Field(default_factory=list)
     reported_at: datetime | None = None
     details: list[QuickStatusDetailLine] | None = None

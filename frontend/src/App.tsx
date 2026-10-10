@@ -11,7 +11,7 @@ import {
 } from './api/client';
 import { Dashboard } from './components/Dashboard';
 import { AdminPanel } from './components/AdminPanel';
-import { AppView, Layout, getProjectViewId } from './components/Layout';
+import { AppView, Layout } from './components/Layout';
 import { SiteMonitoring } from './components/SiteMonitoring';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { getUserFacingErrorMessage } from './utils/errors';
@@ -132,8 +132,6 @@ export default function App() {
     () => (needsBootstrap ? 'Create admin account' : 'Sign in'),
     [needsBootstrap]
   );
-  const activeProjectId = getProjectViewId(view);
-
   if (authLoading) {
     return (
       <div className="container py-5 app-auth-shell">
@@ -205,7 +203,7 @@ export default function App() {
       ) : view === 'site-monitoring' ? (
         <SiteMonitoring />
       ) : view === 'notifications' ? null : (
-        <Dashboard canRefresh={currentUser.role === 'admin'} mode={view === 'graphs' ? 'graphs' : 'monitoring'} projectId={activeProjectId} />
+        <Dashboard canRefresh={currentUser.role === 'admin'} mode={view === 'graphs' ? 'graphs' : 'monitoring'} />
       )}
     </Layout>
   );
