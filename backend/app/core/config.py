@@ -22,19 +22,17 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
     log_service: str = "backend"
-    # MySQL connection options
-    db_user: str = "root"
-    db_password: str = "password"
-    db_host: str = "localhost"
-    db_port: int = 3306
-    db_name: str = "server_monitor"
-    history_db_name: str = "backend_monitor"
+    # Database options (SQLite file; both logical schemas live in one file)
+    db_path: str = "data/virgilio.db"  # compose sets /app/data/virgilio.db
+    db_url: str | None = None  # explicit SQLAlchemy URL override (tests, custom setups)
+    db_pool_size: int = 4
 
     # Authentication options
     admin_api_token: str = "change-me"  # Legacy token, superseded by username/password auth
     auth_secret_key: str = "change-me-secret"
     auth_access_token_exp_minutes: int = 48 * 60
     auth_algorithm: str = "HS256"
+    auth_user_cache_seconds: int = 60
 
     # Telegram related configuration
     telegram_bot_token: str | None = None
@@ -43,6 +41,7 @@ class Settings(BaseSettings):
     telegram_bind_interface: str | None = None
     telegram_local_address: str | None = None
     telegram_allowed_users: List[str] = Field(default_factory=list)
+    telegram_bot_enabled: bool = True  # run the Telegram command bot inside the backend process
 
     # Host control
     allow_host_reboot: bool = False
@@ -127,24 +126,25 @@ class Settings(BaseSettings):
             cleaned.append(token)
         return cleaned
 
+    @field_validator("db_url", mode="before")
+    @classmethod
+    def _normalize_db_url(cls, value: str | None) -> str | None:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
     def sqlalchemy_database_uri(self) -> str:
-        """Build a SQLAlchemy connection string."""
-        return (
-            f"mysql+asyncmy://{self.db_user}:{self.db_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
-        )
+        """Build a SQLAlchemy connection string (SQLite file by default)."""
+        if self.db_url:
+            return self.db_url
+        return f"sqlite+aiosqlite:///{self.db_path}"
 
-    def sqlalchemy_schema_translate_map(self) -> dict[str, str]:
-        """Map logical SQLAlchemy schemas to physical database names."""
+    def sqlalchemy_schema_translate_map(self) -> dict[str, str | None]:
+        """Map logical SQLAlchemy schemas to physical schemas (all in one SQLite file)."""
         return {
-            CONFIG_SCHEMA: self.db_name,
-            HISTORY_SCHEMA: self.history_db_name,
+            CONFIG_SCHEMA: None,
+            HISTORY_SCHEMA: None,
         }
-
-    def database_names(self) -> list[str]:
-        """Return distinct physical database names used by the backend."""
-        names = [self.db_name, self.history_db_name]
-        return list(dict.fromkeys(name for name in names if name))
 
 
 @lru_cache

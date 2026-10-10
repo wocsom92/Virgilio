@@ -1,9 +1,10 @@
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from backend.app.core.config import settings
 from backend.app.core.security import require_admin_user
@@ -47,27 +48,20 @@ async def reboot_host(
 
 
 @router.get("/db-size")
-async def get_db_size(session: AsyncSession = Depends(get_session)) -> dict:
-    # Returns combined size in bytes for the configured config + history schemas.
-    try:
-        result = await session.execute(
-            text(
-                "SELECT SUM(data_length + index_length) AS size_bytes "
-                "FROM information_schema.tables "
-                "WHERE table_schema IN (:config_schema, :history_schema)"
-            ),
-            {
-                "config_schema": settings.db_name,
-                "history_schema": settings.history_db_name,
-            },
-        )
-        size = result.scalar() or 0
-    except Exception as exc:  # pragma: no cover - defensive guard for DB permission issues
-        logger.warning("Failed to compute database size: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Unable to compute database size",
-        ) from exc
+async def get_db_size() -> dict:
+    """Return the on-disk size of the SQLite database file plus its WAL."""
+    size = 0
+    for suffix in ("", "-wal"):
+        try:
+            size += os.path.getsize(f"{settings.db_path}{suffix}")
+        except FileNotFoundError:
+            continue
+        except OSError as exc:  # pragma: no cover - defensive guard
+            logger.warning("Failed to stat database file %s%s: %s", settings.db_path, suffix, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Unable to compute database size",
+            ) from exc
     return {"size_bytes": int(size)}
 
 

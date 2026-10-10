@@ -1,154 +1,70 @@
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine, inspect, text
 
 from backend.app.db import schema_compat
+from backend.app.db.session import schema_translate_map
+from backend.app.models.base import Base
 
 
-class _FakeResult:
-    def __init__(self, value=0):
-        self._value = value
-
-    def scalar(self):
-        return self._value
-
-
-class _FakeConnection:
-    def __init__(self, *, dialect_name: str = "mysql"):
-        self.dialect = SimpleNamespace(name=dialect_name)
-        self.executed_sql: list[str] = []
-
-    def execute(self, statement):
-        self.executed_sql.append(str(statement))
-        return _FakeResult()
-
-
-@pytest.mark.parametrize("dialect_name", ["sqlite", "postgresql"])
-def test_migrate_legacy_history_tables_is_noop_for_non_mysql(dialect_name):
-    connection = _FakeConnection(dialect_name=dialect_name)
-
-    schema_compat.migrate_legacy_history_tables(connection)
-
-    assert connection.executed_sql == []
-
-
-def test_migrate_legacy_history_tables_copies_and_drops_legacy_tables(monkeypatch):
-    connection = _FakeConnection()
-
-    monkeypatch.setattr(
-        schema_compat,
-        "_resolved_schemas",
-        lambda connection: ("server_monitor", "backend_monitor"),
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "_has_table",
-        lambda connection, table_name, schema=None: table_name == "metric_snapshots",
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "_common_non_id_columns",
-        lambda connection, table_name, source_schema=None, target_schema=None: [
-            "backend_id",
-            "reported_at",
-            "raw_payload",
-            "created_at",
-            "updated_at",
-        ],
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "_count_unmigrated_legacy_rows",
-        lambda connection, **kwargs: 0,
+def _sqlite_engine(tmp_path):
+    return create_engine(
+        f"sqlite:///{tmp_path / 'compat.db'}",
+        execution_options={"schema_translate_map": schema_translate_map(config_schema=None, history_schema=None)},
     )
 
-    schema_compat.migrate_legacy_history_tables(connection)
 
-    assert len(connection.executed_sql) == 2
-    assert "INSERT INTO `backend_monitor`.`metric_snapshots`" in connection.executed_sql[0]
-    assert "FROM `server_monitor`.`metric_snapshots` AS source_row" in connection.executed_sql[0]
-    assert "DROP TABLE `server_monitor`.`metric_snapshots`" in connection.executed_sql[1]
+def test_ensure_schema_compat_adds_missing_columns_and_indexes(tmp_path):
+    engine = _sqlite_engine(tmp_path)
+    with engine.begin() as conn:
+        # A pre-"display_unit" quick_status_items table plus a legacy metric_snapshots table.
+        conn.execute(
+            text(
+                "CREATE TABLE quick_status_items ("
+                "id INTEGER PRIMARY KEY, backend_id INTEGER NOT NULL, label VARCHAR(120) NOT NULL, "
+                "metric_key VARCHAR(64) NOT NULL, warning_threshold FLOAT NOT NULL, critical_threshold FLOAT NOT NULL)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE metric_snapshots ("
+                "id INTEGER PRIMARY KEY, backend_id INTEGER NOT NULL, reported_at DATETIME NOT NULL, raw_payload JSON)"
+            )
+        )
+        conn.run_sync = None  # not used; guard against accidental async usage
+        schema_compat.ensure_schema_compat(conn)
 
-
-def test_migrate_legacy_history_tables_raises_when_rows_remain_unmigrated(monkeypatch):
-    connection = _FakeConnection()
-
-    monkeypatch.setattr(
-        schema_compat,
-        "_resolved_schemas",
-        lambda connection: ("server_monitor", "backend_monitor"),
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "_has_table",
-        lambda connection, table_name, schema=None: table_name == "metric_snapshots",
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "_common_non_id_columns",
-        lambda connection, table_name, source_schema=None, target_schema=None: [
-            "backend_id",
-            "reported_at",
-        ],
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "_count_unmigrated_legacy_rows",
-        lambda connection, **kwargs: 3,
-    )
-
-    with pytest.raises(RuntimeError, match="Legacy history migration incomplete"):
-        schema_compat.migrate_legacy_history_tables(connection)
-
-    assert len(connection.executed_sql) == 1
-    assert "INSERT INTO `backend_monitor`.`metric_snapshots`" in connection.executed_sql[0]
+    inspector = inspect(engine)
+    quick_status_columns = {col["name"] for col in inspector.get_columns("quick_status_items")}
+    assert {"display_unit", "alert_condition_started_at", "ping_interval_seconds", "display_variant"} <= quick_status_columns
+    snapshot_columns = {col["name"] for col in inspector.get_columns("metric_snapshots")}
+    assert {"backend_version", "network_counters", "docker_running_containers"} <= snapshot_columns
+    index_names = {index["name"] for index in inspector.get_indexes("metric_snapshots")}
+    assert "ix_metric_snapshots_backend_reported" in index_names
+    item_indexes = {index["name"] for index in inspector.get_indexes("quick_status_items")}
+    assert "ix_quick_status_items_pending_due" in item_indexes
 
 
-@pytest.mark.parametrize("dialect_name", ["sqlite", "postgresql"])
-def test_remove_legacy_project_schema_is_noop_for_non_mysql(dialect_name):
-    connection = _FakeConnection(dialect_name=dialect_name)
+def test_ensure_schema_compat_is_idempotent_on_fresh_schema(tmp_path):
+    engine = _sqlite_engine(tmp_path)
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        schema_compat.ensure_schema_compat(conn)
+        before = {
+            table: {col["name"] for col in inspect(conn).get_columns(table)}
+            for table in inspect(conn).get_table_names()
+        }
+        schema_compat.ensure_schema_compat(conn)
+        after = {
+            table: {col["name"] for col in inspect(conn).get_columns(table)}
+            for table in inspect(conn).get_table_names()
+        }
+    assert before == after
+    assert "quick_status_items" in before
 
-    schema_compat.remove_legacy_project_schema(connection)
 
-    assert connection.executed_sql == []
-
-
-def test_remove_legacy_project_schema_removes_project_items_and_tables(monkeypatch):
-    connection = _FakeConnection()
-
-    monkeypatch.setattr(
-        schema_compat,
-        "_resolved_schemas",
-        lambda connection: ("server_monitor", "backend_monitor"),
-    )
-    monkeypatch.setattr(schema_compat, "_has_table", lambda connection, table_name, schema=None: True)
-    monkeypatch.setattr(
-        schema_compat,
-        "_get_columns",
-        lambda connection, table_name, schema=None: {"id", "backend_id", "project_id"},
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "_get_foreign_keys",
-        lambda connection, table_name, schema=None: [
-            {"name": "quick_status_items_ibfk_2", "constrained_columns": ["project_id"]}
-        ],
-    )
-    monkeypatch.setattr(
-        schema_compat,
-        "inspect",
-        lambda connection: SimpleNamespace(
-            get_columns=lambda table_name, schema=None: [{"name": "backend_id", "nullable": True}]
-        ),
-    )
-
-    schema_compat.remove_legacy_project_schema(connection)
-
-    sql = "\n".join(connection.executed_sql)
-    assert "DELETE FROM `backend_monitor`.`quick_status_ping_samples`" in sql
-    assert "DELETE FROM `backend_monitor`.`quick_status_prometheus_samples`" in sql
-    assert "DELETE FROM `server_monitor`.`quick_status_items` WHERE backend_id IS NULL" in sql
-    assert "DROP FOREIGN KEY `quick_status_items_ibfk_2`" in sql
-    assert "DROP COLUMN project_id" in sql
-    assert "MODIFY COLUMN backend_id INT NOT NULL" in sql
-    assert "DROP TABLE `server_monitor`.`projects`" in sql
+def test_ensure_schema_compat_rejects_mysql():
+    connection = SimpleNamespace(dialect=SimpleNamespace(name="mysql"))
+    with pytest.raises(RuntimeError, match="MySQL is no longer supported"):
+        schema_compat.ensure_schema_compat(connection)

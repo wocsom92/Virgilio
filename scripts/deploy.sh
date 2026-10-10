@@ -296,6 +296,7 @@ if [[ "${PROFILE}" == "full" ]]; then
     scripts/post_deploy_check.sh
     docker
     docker-compose.yml
+    docker-compose.mysql-legacy.yml
     docker-compose.monitor.yml
     docker-compose.monitor.nginx.yml
     .dockerignore
@@ -457,11 +458,13 @@ fi
 containers_to_remove=()
 if [[ "${PROFILE}" == "full" ]]; then
   containers_to_remove=(
-    "server-monitor-db"
     "server-monitor-backend"
     "server-monitor-frontend"
-    "server-monitor-telegram-bot"
     "${monitor_container_name}"
+    # Retired services from pre-9.0 stacks; removed so old containers do not linger.
+    "server-monitor-db"
+    "server-monitor-telegram-bot"
+    "server-monitor-prometheus"
   )
   if ! compose_profile_enabled "${compose_profiles}" "logs"; then
     containers_to_remove+=(

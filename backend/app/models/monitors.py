@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.models.base import Base, CONFIG_SCHEMA, HISTORY_SCHEMA, TimestampMixin
@@ -26,17 +26,21 @@ class MonitoredBackend(TimestampMixin, Base):
         "MetricSnapshot",
         back_populates="backend",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="MetricSnapshot.reported_at",
     )
 
 
 class MetricSnapshot(TimestampMixin, Base):
     __tablename__ = "metric_snapshots"
-    __table_args__ = {"schema": HISTORY_SCHEMA}
+    __table_args__ = (
+        Index("ix_metric_snapshots_backend_reported", "backend_id", "reported_at"),
+        {"schema": HISTORY_SCHEMA},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     backend_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id"),
+        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -99,7 +103,10 @@ class SystemSettings(TimestampMixin, Base):
 
 class NotificationEvent(TimestampMixin, Base):
     __tablename__ = "notification_events"
-    __table_args__ = {"schema": CONFIG_SCHEMA}
+    __table_args__ = (
+        Index("ix_notification_events_created_at", "created_at"),
+        {"schema": CONFIG_SCHEMA},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     channel: Mapped[str] = mapped_column(String(32), nullable=False, default="telegram")
@@ -108,7 +115,7 @@ class NotificationEvent(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     backend_id: Mapped[int | None] = mapped_column(
-        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id"),
+        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -123,11 +130,14 @@ class NotificationEvent(TimestampMixin, Base):
 
 class QuickStatusItem(TimestampMixin, Base):
     __tablename__ = "quick_status_items"
-    __table_args__ = {"schema": CONFIG_SCHEMA}
+    __table_args__ = (
+        Index("ix_quick_status_items_pending_due", "pending_notification_due_at"),
+        {"schema": CONFIG_SCHEMA},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     backend_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id"),
+        ForeignKey(f"{CONFIG_SCHEMA}.monitored_backends.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -158,23 +168,28 @@ class QuickStatusItem(TimestampMixin, Base):
         "QuickStatusPingSample",
         back_populates="item",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="QuickStatusPingSample.checked_at",
     )
     prometheus_samples: Mapped[list["QuickStatusPrometheusSample"]] = relationship(
         "QuickStatusPrometheusSample",
         back_populates="item",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="QuickStatusPrometheusSample.checked_at",
     )
 
 
 class QuickStatusPingSample(TimestampMixin, Base):
     __tablename__ = "quick_status_ping_samples"
-    __table_args__ = {"schema": HISTORY_SCHEMA}
+    __table_args__ = (
+        Index("ix_quick_status_ping_samples_item_checked", "quick_status_item_id", "checked_at"),
+        {"schema": HISTORY_SCHEMA},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     quick_status_item_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{CONFIG_SCHEMA}.quick_status_items.id"),
+        ForeignKey(f"{CONFIG_SCHEMA}.quick_status_items.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -187,11 +202,14 @@ class QuickStatusPingSample(TimestampMixin, Base):
 
 class QuickStatusPrometheusSample(TimestampMixin, Base):
     __tablename__ = "quick_status_prometheus_samples"
-    __table_args__ = {"schema": HISTORY_SCHEMA}
+    __table_args__ = (
+        Index("ix_quick_status_prometheus_samples_item_checked", "quick_status_item_id", "checked_at"),
+        {"schema": HISTORY_SCHEMA},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     quick_status_item_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{CONFIG_SCHEMA}.quick_status_items.id"),
+        ForeignKey(f"{CONFIG_SCHEMA}.quick_status_items.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -224,17 +242,21 @@ class SiteMonitor(TimestampMixin, Base):
         "SiteMonitorSample",
         back_populates="site_monitor",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="SiteMonitorSample.checked_at",
     )
 
 
 class SiteMonitorSample(TimestampMixin, Base):
     __tablename__ = "site_monitor_samples"
-    __table_args__ = {"schema": HISTORY_SCHEMA}
+    __table_args__ = (
+        Index("ix_site_monitor_samples_monitor_checked", "site_monitor_id", "checked_at"),
+        {"schema": HISTORY_SCHEMA},
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_monitor_id: Mapped[int] = mapped_column(
-        ForeignKey(f"{CONFIG_SCHEMA}.site_monitors.id"),
+        ForeignKey(f"{CONFIG_SCHEMA}.site_monitors.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )

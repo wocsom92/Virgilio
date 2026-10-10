@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -259,6 +260,52 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("hostreboot", with_session(handle_host_reboot)))
     application.post_init = post_init
     return application
+
+
+async def start_bot() -> Application:
+    """Start the bot inside an already running event loop (used by the backend lifespan)."""
+    application = build_application()
+    await application.initialize()  # runs post_init (commands + reboot notice)
+    await application.start()
+    if application.updater is None:  # pragma: no cover - PTB always builds an updater here
+        raise RuntimeError("Telegram application has no updater")
+    await application.updater.start_polling(drop_pending_updates=True)
+    logger.info("Telegram bot polling started in-process")
+    return application
+
+
+async def stop_bot(application: Application) -> None:
+    try:
+        if application.updater is not None and application.updater.running:
+            await application.updater.stop()
+        if application.running:
+            await application.stop()
+        await application.shutdown()
+    except Exception as exc:  # pragma: no cover - shutdown resilience
+        logger.warning("Telegram bot shutdown reported an error: %s", exc)
+
+
+async def run_bot_with_retry(stop_event: asyncio.Event) -> None:
+    """Keep the bot alive with exponential backoff until ``stop_event`` is set."""
+    delay = 5.0
+    while not stop_event.is_set():
+        application: Application | None = None
+        try:
+            application = await start_bot()
+            delay = 5.0
+            await stop_event.wait()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Telegram bot failed to start (%s); retrying in %.0fs", exc, delay)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=delay)
+            except asyncio.TimeoutError:
+                pass
+            delay = min(delay * 2, 60.0)
+        finally:
+            if application is not None:
+                await stop_bot(application)
 
 
 def main() -> None:

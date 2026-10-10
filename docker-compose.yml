@@ -1,21 +1,6 @@
-services:
-  db:
-    image: mysql:8.0
-    container_name: server-monitor-db
-    command:
-      - --default-authentication-plugin=mysql_native_password
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-    volumes:
-      - mysql-data:/var/lib/mysql
-      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-pchangeme"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+name: server_monitor
 
+services:
   backend:
     build:
       context: .
@@ -23,18 +8,11 @@ services:
     container_name: server-monitor-backend
     privileged: true
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
-      SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG}
+      SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG:-false}
       SERVER_MONITOR_LOG_LEVEL: ${SERVER_MONITOR_LOG_LEVEL:-INFO}
-      SERVER_MONITOR_DB_USER: ${SERVER_MONITOR_DB_USER}
-      SERVER_MONITOR_DB_PASSWORD: ${SERVER_MONITOR_DB_PASSWORD}
-      SERVER_MONITOR_DB_HOST: ${SERVER_MONITOR_DB_HOST}
-      SERVER_MONITOR_DB_PORT: ${SERVER_MONITOR_DB_PORT}
-      SERVER_MONITOR_DB_NAME: ${SERVER_MONITOR_DB_NAME}
-      SERVER_MONITOR_HISTORY_DB_NAME: ${SERVER_MONITOR_HISTORY_DB_NAME:-backend_monitor}
+      SERVER_MONITOR_DB_PATH: ${SERVER_MONITOR_DB_PATH:-/app/data/virgilio.db}
+      SERVER_MONITOR_TELEGRAM_BOT_ENABLED: ${SERVER_MONITOR_TELEGRAM_BOT_ENABLED:-true}
       SERVER_MONITOR_AUTH_SECRET_KEY: ${SERVER_MONITOR_AUTH_SECRET_KEY}
       SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES: ${SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES:-1440}
       SERVER_MONITOR_TELEGRAM_BOT_TOKEN: ${SERVER_MONITOR_TELEGRAM_BOT_TOKEN}
@@ -52,6 +30,7 @@ services:
     labels:
       co.elastic.logs/enabled: "true"
     volumes:
+      - backend-data:/app/data
       - type: bind
         source: ${MONITOR_HOST_ROOT_SOURCE:-./docker/monitor/host-root-placeholder}
         target: ${MONITOR_HOST_ROOT_TARGET:-/hostfs}
@@ -102,37 +81,6 @@ services:
       - "5173:80"
     labels:
       co.elastic.logs/enabled: "true"
-
-  telegram-bot:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: server-monitor-telegram-bot
-    privileged: true
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-    command: ["python", "-m", "backend.app.bot.polling"]
-    environment:
-      SERVER_MONITOR_DEBUG: ${SERVER_MONITOR_DEBUG}
-      SERVER_MONITOR_LOG_LEVEL: ${SERVER_MONITOR_LOG_LEVEL:-INFO}
-      SERVER_MONITOR_DB_USER: ${SERVER_MONITOR_DB_USER}
-      SERVER_MONITOR_DB_PASSWORD: ${SERVER_MONITOR_DB_PASSWORD}
-      SERVER_MONITOR_DB_HOST: ${SERVER_MONITOR_DB_HOST}
-      SERVER_MONITOR_DB_PORT: ${SERVER_MONITOR_DB_PORT}
-      SERVER_MONITOR_DB_NAME: ${SERVER_MONITOR_DB_NAME}
-      SERVER_MONITOR_HISTORY_DB_NAME: ${SERVER_MONITOR_HISTORY_DB_NAME:-backend_monitor}
-      SERVER_MONITOR_TELEGRAM_BOT_TOKEN: ${SERVER_MONITOR_TELEGRAM_BOT_TOKEN}
-      SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID: ${SERVER_MONITOR_TELEGRAM_DEFAULT_CHAT_ID}
-      SERVER_MONITOR_TELEGRAM_PROXY_URL: ${SERVER_MONITOR_TELEGRAM_PROXY_URL:-}
-      SERVER_MONITOR_TELEGRAM_BIND_INTERFACE: ${SERVER_MONITOR_TELEGRAM_BIND_INTERFACE:-}
-      SERVER_MONITOR_TELEGRAM_LOCAL_ADDRESS: ${SERVER_MONITOR_TELEGRAM_LOCAL_ADDRESS:-}
-      SERVER_MONITOR_TELEGRAM_ALLOWED_USERS: ${SERVER_MONITOR_TELEGRAM_ALLOWED_USERS}
-    labels:
-      co.elastic.logs/enabled: "true"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   telegram-egress-proxy:
     build:
@@ -213,6 +161,6 @@ services:
       - filebeat-data:/usr/share/filebeat/data
 
 volumes:
-  mysql-data:
+  backend-data:
   elasticsearch-data:
   filebeat-data:

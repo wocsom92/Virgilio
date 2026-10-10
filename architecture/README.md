@@ -17,10 +17,10 @@ Virgilio is deployed as a Docker Compose stack with:
 - React frontend served by Nginx.
 - FastAPI backend for auth, dashboard data, admin configuration, metric history, notifications, and Telegram integration.
 - FastAPI monitor agent for host metrics, ping checks, and optional host reboot.
-- MySQL 8.0 split into a configuration database and a high-churn history database.
+- SQLite file (WAL mode) on a named volume for configuration and metric history.
 - Optional Elasticsearch, Kibana, and Filebeat profile for container log collection.
 
-The frontend calls the backend API. The backend polls monitor agents, ingests metric snapshots, executes quick-status checks, stores data in MySQL, and sends Telegram notifications when configured.
+The frontend calls the backend API. The backend polls monitor agents, ingests metric snapshots, executes quick-status checks, stores data in SQLite, and sends Telegram notifications when configured.
 
 ## C4 System Context
 
@@ -62,25 +62,22 @@ flowchart TB
 
     subgraph compose["Docker Compose Deployment"]
         frontend["Frontend\nReact + Nginx\nport 5173"]
-        backend["Backend API\nFastAPI\nport 8000 / host 28000"]
-        bot["Telegram Bot Poller\nPython process"]
+        backend["Backend API + Telegram bot\nFastAPI\nport 8000 / host 28000"]
         monitor["Local Monitor Agent\nFastAPI\nport 9000 / host 29000"]
-        db[("MySQL 8.0\nserver_monitor + backend_monitor")]
+        db[("SQLite file\n/app/data/virgilio.db")]
         logs["Optional Logs Profile\nFilebeat + Elasticsearch + Kibana"]
     end
 
     user -->|"HTTPS/HTTP UI"| frontend
     frontend -->|"REST API, bearer JWT"| backend
     backend -->|"SQLAlchemy async"| db
-    bot -->|"SQLAlchemy async"| db
     backend -->|"polls metrics, ping, reboot"| monitor
     backend -->|"polls remote monitor agents and site checks"| monitoredTargets
     backend -->|"Telegram notifications"| telegramApi
-    bot -->|"Telegram long polling / replies"| telegramApi
+    backend -->|"Telegram long polling / replies (in-process bot)"| telegramApi
     telegramUser -->|"commands"| telegramApi
     logs -->|"collects container logs"| frontend
     logs -->|"collects container logs"| backend
-    logs -->|"collects container logs"| bot
     logs -->|"collects container logs"| monitor
 
     classDef app fill:#e8f1ff,stroke:#2b5c9e,color:#111
@@ -88,7 +85,7 @@ flowchart TB
     classDef external fill:#fff4df,stroke:#9e6b1f,color:#111
     classDef optional fill:#f3edff,stroke:#6b43a8,color:#111
 
-    class frontend,backend,bot,monitor app
+    class frontend,backend,monitor app
     class db data
     class user,telegramUser,telegramApi,monitoredTargets external
     class logs optional

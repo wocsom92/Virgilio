@@ -1,2 +1,0 @@
-CREATE DATABASE IF NOT EXISTS server_monitor CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE DATABASE IF NOT EXISTS backend_monitor CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

@@ -2,6 +2,7 @@ from datetime import timezone
 from typing import Sequence
 
 from backend.app.models.monitors import MetricSnapshot
+from backend.app.core.time import coerce_utc
 from backend.app.schemas.backend import BackendWithLatestSnapshot
 from backend.app.schemas.common import MetricSnapshotRead
 from backend.app.schemas.metrics import MetricSnapshotCreate
@@ -17,8 +18,33 @@ def _escape_markdown(text: str) -> str:
     return "".join(f"\\{char}" if char in _MARKDOWN_SPECIAL_CHARS else char for char in text)
 
 
-def build_snapshot_model(backend_id: int, payload: MetricSnapshotCreate) -> MetricSnapshot:
-    """Convert an incoming payload into a MetricSnapshot ORM instance."""
+# Keys of the monitor payload that the backend still reads from ``raw_payload`` after ingest
+# (SSH/Telegram/Wi-Fi/VPN status details, top processes, extra disk figures). Everything else is
+# already stored in a dedicated column, so keeping the whole payload only bloats every row.
+_EXTRA_PAYLOAD_PREFIXES: tuple[str, ...] = ("ssh_", "telegram_", "wifi_", "vpn_")
+_EXTRA_PAYLOAD_KEYS: frozenset[str] = frozenset({"top_processes", "disk_available_gb", "disk_total_gb", "hostname"})
+
+
+def slim_extra_payload(raw: dict | None) -> dict:
+    """Return only the ``raw_payload`` keys the backend consumes later on."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        key: value
+        for key, value in raw.items()
+        if key in _EXTRA_PAYLOAD_KEYS or key.startswith(_EXTRA_PAYLOAD_PREFIXES)
+    }
+
+
+def build_snapshot_model(
+    backend_id: int,
+    payload: MetricSnapshotCreate,
+    raw: dict | None = None,
+) -> MetricSnapshot:
+    """Convert an incoming payload into a MetricSnapshot ORM instance.
+
+    ``raw`` is the monitor's full payload; only the keys the backend later reads are stored.
+    """
     snapshot = MetricSnapshot(
         backend_id=backend_id,
         reported_at=payload.reported_at.astimezone(timezone.utc),
@@ -38,7 +64,7 @@ def build_snapshot_model(backend_id: int, payload: MetricSnapshotCreate) -> Metr
         os_version=payload.os_version,
         uptime_seconds=payload.uptime_seconds,
         warnings=payload.warnings,
-        raw_payload=payload.raw_payload or payload.model_dump(),
+        raw_payload=slim_extra_payload(raw or payload.raw_payload or payload.model_dump()),
     )
     return snapshot
 
@@ -113,7 +139,7 @@ def _format_snapshot(snapshot: MetricSnapshotRead | None) -> str:
         lines.append(f"• OS: {_escape_markdown(snapshot.os_version)}")
     if snapshot.uptime_seconds:
         lines.append(f"• Uptime: {_format_duration(snapshot.uptime_seconds)}")
-    timestamp = snapshot.reported_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    timestamp = coerce_utc(snapshot.reported_at).strftime("%Y-%m-%d %H:%M UTC")
     lines.append(f"_Reported at {timestamp}_")
     return "\n".join(lines)
 

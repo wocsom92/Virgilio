@@ -56,7 +56,7 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
 
     quick_status_items = await list_quick_status_items_for_backend(session, backend.id)
 
-    snapshot = build_snapshot_model(backend.id, payload)
+    snapshot = build_snapshot_model(backend.id, payload, raw=metrics_payload)
 
     backend.last_seen_at = datetime.now(tz=timezone.utc)
     backend.last_warning = "; ".join(payload.warnings) if payload.warnings else None
@@ -102,7 +102,9 @@ async def safe_ingest_backend_metrics(session: AsyncSession, backend: MonitoredB
         return snapshot
     except OperationalError as exc:
         message = str(exc.orig).lower() if getattr(exc, "orig", None) else str(exc).lower()
-        if ("backend_version" in message or "unknown column" in message) and not attempted_schema_fix:
+        if (
+            "backend_version" in message or "unknown column" in message or "no such column" in message
+        ) and not attempted_schema_fix:
             attempted_schema_fix = True
             try:
                 engine = session.get_bind()

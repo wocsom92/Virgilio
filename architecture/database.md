@@ -1,11 +1,8 @@
 # Database Structure
 
-The backend uses SQLAlchemy models in `backend/app/models/` and creates tables on startup. Logical SQLAlchemy schemas are translated to physical MySQL databases:
+The backend uses SQLAlchemy models in `backend/app/models/` and creates tables on startup in a single SQLite file (`SERVER_MONITOR_DB_PATH`, WAL journal, `foreign_keys=ON`). The models still carry two logical schemas, `config` (slow-changing configuration) and `history` (high-churn samples), but both map to the same file; the split only documents intent and keeps the migration script's table ordering explicit.
 
-- `config` -> `SERVER_MONITOR_DB_NAME`, default `server_monitor`
-- `history` -> `SERVER_MONITOR_HISTORY_DB_NAME`, default `backend_monitor`
-
-`docker/mysql/init.sql` creates both databases. `backend/app/db/schema_compat.py` also creates missing databases and applies lightweight compatibility migrations on startup.
+`backend/app/db/schema_compat.py` applies lightweight compatibility migrations on startup (missing columns and indexes). History tables carry composite indexes on `(owner id, timestamp)`, and child rows cascade on delete via `ON DELETE CASCADE`.
 
 ## ER Diagram
 

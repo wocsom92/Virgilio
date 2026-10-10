@@ -2,7 +2,7 @@
 
 Current version: `8.0.0`
 
-Virgilio is a full-stack monitoring suite built with FastAPI, React, MySQL, and Docker Compose.
+Virgilio is a full-stack monitoring suite built with FastAPI, React, SQLite, and Docker Compose, sized to run comfortably on a Raspberry Pi 5.
 
 The interface combines an overview dashboard for quick operational checks with an admin area for backend configuration, Telegram integration, retention settings, and notification history.
 
@@ -81,13 +81,6 @@ Component docs:
 
 Create a root `.env` (or use host-specific `.env.*`) with at least:
 
-- `MYSQL_ROOT_PASSWORD`
-- `SERVER_MONITOR_DB_USER`
-- `SERVER_MONITOR_DB_PASSWORD`
-- `SERVER_MONITOR_DB_HOST`
-- `SERVER_MONITOR_DB_PORT`
-- `SERVER_MONITOR_DB_NAME`
-- `SERVER_MONITOR_HISTORY_DB_NAME`
 - `SERVER_MONITOR_AUTH_SECRET_KEY`
 - `SERVER_MONITOR_AUTH_ACCESS_TOKEN_EXP_MINUTES`
 - `SERVER_MONITOR_CORS_ALLOW_ORIGINS`
@@ -98,6 +91,8 @@ Common optional values:
 - `SERVER_MONITOR_ALLOW_HOST_REBOOT`
 - `SERVER_MONITOR_REBOOT_COMMAND`
 - `SERVER_MONITOR_LOG_LEVEL`
+- `SERVER_MONITOR_DB_PATH` (default `/app/data/virgilio.db`, stored on the `backend-data` volume)
+- `SERVER_MONITOR_TELEGRAM_BOT_ENABLED` (default `true`; the Telegram command bot runs inside the backend process)
 - `SERVER_MONITOR_TELEGRAM_PROXY_URL`
 - `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE`
 - `SERVER_MONITOR_TELEGRAM_LOCAL_ADDRESS`
@@ -126,8 +121,15 @@ Notes:
 - If both `SERVER_MONITOR_TELEGRAM_PROXY_URL` and `SERVER_MONITOR_TELEGRAM_BIND_INTERFACE` are set, Telegram tries the proxy first and automatically falls back to the VPN interface when the proxy path is unavailable.
 - On host-network deployments, prefer the `telegram-egress-proxy` service and point `SERVER_MONITOR_TELEGRAM_PROXY_URL` at `http://host.docker.internal:18080`; set `TELEGRAM_EGRESS_PROXY_BIND_INTERFACE` in the local env file when that proxy should fall back through a specific VPN interface.
 - HTTP site-monitor targets entered as bare hostnames like `telegram.org` are stored as `https://telegram.org`.
-- Backend, monitor, and Telegram bot containers now emit structured JSON logs to stdout. Frontend Nginx access logs are also written as JSON.
-- The backend stores slow-changing configuration/state in `SERVER_MONITOR_DB_NAME` and high-churn metric history in `SERVER_MONITOR_HISTORY_DB_NAME`. Restoring only the config database is enough to bring the app back; the history database will be recreated empty on startup.
+- Backend and monitor containers emit structured JSON logs to stdout. Frontend Nginx access logs are also written as JSON.
+- All backend state lives in one SQLite file (`SERVER_MONITOR_DB_PATH`, WAL mode) on the `backend-data` volume. Back it up with `docker compose cp backend:/app/data/virgilio.db ./virgilio.db` while the stack runs (WAL mode keeps the copy consistent); restore by copying the file back and restarting the backend.
+
+### Migrating from MySQL (releases before 9.0)
+
+1. Deploy the new stack (`docker compose up -d --build`); the backend starts with an empty SQLite file.
+2. Start the legacy database from its old volume: `MYSQL_ROOT_PASSWORD=<old password> docker compose -f docker-compose.yml -f docker-compose.mysql-legacy.yml up -d db`.
+3. Copy the data: `docker compose -f docker-compose.yml -f docker-compose.mysql-legacy.yml run --rm --no-deps backend sh -c 'pip install -q pymysql && python -m backend.scripts.migrate_mysql_to_sqlite --mysql-url mysql+pymysql://root:<old password>@db:3306 --force'`.
+4. Restart the backend (`docker compose up -d backend`), verify the dashboard, then remove the old volume: `docker compose -f docker-compose.yml -f docker-compose.mysql-legacy.yml down db && docker volume rm server_monitor_mysql-data`.
 
 ### Raspberry Pi log stack
 

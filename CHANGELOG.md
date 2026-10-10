@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** the backend now stores everything in one SQLite file (`SERVER_MONITOR_DB_PATH`, WAL mode) instead of MySQL. The `db` container is gone; existing data is imported once with `backend/scripts/migrate_mysql_to_sqlite.py` (see README "Migrating from MySQL").
+- The Telegram command bot now runs inside the backend process (`SERVER_MONITOR_TELEGRAM_BOT_ENABLED`), replacing the separate `telegram-bot` container.
+- Metric snapshots keep only the `raw_payload` keys the backend reads (SSH/Telegram/Wi-Fi/VPN details, top processes, extra disk figures) instead of a full copy of the monitor payload.
+- History tables gained composite `(owner, timestamp)` indexes and `ON DELETE CASCADE` foreign keys.
+
 ### Removed
 - Project tabs and the auto-seeded Self-monitoring project (quick tiles now always belong to a backend).
 - The bundled Prometheus container; Prometheus quick tiles still query any external Prometheus URL.

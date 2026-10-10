@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from backend.app.db.session import schema_translate_map
+from backend.app.db.session import apply_sqlite_pragmas, schema_translate_map
 from backend.app.models.base import Base
 
 
@@ -14,6 +14,7 @@ async def db_session() -> AsyncIterator[AsyncSession]:
         future=True,
         execution_options={"schema_translate_map": schema_translate_map(config_schema=None, history_schema=None)},
     )
+    apply_sqlite_pragmas(engine)
     async_session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
     async with engine.begin() as conn:

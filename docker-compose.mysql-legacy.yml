@@ -1,0 +1,22 @@
+# Legacy MySQL service kept only for the one-time migration to SQLite.
+# Usage (from the deploy directory, after deploying the SQLite-based stack):
+#   docker compose -f docker-compose.yml -f docker-compose.mysql-legacy.yml up -d db
+#   docker compose -f docker-compose.yml -f docker-compose.mysql-legacy.yml run --rm --no-deps backend \
+#     sh -c 'pip install -q pymysql && python -m backend.scripts.migrate_mysql_to_sqlite \
+#            --mysql-url mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@db:3306'
+#   docker compose -f docker-compose.yml -f docker-compose.mysql-legacy.yml stop db
+#   docker volume rm server_monitor_mysql-data   # once you have verified the SQLite file
+services:
+  db:
+    image: mysql:8.0
+    container_name: server-monitor-db
+    command:
+      - --default-authentication-plugin=mysql_native_password
+    restart: "no"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-changeme}
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:

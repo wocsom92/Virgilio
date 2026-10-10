@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 
 from fastapi import FastAPI, Request
@@ -7,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.core.config import settings
 from backend.app.core.logging import bind_request_handler, bind_request_user_id, reset_request_handler, reset_request_user_id
 from backend.app.db.session import async_session_factory, engine
-from backend.app.db.schema_compat import ensure_databases_exist, ensure_schema_compat
+from backend.app.db.schema_compat import ensure_schema_compat
 from backend.app.models.base import Base
 from backend.app.routers import auth, backends, dashboard, metrics, notifications, telegram
 from backend.app.routers import system
@@ -26,7 +27,6 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Create database tables on startup for convenience."""
     async with engine.begin() as conn:
-        await conn.run_sync(ensure_databases_exist)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_schema_compat)
     await poller.start()
@@ -35,9 +35,24 @@ async def lifespan(app: FastAPI):
             await notify_reboot_recovery(session)
         except Exception as exc:  # pragma: no cover - startup resilience
             logger.warning("Reboot recovery notification failed during startup: %s", exc)
+
+    bot_stop = asyncio.Event()
+    bot_task: asyncio.Task | None = None
+    if settings.telegram_bot_enabled and settings.telegram_bot_token:
+        from backend.app.bot.polling import run_bot_with_retry
+
+        bot_task = asyncio.create_task(run_bot_with_retry(bot_stop), name="telegram-bot")
     try:
         yield
     finally:
+        bot_stop.set()
+        if bot_task is not None:
+            try:
+                await asyncio.wait_for(bot_task, timeout=15)
+            except (asyncio.TimeoutError, asyncio.CancelledError):  # pragma: no cover - shutdown resilience
+                bot_task.cancel()
+            except Exception as exc:  # pragma: no cover - shutdown resilience
+                logger.warning("Telegram bot task ended with an error: %s", exc)
         await poller.stop()
         await close_http_clients()
 

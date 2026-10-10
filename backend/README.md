@@ -5,7 +5,7 @@ FastAPI service for auth, backend registry, metric ingestion, dashboard data, qu
 ## Responsibilities
 
 - Exposes the main API used by the React frontend.
-- Polls registered monitor agents and stores metric snapshots in MySQL.
+- Polls registered monitor agents and stores metric snapshots in a local SQLite file.
 - Computes dashboard ranges, warnings, reboot markers, and quick status summaries.
 - Persists ping quick-status samples so 24-hour tile history remains accurate across refreshes and restarts.
 - Manages users, 48-hour default auth sessions, Telegram settings, notification event history, and optional reboot actions.
@@ -40,12 +40,9 @@ The service reads `SERVER_MONITOR_*` variables.
 
 Required for normal operation:
 
-- `SERVER_MONITOR_DB_USER`
-- `SERVER_MONITOR_DB_PASSWORD`
-- `SERVER_MONITOR_DB_HOST`
-- `SERVER_MONITOR_DB_PORT`
-- `SERVER_MONITOR_DB_NAME`
-- `SERVER_MONITOR_HISTORY_DB_NAME`
+- `SERVER_MONITOR_DB_PATH` (SQLite file, default `data/virgilio.db` locally and `/app/data/virgilio.db` in Docker)
+- `SERVER_MONITOR_DB_URL` (optional explicit SQLAlchemy URL override)
+- `SERVER_MONITOR_TELEGRAM_BOT_ENABLED` (run the Telegram command bot inside the API process)
 - `SERVER_MONITOR_AUTH_SECRET_KEY`
 
 Common optional variables:
@@ -82,7 +79,7 @@ Start the API from the repository root:
 uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The service expects a reachable MySQL instance matching the configured `SERVER_MONITOR_DB_*` values. Runtime configuration/state stays in `SERVER_MONITOR_DB_NAME`; high-churn history tables are stored in `SERVER_MONITOR_HISTORY_DB_NAME` and are recreated automatically when missing.
+The service stores everything in one SQLite file (`SERVER_MONITOR_DB_PATH`), opened in WAL mode with foreign keys enabled. Tables are created on startup and `backend/app/db/schema_compat.py` adds any columns/indexes missing from older files. Existing MySQL data can be imported once with `python -m backend.scripts.migrate_mysql_to_sqlite`.
 
 ## Run with Docker
 

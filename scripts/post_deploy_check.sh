@@ -202,10 +202,8 @@ http_check() {
 log "Starting post-deploy checks (profile=${PROFILE}, env=${ENV_FILE})"
 
 if [[ "${PROFILE}" == "full" ]]; then
-  container_check "server-monitor-db"
   container_check "server-monitor-backend"
   container_check "server-monitor-frontend"
-  container_check "server-monitor-telegram-bot"
   if [[ ",${compose_profiles}," == *",telegram-egress,"* ]]; then
     container_check "server-monitor-telegram-egress-proxy"
   fi

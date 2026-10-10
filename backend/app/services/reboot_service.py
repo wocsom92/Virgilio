@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import settings
+from backend.app.core.time import coerce_utc
 from backend.app.models.monitors import RebootEvent
 from backend.app.services.notification_center import record_notification_event
 from backend.app.services.telegram_notifications import resolve_message_context
@@ -201,7 +202,7 @@ async def notify_reboot_recovery(session: AsyncSession) -> None:
 
         text = (
             f"Server is back online after reboot requested by {event.requested_by} "
-            f"at {event.created_at.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}."
+            f"at {coerce_utc(event.created_at).strftime('%Y-%m-%d %H:%M UTC')}."
         )
         try:
             await send_message(settings_model.bot_token, str(target_chat), text)
