@@ -1,10 +1,19 @@
 from collections.abc import AsyncIterator
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.app.db.session import apply_sqlite_pragmas, schema_translate_map
 from backend.app.models.base import Base
+from backend.app.services.quick_status import clear_quick_status_caches
+
+
+@pytest.fixture(autouse=True)
+def _reset_quick_status_caches():
+    clear_quick_status_caches()
+    yield
+    clear_quick_status_caches()
 
 
 @pytest_asyncio.fixture

@@ -9,6 +9,10 @@ All notable changes to this project will be documented in this file.
 - The Telegram command bot now runs inside the backend process (`SERVER_MONITOR_TELEGRAM_BOT_ENABLED`), replacing the separate `telegram-bot` container.
 - Metric snapshots keep only the `raw_payload` keys the backend reads (SSH/Telegram/Wi-Fi/VPN details, top processes, extra disk figures) instead of a full copy of the monitor payload.
 - History tables gained composite `(owner, timestamp)` indexes and `ON DELETE CASCADE` foreign keys.
+- Dashboard GET endpoints no longer run ping/Prometheus/site checks or write to the database; the background poller is the only place network checks and alert-confirmation bookkeeping happen. Reads use the newest stored sample or the in-memory check cache.
+- Retention is now one hourly batched task (plus a WAL checkpoint) instead of a `DELETE` on every inserted snapshot or sample.
+- The 24-hour history builder only loads snapshots for the backends that actually own the requested metric tiles, and never decodes `raw_payload` unless an SSH/VPN/Wi-Fi tile needs it.
+- Monitor backends are polled concurrently (bounded), site monitors honour their configured `check_interval_seconds` (minimum 30 s) and keep their latest result on the `site_monitors` row, and the poller sleeps until the next due check instead of waking every 5 s.
 
 ### Removed
 - Project tabs and the auto-seeded Self-monitoring project (quick tiles now always belong to a backend).

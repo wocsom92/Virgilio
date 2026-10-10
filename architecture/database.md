@@ -2,7 +2,7 @@
 
 The backend uses SQLAlchemy models in `backend/app/models/` and creates tables on startup in a single SQLite file (`SERVER_MONITOR_DB_PATH`, WAL journal, `foreign_keys=ON`). The models still carry two logical schemas, `config` (slow-changing configuration) and `history` (high-churn samples), but both map to the same file; the split only documents intent and keeps the migration script's table ordering explicit.
 
-`backend/app/db/schema_compat.py` applies lightweight compatibility migrations on startup (missing columns and indexes). History tables carry composite indexes on `(owner id, timestamp)`, and child rows cascade on delete via `ON DELETE CASCADE`.
+`backend/app/db/schema_compat.py` applies lightweight compatibility migrations on startup (missing columns and indexes). History tables carry composite indexes on `(owner id, timestamp)`, and child rows cascade on delete via `ON DELETE CASCADE`. `site_monitors` mirrors its newest check result in `last_checked_at`, `last_success`, `last_latency_ms`, `last_status_code`, `last_detail` and `consecutive_failures` so neither the poller nor the dashboard needs to rank the samples table. `metric_snapshots.raw_payload` is a deferred column holding only the SSH/Telegram/Wi-Fi/VPN details, top processes and extra disk figures.
 
 ## ER Diagram
 

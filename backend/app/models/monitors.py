@@ -61,7 +61,8 @@ class MetricSnapshot(TimestampMixin, Base):
     os_version: Mapped[str | None] = mapped_column(String(120))
     uptime_seconds: Mapped[int | None] = mapped_column(Integer)
     warnings: Mapped[list[str] | None] = mapped_column(JSON)
-    raw_payload: Mapped[dict] = mapped_column(JSON)
+    # Deferred: only the newest snapshot per backend needs it (details, SSH/VPN/Wi-Fi tiles).
+    raw_payload: Mapped[dict] = mapped_column(JSON, deferred=True)
 
     backend: Mapped[MonitoredBackend] = relationship("MonitoredBackend", back_populates="snapshots")
 
@@ -237,6 +238,13 @@ class SiteMonitor(TimestampMixin, Base):
     check_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=1800)
     display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Newest result, kept on the row so the poller and dashboard never rank the samples table.
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    last_status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     samples: Mapped[list["SiteMonitorSample"]] = relationship(
         "SiteMonitorSample",

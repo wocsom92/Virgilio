@@ -8,7 +8,7 @@ import math
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, undefer
 
 from backend.app.core.config import settings
 from backend.app.models.monitors import (
@@ -30,7 +30,6 @@ from backend.app.services.prometheus_client import (
     PrometheusQueryError,
     fetch_prometheus_query_value,
 )
-from backend.app.services.system_settings import metric_retention_timedelta
 from backend.app.services.telegram_settings import get_or_create_settings
 
 
@@ -39,6 +38,16 @@ _REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "mount_avai
 _PING_METRICS = {"ping_result", "ping_delay_ms"}
 _PROMETHEUS_METRICS = {"prometheus_query"}
 _INFO_ONLY_METRICS = {"swap_used_percent"}
+# Metrics whose value lives in the (deferred) raw_payload JSON column.
+_RAW_PAYLOAD_METRICS = {
+    "mount_available_gb",
+    "ssh_last_successful_login",
+    "ssh_last_unsuccessful_attempt",
+    "ssh_status",
+    "telegram_bot_status",
+    "wifi_status",
+    "vpn_status",
+}
 _ALERT_STATUSES = {"warn", "critical"}
 _HISTORY_SEGMENT_COUNT = 12
 _HISTORY_SEGMENT_DURATION = timedelta(hours=2)
@@ -86,7 +95,13 @@ async def _apply_quick_status_alert_suppression_to_tiles(
     tiles: list[QuickStatusTileRead],
     *,
     now: datetime,
+    persist: bool = False,
 ) -> list[QuickStatusTileRead]:
+    """Hide warn/critical until the condition lasted the configured confirmation time.
+
+    With ``persist=False`` (dashboard reads) the stored ``alert_condition_started_at`` is only
+    read; the background poller and ingest paths call with ``persist=True`` and own the writes.
+    """
     settings_model = await get_or_create_settings(session)
     confirmation_minutes = max(0, int(settings_model.quick_status_alert_confirmation_minutes or 0))
     items_by_id = {item.id: item for item in items_list}
@@ -100,14 +115,15 @@ async def _apply_quick_status_alert_suppression_to_tiles(
             result.append(tile)
             continue
         raw_status = tile.status
-        _sync_quick_status_alert_condition_started_at(item, raw_status, now)
+        if persist:
+            _sync_quick_status_alert_condition_started_at(item, raw_status, now)
+            session.add(item)
         effective = _effective_quick_status_display_status(
             raw_status,
             item,
             now=now,
             confirmation_minutes=confirmation_minutes,
         )
-        session.add(item)
         if effective != raw_status:
             result.append(tile.model_copy(update={"status": effective}))
         else:
@@ -150,9 +166,14 @@ class QuickStatusEvaluation:
 
 
 _PING_CACHE: dict[tuple[int, int | None, str], PingCheckResult] = {}
-_PING_LOCK = asyncio.Lock()
 _PROMETHEUS_CACHE: dict[tuple[int, int | None, str, str], PrometheusCheckResult] = {}
-_PROMETHEUS_LOCK = asyncio.Lock()
+_NETWORK_CHECK_CONCURRENCY = 8
+
+
+def clear_quick_status_caches() -> None:
+    """Drop in-memory ping/Prometheus results (tests and admin edits)."""
+    _PING_CACHE.clear()
+    _PROMETHEUS_CACHE.clear()
 
 
 def _loaded_relation(item: QuickStatusItem, relation_name: str):
@@ -1173,48 +1194,40 @@ async def _load_history_snapshots(
     backend_ids: set[int],
     window_start: datetime,
     window_end: datetime,
+    *,
+    with_raw_payload: bool = False,
 ) -> dict[int, list[MetricSnapshot]]:
+    """Snapshots in the 24h window plus the one just before it (per backend).
+
+    ``raw_payload`` stays deferred unless an item in the batch evaluates a raw-payload metric.
+    """
     if not backend_ids:
         return {}
 
-    ranked_previous_snapshots = (
-        select(
-            MetricSnapshot.id.label("snapshot_id"),
-            func.row_number().over(
-                partition_by=MetricSnapshot.backend_id,
-                order_by=(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc()),
-            ).label("row_number"),
-        )
-        .where(
-            MetricSnapshot.backend_id.in_(backend_ids),
-            MetricSnapshot.reported_at < window_start,
-        )
-        .subquery()
-    )
-
-    previous_result = await session.execute(
-        select(MetricSnapshot).join(
-            ranked_previous_snapshots,
-            MetricSnapshot.id == ranked_previous_snapshots.c.snapshot_id,
-        ).where(ranked_previous_snapshots.c.row_number == 1)
-    )
-    current_result = await session.execute(
-        select(MetricSnapshot)
-        .where(
-            MetricSnapshot.backend_id.in_(backend_ids),
-            MetricSnapshot.reported_at >= window_start,
-            MetricSnapshot.reported_at <= window_end,
-        )
-        .order_by(MetricSnapshot.backend_id, MetricSnapshot.reported_at, MetricSnapshot.id)
-    )
-
     snapshots_by_backend: dict[int, list[MetricSnapshot]] = {backend_id: [] for backend_id in backend_ids}
-    for snapshot in previous_result.scalars():
-        snapshots_by_backend.setdefault(snapshot.backend_id, []).append(snapshot)
-    for snapshot in current_result.scalars():
-        snapshots_by_backend.setdefault(snapshot.backend_id, []).append(snapshot)
-    for snapshots in snapshots_by_backend.values():
-        snapshots.sort(key=lambda snapshot: (_coerce_utc(snapshot.reported_at), snapshot.id))
+    options = [undefer(MetricSnapshot.raw_payload)] if with_raw_payload else []
+    for backend_id in sorted(backend_ids):
+        previous_result = await session.execute(
+            select(MetricSnapshot)
+            .options(*options)
+            .where(MetricSnapshot.backend_id == backend_id, MetricSnapshot.reported_at < window_start)
+            .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
+            .limit(1)
+        )
+        previous = previous_result.scalar_one_or_none()
+        if previous is not None:
+            snapshots_by_backend[backend_id].append(previous)
+        current_result = await session.execute(
+            select(MetricSnapshot)
+            .options(*options)
+            .where(
+                MetricSnapshot.backend_id == backend_id,
+                MetricSnapshot.reported_at >= window_start,
+                MetricSnapshot.reported_at <= window_end,
+            )
+            .order_by(MetricSnapshot.reported_at, MetricSnapshot.id)
+        )
+        snapshots_by_backend[backend_id].extend(current_result.scalars())
     return snapshots_by_backend
 
 
@@ -1222,25 +1235,20 @@ async def _load_latest_snapshots(
     session: AsyncSession,
     backend_ids: set[int],
 ) -> dict[int, MetricSnapshot]:
-    if not backend_ids:
-        return {}
-
-    # Resolve the newest snapshot per backend via MAX(id) grouped by backend.
-    # Rows are inserted in chronological order, so the highest id per backend is
-    # always the most recent reading. This lets MySQL satisfy the lookup with a
-    # covering index skip scan (one row per backend) instead of ranking the
-    # entire metric_snapshots table with a window function.
-    max_id_result = await session.execute(
-        select(MetricSnapshot.backend_id, func.max(MetricSnapshot.id)).group_by(MetricSnapshot.backend_id)
-    )
-    latest_ids = [
-        max_id for backend_id, max_id in max_id_result.all() if backend_id in backend_ids and max_id is not None
-    ]
-    if not latest_ids:
-        return {}
-
-    result = await session.execute(select(MetricSnapshot).where(MetricSnapshot.id.in_(latest_ids)))
-    return {snapshot.backend_id: snapshot for snapshot in result.scalars()}
+    """Newest snapshot per backend, including the deferred raw_payload (details need it)."""
+    latest: dict[int, MetricSnapshot] = {}
+    for backend_id in sorted(backend_ids):
+        result = await session.execute(
+            select(MetricSnapshot)
+            .options(undefer(MetricSnapshot.raw_payload))
+            .where(MetricSnapshot.backend_id == backend_id)
+            .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
+            .limit(1)
+        )
+        snapshot = result.scalar_one_or_none()
+        if snapshot is not None:
+            latest[backend_id] = snapshot
+    return latest
 
 
 async def _load_ping_history_samples(
@@ -1351,52 +1359,36 @@ async def _load_latest_ping_samples(
     session: AsyncSession,
     item_ids: set[int],
 ) -> dict[int, QuickStatusPingSample]:
-    if not item_ids:
-        return {}
-
-    # See _load_latest_snapshots: the newest sample per item is the one with the
-    # highest id, so MAX(id) grouped by item resolves via a covering index skip
-    # scan rather than ranking the whole quick_status_ping_samples table.
-    max_id_result = await session.execute(
-        select(QuickStatusPingSample.quick_status_item_id, func.max(QuickStatusPingSample.id)).group_by(
-            QuickStatusPingSample.quick_status_item_id
+    latest: dict[int, QuickStatusPingSample] = {}
+    for item_id in sorted(item_ids):
+        result = await session.execute(
+            select(QuickStatusPingSample)
+            .where(QuickStatusPingSample.quick_status_item_id == item_id)
+            .order_by(QuickStatusPingSample.checked_at.desc(), QuickStatusPingSample.id.desc())
+            .limit(1)
         )
-    )
-    latest_ids = [
-        max_id for item_id, max_id in max_id_result.all() if item_id in item_ids and max_id is not None
-    ]
-    if not latest_ids:
-        return {}
-
-    result = await session.execute(select(QuickStatusPingSample).where(QuickStatusPingSample.id.in_(latest_ids)))
-    return {sample.quick_status_item_id: sample for sample in result.scalars()}
+        sample = result.scalar_one_or_none()
+        if sample is not None:
+            latest[item_id] = sample
+    return latest
 
 
 async def _load_latest_prometheus_samples(
     session: AsyncSession,
     item_ids: set[int],
 ) -> dict[int, QuickStatusPrometheusSample]:
-    if not item_ids:
-        return {}
-
-    # See _load_latest_snapshots: MAX(id) grouped by item resolves the newest
-    # sample per item with a covering index skip scan instead of ranking the
-    # whole quick_status_prometheus_samples table with a window function.
-    max_id_result = await session.execute(
-        select(QuickStatusPrometheusSample.quick_status_item_id, func.max(QuickStatusPrometheusSample.id)).group_by(
-            QuickStatusPrometheusSample.quick_status_item_id
+    latest: dict[int, QuickStatusPrometheusSample] = {}
+    for item_id in sorted(item_ids):
+        result = await session.execute(
+            select(QuickStatusPrometheusSample)
+            .where(QuickStatusPrometheusSample.quick_status_item_id == item_id)
+            .order_by(QuickStatusPrometheusSample.checked_at.desc(), QuickStatusPrometheusSample.id.desc())
+            .limit(1)
         )
-    )
-    latest_ids = [
-        max_id for item_id, max_id in max_id_result.all() if item_id in item_ids and max_id is not None
-    ]
-    if not latest_ids:
-        return {}
-
-    result = await session.execute(
-        select(QuickStatusPrometheusSample).where(QuickStatusPrometheusSample.id.in_(latest_ids))
-    )
-    return {sample.quick_status_item_id: sample for sample in result.scalars()}
+        sample = result.scalar_one_or_none()
+        if sample is not None:
+            latest[item_id] = sample
+    return latest
 
 
 def _has_detail_content(
@@ -1484,14 +1476,6 @@ async def _persist_ping_result(
 ) -> QuickStatusPingSample | None:
     if latest_sample is not None and _coerce_utc(latest_sample.checked_at) >= ping_result.checked_at:
         return None
-
-    retention_window = await metric_retention_timedelta(session)
-    cutoff = ping_result.checked_at - retention_window
-    await session.execute(
-        QuickStatusPingSample.__table__.delete()
-        .where(QuickStatusPingSample.checked_at < cutoff)
-        .execution_options(synchronize_session=False)
-    )
     sample = QuickStatusPingSample(
         quick_status_item_id=item.id,
         checked_at=ping_result.checked_at,
@@ -1511,14 +1495,6 @@ async def _persist_prometheus_result(
 ) -> QuickStatusPrometheusSample | None:
     if latest_sample is not None and _coerce_utc(latest_sample.checked_at) >= result.checked_at:
         return None
-
-    retention_window = await metric_retention_timedelta(session)
-    cutoff = result.checked_at - retention_window
-    await session.execute(
-        QuickStatusPrometheusSample.__table__.delete()
-        .where(QuickStatusPrometheusSample.checked_at < cutoff)
-        .execution_options(synchronize_session=False)
-    )
     sample = QuickStatusPrometheusSample(
         quick_status_item_id=item.id,
         checked_at=result.checked_at,
@@ -1531,105 +1507,64 @@ async def _persist_prometheus_result(
     return sample
 
 
-async def _check_ping(
-    session: AsyncSession,
+def _cached_ping_result(
     item: QuickStatusItem,
-    *,
-    latest_sample: QuickStatusPingSample | None = None,
-    persist_history: bool = False,
-    now: datetime | None = None,
-) -> tuple[PingCheckResult | None, QuickStatusPingSample | None]:
+    latest_sample: QuickStatusPingSample | None,
+) -> PingCheckResult | None:
+    """Newest known ping result without touching the network (cache first, then DB sample)."""
+    cached = _PING_CACHE.get(_ping_cache_key(item))
+    from_sample = _ping_result_from_sample(latest_sample) if latest_sample is not None else None
+    if cached is not None and (from_sample is None or cached.checked_at >= from_sample.checked_at):
+        return cached
+    if from_sample is not None:
+        _PING_CACHE[_ping_cache_key(item)] = from_sample
+    return from_sample
+
+
+async def _fetch_ping_result(item: QuickStatusItem, checked_at: datetime) -> PingCheckResult | None:
+    """Ask the backend's monitor agent to ping the item's endpoint (network, background only)."""
     if not item.ping_endpoint:
-        return None, None
+        return None
     backend = _loaded_relation(item, "backend")
     if backend is None:
-        return None, None
-    interval = max(5, int(item.ping_interval_seconds or 60))
-    checked_at = _coerce_utc(now or datetime.now(tz=timezone.utc))
-    latest_result = _ping_result_from_sample(latest_sample) if latest_sample is not None else None
-    cache_key = _ping_cache_key(item)
-    async with _PING_LOCK:
-        cached = _PING_CACHE.get(cache_key)
-        if cached and checked_at - cached.checked_at < timedelta(seconds=interval):
-            if persist_history:
-                persisted_sample = await _persist_ping_result(session, item, cached, latest_sample)
-                return cached, persisted_sample
-            return cached, None
-    if latest_result is not None and checked_at - latest_result.checked_at < timedelta(seconds=interval):
-        async with _PING_LOCK:
-            _PING_CACHE[cache_key] = latest_result
-        return latest_result, None
-    timeout_seconds = max(1, int(settings.monitor_request_timeout_seconds or 1))
-    timeout_seconds = min(30, timeout_seconds)
+        return None
+    timeout_seconds = min(30, max(1, int(settings.monitor_request_timeout_seconds or 1)))
     try:
-        payload = await fetch_ping(
-            backend.base_url,
-            backend.api_token,
-            item.ping_endpoint,
-            timeout_seconds,
-        )
+        payload = await fetch_ping(backend.base_url, backend.api_token, item.ping_endpoint, timeout_seconds)
     except (MonitorClientError, Exception):
         payload = None
-
     if payload is None:
-        success = False
-        latency_ms = None
-    else:
-        success = bool(payload.get("success"))
-        latency = payload.get("latency_ms")
-        latency_ms = float(latency) if isinstance(latency, (int, float)) else None
-    result = PingCheckResult(checked_at=checked_at, success=success, latency_ms=latency_ms)
-    async with _PING_LOCK:
-        _PING_CACHE[cache_key] = result
-    persisted_sample = None
-    if persist_history:
-        persisted_sample = await _persist_ping_result(session, item, result, latest_sample)
-    return result, persisted_sample
+        return PingCheckResult(checked_at=checked_at, success=False, latency_ms=None)
+    latency = payload.get("latency_ms")
+    return PingCheckResult(
+        checked_at=checked_at,
+        success=bool(payload.get("success")),
+        latency_ms=float(latency) if isinstance(latency, (int, float)) else None,
+    )
 
 
-async def _check_prometheus(
-    session: AsyncSession,
+def _cached_prometheus_result(
     item: QuickStatusItem,
-    *,
-    latest_sample: QuickStatusPrometheusSample | None = None,
-    persist_history: bool = False,
-    now: datetime | None = None,
-) -> tuple[PrometheusCheckResult | None, QuickStatusPrometheusSample | None]:
-    if not item.prometheus_url or not item.prometheus_query:
-        return None, None
-    interval = max(5, int(item.prometheus_interval_seconds or 60))
-    checked_at = _coerce_utc(now or datetime.now(tz=timezone.utc))
-    latest_result = _prometheus_result_from_sample(latest_sample) if latest_sample is not None else None
-    cache_key = _prometheus_cache_key(item)
-    async with _PROMETHEUS_LOCK:
-        cached = _PROMETHEUS_CACHE.get(cache_key)
-        if cached and checked_at - cached.checked_at < timedelta(seconds=interval):
-            if persist_history:
-                persisted_sample = await _persist_prometheus_result(session, item, cached, latest_sample)
-                return cached, persisted_sample
-            return cached, None
-    if latest_result is not None and checked_at - latest_result.checked_at < timedelta(seconds=interval):
-        async with _PROMETHEUS_LOCK:
-            _PROMETHEUS_CACHE[cache_key] = latest_result
-        return latest_result, None
+    latest_sample: QuickStatusPrometheusSample | None,
+) -> PrometheusCheckResult | None:
+    cached = _PROMETHEUS_CACHE.get(_prometheus_cache_key(item))
+    from_sample = _prometheus_result_from_sample(latest_sample) if latest_sample is not None else None
+    if cached is not None and (from_sample is None or cached.checked_at >= from_sample.checked_at):
+        return cached
+    if from_sample is not None:
+        _PROMETHEUS_CACHE[_prometheus_cache_key(item)] = from_sample
+    return from_sample
 
+
+async def _fetch_prometheus_result(item: QuickStatusItem, checked_at: datetime) -> PrometheusCheckResult | None:
+    if not item.prometheus_url or not item.prometheus_query:
+        return None
     try:
         response = await fetch_prometheus_query_value(item.prometheus_url, item.prometheus_query)
-        result = PrometheusCheckResult(
-            checked_at=checked_at,
-            sampled_at=response.sampled_at,
-            value=response.value,
-        )
+        return PrometheusCheckResult(checked_at=checked_at, sampled_at=response.sampled_at, value=response.value)
     except (PrometheusQueryError, Exception) as exc:
         message = str(exc).strip() or "Prometheus query failed"
-        result = PrometheusCheckResult(checked_at=checked_at, value=None, error_message=message)
-
-    async with _PROMETHEUS_LOCK:
-        _PROMETHEUS_CACHE[cache_key] = result
-    persisted_sample = None
-    if persist_history:
-        persisted_sample = await _persist_prometheus_result(session, item, result, latest_sample)
-    return result, persisted_sample
+        return PrometheusCheckResult(checked_at=checked_at, value=None, error_message=message)
 
 
 async def list_quick_status_items(session: AsyncSession) -> list[QuickStatusItem]:
@@ -1657,46 +1592,88 @@ async def refresh_due_quick_status_samples(
     *,
     now: datetime | None = None,
 ) -> int:
+    """Run due ping/Prometheus checks concurrently and persist new samples.
+
+    Due-ness is decided from the in-memory cache (primed from the newest DB sample on a cold
+    start), so steady-state ticks do no database work for items that are not due yet.
+    """
     items_list = list(items) if items is not None else await list_quick_status_items(session)
-    ping_items = [item for item in items_list if item.metric_key in _PING_METRICS]
-    prometheus_items = [item for item in items_list if item.metric_key in _PROMETHEUS_METRICS]
+    ping_items = [item for item in items_list if item.metric_key in _PING_METRICS and item.ping_endpoint]
+    prometheus_items = [
+        item
+        for item in items_list
+        if item.metric_key in _PROMETHEUS_METRICS and item.prometheus_url and item.prometheus_query
+    ]
     if not ping_items and not prometheus_items:
         return 0
 
     checked_at = _coerce_utc(now or datetime.now(tz=timezone.utc))
-    latest_ping_samples = await _load_latest_ping_samples(session, {item.id for item in ping_items})
-    latest_prometheus_samples = await _load_latest_prometheus_samples(session, {item.id for item in prometheus_items})
 
-    check_items: list[QuickStatusItem] = []
-    check_latest_samples: list[QuickStatusPingSample | QuickStatusPrometheusSample | None] = []
-    check_tasks: list = []
+    cold_ping_ids = {item.id for item in ping_items if _ping_cache_key(item) not in _PING_CACHE}
+    cold_prometheus_ids = {item.id for item in prometheus_items if _prometheus_cache_key(item) not in _PROMETHEUS_CACHE}
+    latest_ping_samples = await _load_latest_ping_samples(session, cold_ping_ids)
+    latest_prometheus_samples = await _load_latest_prometheus_samples(session, cold_prometheus_ids)
 
+    due: list[tuple[str, QuickStatusItem]] = []
     for item in ping_items:
-        latest = latest_ping_samples.get(item.id)
-        check_items.append(item)
-        check_latest_samples.append(latest)
-        check_tasks.append(_check_ping(session, item, latest_sample=latest, persist_history=False, now=checked_at))
-
+        known = _cached_ping_result(item, latest_ping_samples.get(item.id))
+        interval = max(5, int(item.ping_interval_seconds or 60))
+        if known is None or checked_at - known.checked_at >= timedelta(seconds=interval):
+            due.append(("ping", item))
     for item in prometheus_items:
-        latest = latest_prometheus_samples.get(item.id)
-        check_items.append(item)
-        check_latest_samples.append(latest)
-        check_tasks.append(_check_prometheus(session, item, latest_sample=latest, persist_history=False, now=checked_at))
+        known = _cached_prometheus_result(item, latest_prometheus_samples.get(item.id))
+        interval = max(5, int(item.prometheus_interval_seconds or 60))
+        if known is None or checked_at - known.checked_at >= timedelta(seconds=interval):
+            due.append(("prometheus", item))
+    if not due:
+        return 0
 
-    check_results = await asyncio.gather(*check_tasks) if check_tasks else []
+    semaphore = asyncio.Semaphore(_NETWORK_CHECK_CONCURRENCY)
+
+    async def _run(kind: str, item: QuickStatusItem):
+        async with semaphore:
+            if kind == "ping":
+                return await _fetch_ping_result(item, checked_at)
+            return await _fetch_prometheus_result(item, checked_at)
+
+    results = await asyncio.gather(*(_run(kind, item) for kind, item in due), return_exceptions=True)
+
+    # Persist sequentially: one AsyncSession must not be used concurrently.
+    due_ping_ids = {item.id for kind, item in due if kind == "ping"} - set(latest_ping_samples)
+    due_prometheus_ids = {item.id for kind, item in due if kind == "prometheus"} - set(latest_prometheus_samples)
+    latest_ping_samples.update(await _load_latest_ping_samples(session, due_ping_ids))
+    latest_prometheus_samples.update(await _load_latest_prometheus_samples(session, due_prometheus_ids))
+
     persisted_count = 0
-    for item, latest_sample, (result, _) in zip(check_items, check_latest_samples, check_results):
-        if result is None:
+    for (kind, item), result in zip(due, results):
+        if result is None or isinstance(result, BaseException):
             continue
-        if item.metric_key in _PING_METRICS and isinstance(result, PingCheckResult):
-            persisted = await _persist_ping_result(session, item, result, latest_sample)
-        elif item.metric_key in _PROMETHEUS_METRICS and isinstance(result, PrometheusCheckResult):
-            persisted = await _persist_prometheus_result(session, item, result, latest_sample)
+        if kind == "ping" and isinstance(result, PingCheckResult):
+            _PING_CACHE[_ping_cache_key(item)] = result
+            persisted = await _persist_ping_result(session, item, result, latest_ping_samples.get(item.id))
+        elif kind == "prometheus" and isinstance(result, PrometheusCheckResult):
+            _PROMETHEUS_CACHE[_prometheus_cache_key(item)] = result
+            persisted = await _persist_prometheus_result(
+                session, item, result, latest_prometheus_samples.get(item.id)
+            )
         else:
             persisted = None
         if persisted is not None:
             persisted_count += 1
     return persisted_count
+
+
+async def refresh_quick_status_alert_state(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> None:
+    """Record when warn/critical conditions started (owned by the background poller)."""
+    items = await list_quick_status_items(session)
+    if not items:
+        return
+    await build_quick_status_tile_summaries(session, items, now=now, persist_alert_state=True)
+    await session.commit()
 
 
 async def run_due_quick_status_checks(
@@ -1717,9 +1694,9 @@ async def build_quick_status_tiles(
     include_heartbeat_tiles: bool = False,
     backends: Iterable[object] | None = None,
     now: datetime | None = None,
-    persist_ping_history: bool = False,
-    persist_prometheus_history: bool = False,
+    persist_alert_state: bool = False,
 ) -> list[QuickStatusTileRead]:
+    """Full tiles with 24h history strips, series and details. Never touches the network."""
     items_list = sorted(
         [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))],
         key=_quick_status_item_sort_key,
@@ -1741,68 +1718,37 @@ async def build_quick_status_tiles(
     window_start, window_end = _history_window_bounds(now)
     ping_item_ids = {item.id for item in items_list if item.metric_key in _PING_METRICS}
     prometheus_item_ids = {item.id for item in items_list if item.metric_key in _PROMETHEUS_METRICS}
-    ping_history_by_item, prometheus_history_by_item, history_snapshots_by_backend = await asyncio.gather(
-        _load_ping_history_samples(session, ping_item_ids, window_start, window_end),
-        _load_prometheus_history_samples(session, prometheus_item_ids, window_start, window_end),
-        _load_history_snapshots(session, backend_ids, window_start, window_end),
+    # Only backends that own metric-based items (or heartbeat tiles) need the 24h snapshot window.
+    history_backend_ids = {
+        item.backend_id
+        for item in items_list
+        if item.backend_id is not None and item.metric_key not in _PING_METRICS and item.metric_key not in _PROMETHEUS_METRICS
+    }
+    if include_heartbeat_tiles:
+        history_backend_ids |= backend_ids
+    needs_raw_payload = any(item.metric_key in _RAW_PAYLOAD_METRICS for item in items_list)
+    ping_history_by_item = await _load_ping_history_samples(session, ping_item_ids, window_start, window_end)
+    prometheus_history_by_item = await _load_prometheus_history_samples(
+        session, prometheus_item_ids, window_start, window_end
+    )
+    history_snapshots_by_backend = await _load_history_snapshots(
+        session, history_backend_ids, window_start, window_end, with_raw_payload=needs_raw_payload
+    )
+    latest_snapshots = await _load_latest_snapshots(
+        session, {item.backend_id for item in items_list if item.backend_id is not None} | (backend_ids if include_heartbeat_tiles else set())
     )
     ping_results_by_item: dict[int, PingCheckResult | None] = {}
     prometheus_results_by_item: dict[int, PrometheusCheckResult | None] = {}
     prometheus_series_by_item: dict[int, list[QuickStatusSeriesPoint]] = {}
     prometheus_summary_by_item: dict[int, QuickStatusSeriesSummary | None] = {}
 
-    check_items: list[QuickStatusItem] = []
-    check_latest_samples: list[QuickStatusPingSample | QuickStatusPrometheusSample | None] = []
-    check_tasks: list = []
     for item in items_list:
         if item.metric_key in _PING_METRICS:
-            latest = ping_history_by_item.get(item.id, [])[-1] if ping_history_by_item.get(item.id) else None
-            check_items.append(item)
-            check_latest_samples.append(latest)
-            check_tasks.append(
-                _check_ping(session, item, latest_sample=latest, persist_history=False, now=window_end)
-            )
+            history = ping_history_by_item.get(item.id) or []
+            ping_results_by_item[item.id] = _cached_ping_result(item, history[-1] if history else None)
         elif item.metric_key in _PROMETHEUS_METRICS:
-            latest = prometheus_history_by_item.get(item.id, [])[-1] if prometheus_history_by_item.get(item.id) else None
-            check_items.append(item)
-            check_latest_samples.append(latest)
-            check_tasks.append(
-                _check_prometheus(session, item, latest_sample=latest, persist_history=False, now=window_end)
-            )
-
-    check_results = await asyncio.gather(*check_tasks) if check_tasks else []
-
-    for item, latest_sample, (result, _) in zip(check_items, check_latest_samples, check_results):
-        if item.metric_key in _PING_METRICS:
-            ping_results_by_item[item.id] = result
-        elif item.metric_key in _PROMETHEUS_METRICS:
-            prometheus_results_by_item[item.id] = result
-
-    persist_coros: list = []
-    persist_meta: list[tuple[str, int]] = []
-    for item, latest_sample, (result, _) in zip(check_items, check_latest_samples, check_results):
-        if item.metric_key in _PING_METRICS and persist_ping_history and result is not None:
-            persist_coros.append(_persist_ping_result(session, item, result, latest_sample))
-            persist_meta.append(("ping", item.id))
-        elif item.metric_key in _PROMETHEUS_METRICS and persist_prometheus_history and result is not None:
-            persist_coros.append(_persist_prometheus_result(session, item, result, latest_sample))
-            persist_meta.append(("prom", item.id))
-    if persist_coros:
-        persisted_samples = await asyncio.gather(*persist_coros)
-        for (kind, item_id), persisted in zip(persist_meta, persisted_samples):
-            if persisted is None:
-                continue
-            if kind == "ping":
-                ping_history_by_item.setdefault(item_id, []).append(persisted)
-                ping_history_by_item[item_id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
-            else:
-                prometheus_history_by_item.setdefault(item_id, []).append(persisted)
-                prometheus_history_by_item[item_id].sort(key=lambda s: (_coerce_utc(s.checked_at), s.id))
-    latest_snapshots = {
-        backend_id: snapshots[-1]
-        for backend_id, snapshots in history_snapshots_by_backend.items()
-        if snapshots
-    }
+            history = prometheus_history_by_item.get(item.id) or []
+            prometheus_results_by_item[item.id] = _cached_prometheus_result(item, history[-1] if history else None)
 
     tiles: list[QuickStatusTileRead] = []
     if include_heartbeat_tiles:
@@ -1955,7 +1901,9 @@ async def build_quick_status_tiles(
                 details=details,
             )
         )
-    return await _apply_quick_status_alert_suppression_to_tiles(session, items_list, tiles, now=window_end)
+    return await _apply_quick_status_alert_suppression_to_tiles(
+        session, items_list, tiles, now=window_end, persist=persist_alert_state
+    )
 
 
 async def build_quick_status_tile_summaries(
@@ -1965,7 +1913,10 @@ async def build_quick_status_tile_summaries(
     include_heartbeat_tiles: bool = False,
     backends: Iterable[object] | None = None,
     now: datetime | None = None,
+    include_details: bool = False,
+    persist_alert_state: bool = False,
 ) -> list[QuickStatusTileRead]:
+    """Lightweight tiles (no history/series) from the newest stored readings. No network."""
     items_list = sorted(
         [item for item in items if is_supported_quick_status_metric(getattr(item, "metric_key", None))],
         key=_quick_status_item_sort_key,
@@ -1988,37 +1939,19 @@ async def build_quick_status_tile_summaries(
     ping_item_ids = {item.id for item in items_list if item.metric_key in _PING_METRICS}
     prometheus_item_ids = {item.id for item in items_list if item.metric_key in _PROMETHEUS_METRICS}
 
-    latest_snapshots_by_backend, latest_ping_samples, latest_prometheus_samples = await asyncio.gather(
-        _load_latest_snapshots(session, backend_ids),
-        _load_latest_ping_samples(session, ping_item_ids),
-        _load_latest_prometheus_samples(session, prometheus_item_ids),
-    )
+    latest_snapshots_by_backend = await _load_latest_snapshots(session, backend_ids)
+    latest_ping_samples = await _load_latest_ping_samples(session, ping_item_ids)
+    latest_prometheus_samples = await _load_latest_prometheus_samples(session, prometheus_item_ids)
 
-    check_items: list[QuickStatusItem] = []
-    check_latest_samples: list[QuickStatusPingSample | QuickStatusPrometheusSample | None] = []
-    check_tasks: list = []
-    for item in items_list:
-        if item.metric_key in _PING_METRICS:
-            latest = latest_ping_samples.get(item.id)
-            check_items.append(item)
-            check_latest_samples.append(latest)
-            check_tasks.append(_check_ping(session, item, latest_sample=latest, persist_history=False, now=summary_now))
-        elif item.metric_key in _PROMETHEUS_METRICS:
-            latest = latest_prometheus_samples.get(item.id)
-            check_items.append(item)
-            check_latest_samples.append(latest)
-            check_tasks.append(
-                _check_prometheus(session, item, latest_sample=latest, persist_history=False, now=summary_now)
-            )
-
-    check_results = await asyncio.gather(*check_tasks) if check_tasks else []
     ping_results_by_item: dict[int, PingCheckResult | None] = {}
     prometheus_results_by_item: dict[int, PrometheusCheckResult | None] = {}
-    for item, _, (result, _) in zip(check_items, check_latest_samples, check_results):
+    for item in items_list:
         if item.metric_key in _PING_METRICS:
-            ping_results_by_item[item.id] = result
+            ping_results_by_item[item.id] = _cached_ping_result(item, latest_ping_samples.get(item.id))
         elif item.metric_key in _PROMETHEUS_METRICS:
-            prometheus_results_by_item[item.id] = result
+            prometheus_results_by_item[item.id] = _cached_prometheus_result(
+                item, latest_prometheus_samples.get(item.id)
+            )
 
     tiles: list[QuickStatusTileRead] = []
     if include_heartbeat_tiles:
@@ -2089,6 +2022,18 @@ async def build_quick_status_tile_summaries(
                 else (_coerce_utc(prometheus_result.checked_at) if prometheus_result is not None else None)
             )
 
+        details = (
+            _build_detail_lines(
+                item,
+                snapshot,
+                status=status,
+                prometheus_result=prometheus_result,
+                prometheus_summary=None,
+                now=summary_now,
+            )
+            if include_details
+            else None
+        )
         tiles.append(
             QuickStatusTileRead(
                 id=item.id,
@@ -2107,10 +2052,13 @@ async def build_quick_status_tile_summaries(
                 history_loaded=False,
                 has_details=bool(_has_detail_content(item, snapshot) or item.metric_key in _PROMETHEUS_METRICS),
                 reported_at=reported_at,
+                details=details,
             )
         )
 
-    return await _apply_quick_status_alert_suppression_to_tiles(session, items_list, tiles, now=summary_now)
+    return await _apply_quick_status_alert_suppression_to_tiles(
+        session, items_list, tiles, now=summary_now, persist=persist_alert_state
+    )
 
 
 def detect_quick_status_transitions_for_snapshot(

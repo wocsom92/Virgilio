@@ -61,6 +61,12 @@ _COLUMN_ADDITIONS: tuple[ColumnAddition, ...] = (
     ColumnAddition("site_monitors", "warning_consecutive_failures", "INTEGER NOT NULL DEFAULT 3"),
     ColumnAddition("site_monitors", "critical_consecutive_failures", "INTEGER NOT NULL DEFAULT 5"),
     ColumnAddition("site_monitors", "check_interval_seconds", "INTEGER NOT NULL DEFAULT 1800"),
+    ColumnAddition("site_monitors", "last_checked_at", "DATETIME NULL"),
+    ColumnAddition("site_monitors", "last_success", "BOOLEAN NULL"),
+    ColumnAddition("site_monitors", "last_latency_ms", "FLOAT NULL"),
+    ColumnAddition("site_monitors", "last_status_code", "INTEGER NULL"),
+    ColumnAddition("site_monitors", "last_detail", "TEXT NULL"),
+    ColumnAddition("site_monitors", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
     ColumnAddition("site_monitor_samples", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
     ColumnAddition(
         "system_settings",

@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from backend.app.models.monitors import (
     MetricSnapshot,
@@ -37,6 +38,7 @@ async def fetch_backends_with_latest_snapshots(
 
     query: Select = (
         select(MonitoredBackend, MetricSnapshot)
+        .options(undefer(MetricSnapshot.raw_payload))
         .outerjoin(latest_snapshot_sq, latest_snapshot_sq.c.backend_id == MonitoredBackend.id)
         .outerjoin(MetricSnapshot, MetricSnapshot.id == latest_snapshot_sq.c.snapshot_id)
     )

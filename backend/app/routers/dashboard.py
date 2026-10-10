@@ -15,11 +15,7 @@ from backend.app.schemas.quick_status import QuickStatusTileRead
 from backend.app.schemas.site_monitoring import SiteMonitorStatusRead
 from backend.app.services.backend_queries import fetch_backends_with_latest_snapshots
 from backend.app.services.quick_status import build_quick_status_tile_summaries, build_quick_status_tiles
-from backend.app.services.site_monitoring import (
-    build_site_monitor_statuses,
-    list_site_monitors,
-    refresh_due_site_monitor_samples,
-)
+from backend.app.services.site_monitoring import build_site_monitor_statuses, list_site_monitors
 
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -66,14 +62,12 @@ async def fetch_quick_status_tiles(
     session: AsyncSession = Depends(get_session),
 ) -> list[QuickStatusTileRead]:
     backends, items = await _load_dashboard_quick_status_context(session)
-    tiles = await build_quick_status_tile_summaries(
+    return await build_quick_status_tile_summaries(
         session,
         items,
         include_heartbeat_tiles=True,
         backends=backends,
     )
-    await session.commit()
-    return tiles
 
 
 @router.get("/quick-status/history", response_model=list[QuickStatusTileRead])
@@ -96,10 +90,7 @@ async def fetch_quick_status_tile_history(
         scoped_items,
         include_heartbeat_tiles=include_heartbeat_tiles,
         backends=backends,
-        persist_ping_history=False,
-        persist_prometheus_history=False,
     )
-    await session.commit()
 
     tiles_by_id = {tile.id: tile for tile in tiles if tile.id in set(requested_ids)}
     return [tiles_by_id[tile_id] for tile_id in requested_ids if tile_id in tiles_by_id]
@@ -120,10 +111,7 @@ async def fetch_quick_status_tile_detail(
         scoped_items,
         include_heartbeat_tiles=include_heartbeat_tiles,
         backends=backends,
-        persist_ping_history=False,
-        persist_prometheus_history=False,
     )
-    await session.commit()
 
     for tile in tiles:
         if tile.id == tile_id:
@@ -137,10 +125,7 @@ async def fetch_site_monitor_statuses(
     session: AsyncSession = Depends(get_session),
 ) -> list[SiteMonitorStatusRead]:
     items = await list_site_monitors(session, only_active=True)
-    latest_samples = await refresh_due_site_monitor_samples(session, items)
-    statuses = await build_site_monitor_statuses(session, items, latest_samples=latest_samples)
-    await session.commit()
-    return statuses
+    return await build_site_monitor_statuses(session, items)
 
 
 @router.get(

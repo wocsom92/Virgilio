@@ -330,3 +330,94 @@ async def test_run_http_check_invalid_target_returns_failed_result():
     assert result.success is False
     assert result.detail is not None
     assert "invalid target" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_refresh_respects_configured_check_interval_and_row_state(db_session, monkeypatch):
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    item = SiteMonitor(
+        name="fast",
+        check_type="http",
+        target="https://fast.example/healthz",
+        expected_status_codes=[200],
+        timeout_ms=3000,
+        warning_consecutive_failures=3,
+        critical_consecutive_failures=5,
+        check_interval_seconds=60,
+        display_order=0,
+        is_active=True,
+        last_checked_at=now - timedelta(seconds=30),
+        last_success=True,
+        last_latency_ms=12.0,
+        consecutive_failures=0,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    calls = 0
+
+    async def fake_run_site_check(site_monitor, checked_at):
+        nonlocal calls
+        calls += 1
+        return site_monitoring.SiteCheckResult(
+            checked_at=checked_at, success=False, latency_ms=None, status_code=500, detail="boom"
+        )
+
+    monkeypatch.setattr(site_monitoring, "_run_site_check", fake_run_site_check)
+
+    # 30 s after the last check with a 60 s interval: not due, no network, no sample.
+    assert await site_monitoring.refresh_due_site_monitor_samples(db_session, [item], now=now) == {}
+    assert calls == 0
+
+    later = now + timedelta(seconds=45)
+    persisted = await site_monitoring.refresh_due_site_monitor_samples(db_session, [item], now=later)
+    await db_session.commit()
+    assert calls == 1
+    assert persisted[item.id].status_code == 500
+    assert item.last_success is False
+    assert item.consecutive_failures == 1
+    assert site_monitoring._coerce_utc(item.last_checked_at) == later
+
+    statuses = await site_monitoring.build_site_monitor_statuses(db_session, [item], now=later)
+    assert statuses[0].display_value == "1 failure"
+    assert statuses[0].status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_refresh_runs_due_checks_concurrently(db_session, monkeypatch):
+    import asyncio
+    import time
+
+    now = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    items = [
+        SiteMonitor(
+            name=f"site-{index}",
+            check_type="http",
+            target=f"https://site-{index}.example/",
+            expected_status_codes=[200],
+            timeout_ms=3000,
+            warning_consecutive_failures=3,
+            critical_consecutive_failures=5,
+            check_interval_seconds=1800,
+            display_order=index,
+            is_active=True,
+        )
+        for index in range(5)
+    ]
+    db_session.add_all(items)
+    await db_session.commit()
+
+    async def slow_check(site_monitor, checked_at):
+        await asyncio.sleep(0.2)
+        return site_monitoring.SiteCheckResult(
+            checked_at=checked_at, success=True, latency_ms=5.0, status_code=200, detail=None
+        )
+
+    monkeypatch.setattr(site_monitoring, "_run_site_check", slow_check)
+
+    started = time.perf_counter()
+    persisted = await site_monitoring.refresh_due_site_monitor_samples(db_session, items, now=now)
+    elapsed = time.perf_counter() - started
+
+    assert len(persisted) == 5
+    assert elapsed < 0.6

@@ -4,9 +4,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+import asyncio
+
+from sqlalchemy import select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from backend.app.models.monitors import MetricSnapshot, MonitoredBackend
 from backend.app.schemas.metrics import MetricSnapshotCreate
@@ -20,7 +23,6 @@ from backend.app.services.telegram_notifications import (
     maybe_send_successful_ssh_login_notification,
     queue_quick_status_notifications,
 )
-from backend.app.services.system_settings import metric_retention_timedelta
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,7 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
     payload = MetricSnapshotCreate.model_validate(metrics_payload)
     previous_snapshot_result = await session.execute(
         select(MetricSnapshot)
+        .options(undefer(MetricSnapshot.raw_payload))
         .where(MetricSnapshot.backend_id == backend.id)
         .order_by(MetricSnapshot.reported_at.desc(), MetricSnapshot.id.desc())
         .limit(1)
@@ -61,20 +64,9 @@ async def ingest_backend_metrics(session: AsyncSession, backend: MonitoredBacken
     backend.last_seen_at = datetime.now(tz=timezone.utc)
     backend.last_warning = "; ".join(payload.warnings) if payload.warnings else None
 
-    retention_window = await metric_retention_timedelta(session)
-    cutoff = datetime.now(tz=timezone.utc) - retention_window
-    await session.execute(
-        delete(MetricSnapshot)
-        .where(
-            MetricSnapshot.backend_id == backend.id,
-            MetricSnapshot.reported_at < cutoff,
-        )
-        .execution_options(synchronize_session=False)
-    )
     session.add(snapshot)
     session.add(backend)
     await session.commit()
-    await session.refresh(snapshot)
 
     await maybe_send_successful_ssh_login_notification(
         session,
@@ -102,6 +94,14 @@ async def safe_ingest_backend_metrics(session: AsyncSession, backend: MonitoredB
         return snapshot
     except OperationalError as exc:
         message = str(exc.orig).lower() if getattr(exc, "orig", None) else str(exc).lower()
+        if "database is locked" in message:
+            await session.rollback()
+            await asyncio.sleep(0.5)
+            try:
+                return await ingest_backend_metrics(session, backend)
+            except Exception as retry_exc:  # pragma: no cover - defensive logging
+                logger.warning("Ingest retry after lock failed for backend %s: %s", backend.name, retry_exc)
+                return None
         if (
             "backend_version" in message or "unknown column" in message or "no such column" in message
         ) and not attempted_schema_fix:

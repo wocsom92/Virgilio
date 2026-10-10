@@ -886,11 +886,11 @@ async def test_build_quick_status_tiles_persists_new_ping_samples(db_session, mo
 
     monkeypatch.setattr(quick_status, "fetch_ping", fake_fetch_ping)
 
-    tiles = await quick_status.build_quick_status_tiles(
-        db_session,
-        [item],
-        persist_ping_history=True,
-    )
+    persisted = await quick_status.refresh_due_quick_status_samples(db_session, [item])
+    assert persisted == 1
+    # A second refresh inside the interval is a no-op (cache decides due-ness, no DB work).
+    assert await quick_status.refresh_due_quick_status_samples(db_session, [item]) == 0
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item])
 
     samples = (
         await db_session.execute(
@@ -943,12 +943,8 @@ async def test_build_quick_status_tiles_queries_prometheus_and_persists_history(
 
     monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
 
-    tiles = await quick_status.build_quick_status_tiles(
-        db_session,
-        [item],
-        now=now,
-        persist_prometheus_history=True,
-    )
+    assert await quick_status.refresh_due_quick_status_samples(db_session, [item], now=now) == 1
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
 
     samples = (
         await db_session.execute(
@@ -1006,12 +1002,8 @@ async def test_build_quick_status_tiles_marks_stale_prometheus_metric_with_stale
 
     monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
 
-    tiles = await quick_status.build_quick_status_tiles(
-        db_session,
-        [item],
-        now=now,
-        persist_prometheus_history=True,
-    )
+    await quick_status.refresh_due_quick_status_samples(db_session, [item], now=now)
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
 
     assert tiles[0].status == "ok"
     assert tiles[0].stale is True
@@ -1134,18 +1126,12 @@ async def test_build_quick_status_tiles_includes_prometheus_series_for_temperatu
     )
     await db_session.flush()
 
-    async def fake_check_prometheus(*args, **kwargs):
-        return (
-            quick_status.PrometheusCheckResult(
-                checked_at=now,
-                sampled_at=now,
-                value=22.4,
-            ),
-            None,
-        )
+    async def fake_fetch_prometheus_query_value(base_url: str, query: str):
+        return PrometheusQueryValue(value=22.4, sampled_at=now)
 
-    monkeypatch.setattr(quick_status, "_check_prometheus", fake_check_prometheus)
+    monkeypatch.setattr(quick_status, "fetch_prometheus_query_value", fake_fetch_prometheus_query_value)
 
+    await quick_status.refresh_due_quick_status_samples(db_session, [item], now=now)
     tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
 
     assert len(tiles) == 1
@@ -1200,9 +1186,24 @@ async def test_quick_status_alert_suppression_keeps_ok_until_confirmation_elapse
     db_session.add(item)
     await db_session.commit()
 
+    # Dashboard reads never write: without the poller's bookkeeping the alert stays hidden.
+    tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
+    assert tiles[0].status == "ok"
+    assert item.alert_condition_started_at is None
+
+    await quick_status.refresh_quick_status_alert_state(db_session, now=now)
+    assert quick_status._coerce_utc(item.alert_condition_started_at) == now
     tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=now)
     assert tiles[0].status == "ok"
 
     later = now + timedelta(minutes=6)
+    await quick_status.refresh_quick_status_alert_state(db_session, now=later)
     tiles = await quick_status.build_quick_status_tiles(db_session, [item], now=later)
     assert tiles[0].status == "critical"
+
+    # Once the condition clears the poller resets the marker.
+    snapshot = (await db_session.execute(select(MetricSnapshot))).scalars().first()
+    snapshot.ram_used_percent = 10
+    await db_session.commit()
+    await quick_status.refresh_quick_status_alert_state(db_session, now=later)
+    assert item.alert_condition_started_at is None

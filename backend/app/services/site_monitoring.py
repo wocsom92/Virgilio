@@ -12,7 +12,7 @@ from typing import Iterable
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.models.monitors import SiteMonitor, SiteMonitorSample
@@ -22,7 +22,6 @@ from backend.app.schemas.site_monitoring import (
     normalize_site_monitor_target,
 )
 from backend.app.services.http_clients import get_monitor_http_client
-from backend.app.services.system_settings import metric_retention_timedelta
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +29,9 @@ logger = logging.getLogger(__name__)
 _HISTORY_SEGMENT_COUNT = 48
 _HISTORY_SEGMENT_DURATION = timedelta(minutes=30)
 _HISTORY_WINDOW = _HISTORY_SEGMENT_DURATION * _HISTORY_SEGMENT_COUNT
-_SITE_MONITOR_CHECK_INTERVAL_SECONDS = int(_HISTORY_SEGMENT_DURATION.total_seconds())
+_DEFAULT_CHECK_INTERVAL_SECONDS = int(_HISTORY_SEGMENT_DURATION.total_seconds())
+_MIN_CHECK_INTERVAL_SECONDS = 30
+_CHECK_CONCURRENCY = 5
 _PING_TIME_PATTERN = re.compile(r"time[=<]?\s*(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
 
 
@@ -41,6 +42,42 @@ class SiteCheckResult:
     latency_ms: float | None
     status_code: int | None
     detail: str | None
+
+
+@dataclass(slots=True)
+class LatestResult:
+    """Newest check outcome for a monitor, read from the row (or a sample on legacy rows)."""
+
+    checked_at: datetime
+    success: bool
+    latency_ms: float | None
+    status_code: int | None
+    detail: str | None
+    consecutive_failures: int
+
+    @classmethod
+    def from_sample(cls, sample: SiteMonitorSample) -> "LatestResult":
+        return cls(
+            checked_at=sample.checked_at,
+            success=bool(sample.success),
+            latency_ms=sample.latency_ms,
+            status_code=sample.status_code,
+            detail=sample.detail,
+            consecutive_failures=int(sample.consecutive_failures or 0),
+        )
+
+    @classmethod
+    def from_monitor(cls, site_monitor: SiteMonitor) -> "LatestResult | None":
+        if site_monitor.last_checked_at is None or site_monitor.last_success is None:
+            return None
+        return cls(
+            checked_at=site_monitor.last_checked_at,
+            success=bool(site_monitor.last_success),
+            latency_ms=site_monitor.last_latency_ms,
+            status_code=site_monitor.last_status_code,
+            detail=site_monitor.last_detail,
+            consecutive_failures=int(site_monitor.consecutive_failures or 0),
+        )
 
 
 @dataclass(slots=True)
@@ -62,7 +99,7 @@ def _history_window_bounds(now: datetime | None = None) -> tuple[datetime, datet
     return window_end - _HISTORY_WINDOW, window_end
 
 
-def _resolve_status(site_monitor: SiteMonitor, sample: SiteMonitorSample | None) -> str:
+def _resolve_status(site_monitor: SiteMonitor, sample: SiteMonitorSample | LatestResult | None) -> str:
     if sample is None:
         return "unknown"
     if sample.consecutive_failures >= int(site_monitor.critical_consecutive_failures):
@@ -72,7 +109,7 @@ def _resolve_status(site_monitor: SiteMonitor, sample: SiteMonitorSample | None)
     return "ok"
 
 
-def _format_display_value(site_monitor: SiteMonitor, sample: SiteMonitorSample | None) -> str:
+def _format_display_value(site_monitor: SiteMonitor, sample: SiteMonitorSample | LatestResult | None) -> str:
     if sample is None:
         return "—"
     if sample.consecutive_failures > 0:
@@ -99,15 +136,19 @@ def _history_status_from_sample(sample: SiteMonitorSample | None) -> str:
     return "ok" if sample.success else "critical"
 
 
-def _site_monitor_check_interval_seconds(_: SiteMonitor | None = None) -> int:
-    return _SITE_MONITOR_CHECK_INTERVAL_SECONDS
+def _site_monitor_check_interval_seconds(site_monitor: SiteMonitor | None = None) -> int:
+    configured = getattr(site_monitor, "check_interval_seconds", None) if site_monitor is not None else None
+    try:
+        value = int(configured) if configured else _DEFAULT_CHECK_INTERVAL_SECONDS
+    except (TypeError, ValueError):
+        value = _DEFAULT_CHECK_INTERVAL_SECONDS
+    return max(_MIN_CHECK_INTERVAL_SECONDS, value)
 
 
-def _is_due(site_monitor: SiteMonitor, sample: SiteMonitorSample | None, now: datetime) -> bool:
-    if sample is None:
+def _is_due(site_monitor: SiteMonitor, latest: LatestResult | None, now: datetime) -> bool:
+    if latest is None:
         return True
-    latest_checked_at = _coerce_utc(sample.checked_at)
-    return (now - latest_checked_at).total_seconds() >= _site_monitor_check_interval_seconds(site_monitor)
+    return (now - _coerce_utc(latest.checked_at)).total_seconds() >= _site_monitor_check_interval_seconds(site_monitor)
 
 
 def _parse_ping_latency(output: str, fallback_ms: float | None) -> float | None:
@@ -358,18 +399,13 @@ async def _persist_site_sample(
     session: AsyncSession,
     site_monitor: SiteMonitor,
     result: SiteCheckResult,
-    latest_sample: SiteMonitorSample | None,
-    retention_window: timedelta,
+    latest: LatestResult | None,
 ) -> SiteMonitorSample | None:
-    if latest_sample is not None and _coerce_utc(latest_sample.checked_at) >= result.checked_at:
+    """Insert the sample and mirror it onto the monitor row. Retention runs separately."""
+    if latest is not None and _coerce_utc(latest.checked_at) >= result.checked_at:
         return None
 
-    cutoff = result.checked_at - retention_window
-    await session.execute(
-        SiteMonitorSample.__table__.delete()
-        .where(SiteMonitorSample.checked_at < cutoff)
-        .execution_options(synchronize_session=False)
-    )
+    failures = 0 if result.success else ((latest.consecutive_failures + 1) if latest is not None else 1)
     sample = SiteMonitorSample(
         site_monitor_id=site_monitor.id,
         checked_at=result.checked_at,
@@ -377,34 +413,70 @@ async def _persist_site_sample(
         latency_ms=result.latency_ms,
         status_code=result.status_code,
         detail=result.detail,
-        consecutive_failures=(0 if result.success else ((latest_sample.consecutive_failures + 1) if latest_sample is not None else 1)),
+        consecutive_failures=failures,
     )
     session.add(sample)
+    site_monitor.last_checked_at = result.checked_at
+    site_monitor.last_success = result.success
+    site_monitor.last_latency_ms = result.latency_ms
+    site_monitor.last_status_code = result.status_code
+    site_monitor.last_detail = result.detail
+    site_monitor.consecutive_failures = failures
+    session.add(site_monitor)
     await session.flush()
     return sample
 
 
 async def _load_latest_samples(session: AsyncSession, item_ids: set[int]) -> dict[int, SiteMonitorSample]:
-    if not item_ids:
-        return {}
-
-    ranked_samples = (
-        select(
-            SiteMonitorSample.id.label("sample_id"),
-            func.row_number().over(
-                partition_by=SiteMonitorSample.site_monitor_id,
-                order_by=(SiteMonitorSample.checked_at.desc(), SiteMonitorSample.id.desc()),
-            ).label("row_number"),
+    """Newest sample per monitor (one indexed LIMIT 1 query each; used only for legacy rows)."""
+    latest: dict[int, SiteMonitorSample] = {}
+    for item_id in sorted(item_ids):
+        result = await session.execute(
+            select(SiteMonitorSample)
+            .where(SiteMonitorSample.site_monitor_id == item_id)
+            .order_by(SiteMonitorSample.checked_at.desc(), SiteMonitorSample.id.desc())
+            .limit(1)
         )
-        .where(SiteMonitorSample.site_monitor_id.in_(item_ids))
-        .subquery()
-    )
-    result = await session.execute(
-        select(SiteMonitorSample)
-        .join(ranked_samples, SiteMonitorSample.id == ranked_samples.c.sample_id)
-        .where(ranked_samples.c.row_number == 1)
-    )
-    return {sample.site_monitor_id: sample for sample in result.scalars()}
+        sample = result.scalar_one_or_none()
+        if sample is not None:
+            latest[item_id] = sample
+    return latest
+
+
+async def _resolve_latest_results(
+    session: AsyncSession,
+    items: list[SiteMonitor],
+    *,
+    override: dict[int, SiteMonitorSample] | None = None,
+) -> dict[int, LatestResult]:
+    """Latest result per monitor from the row, falling back to the samples table for rows that
+    predate the ``last_*`` columns (and backfilling them so the fallback runs once)."""
+    latest: dict[int, LatestResult] = {}
+    missing: set[int] = set()
+    for item in items:
+        if override and item.id in override:
+            latest[item.id] = LatestResult.from_sample(override[item.id])
+            continue
+        from_row = LatestResult.from_monitor(item)
+        if from_row is not None:
+            latest[item.id] = from_row
+        else:
+            missing.add(item.id)
+    if missing:
+        samples = await _load_latest_samples(session, missing)
+        for item in items:
+            sample = samples.get(item.id)
+            if sample is None:
+                continue
+            latest[item.id] = LatestResult.from_sample(sample)
+            item.last_checked_at = sample.checked_at
+            item.last_success = bool(sample.success)
+            item.last_latency_ms = sample.latency_ms
+            item.last_status_code = sample.status_code
+            item.last_detail = sample.detail
+            item.consecutive_failures = int(sample.consecutive_failures or 0)
+            session.add(item)
+    return latest
 
 
 async def _load_history_samples(
@@ -416,25 +488,6 @@ async def _load_history_samples(
     if not item_ids:
         return {}
 
-    ranked_previous_samples = (
-        select(
-            SiteMonitorSample.id.label("sample_id"),
-            func.row_number().over(
-                partition_by=SiteMonitorSample.site_monitor_id,
-                order_by=(SiteMonitorSample.checked_at.desc(), SiteMonitorSample.id.desc()),
-            ).label("row_number"),
-        )
-        .where(
-            SiteMonitorSample.site_monitor_id.in_(item_ids),
-            SiteMonitorSample.checked_at < window_start,
-        )
-        .subquery()
-    )
-    previous_result = await session.execute(
-        select(SiteMonitorSample)
-        .join(ranked_previous_samples, SiteMonitorSample.id == ranked_previous_samples.c.sample_id)
-        .where(ranked_previous_samples.c.row_number == 1)
-    )
     current_result = await session.execute(
         select(SiteMonitorSample)
         .where(
@@ -446,12 +499,8 @@ async def _load_history_samples(
     )
 
     samples_by_item: dict[int, list[SiteMonitorSample]] = {item_id: [] for item_id in item_ids}
-    for sample in previous_result.scalars():
-        samples_by_item.setdefault(sample.site_monitor_id, []).append(sample)
     for sample in current_result.scalars():
         samples_by_item.setdefault(sample.site_monitor_id, []).append(sample)
-    for samples in samples_by_item.values():
-        samples.sort(key=lambda sample: (_coerce_utc(sample.checked_at), sample.id))
     return samples_by_item
 
 
@@ -491,39 +540,42 @@ async def refresh_due_site_monitor_samples(
     force: bool = False,
     now: datetime | None = None,
 ) -> dict[int, SiteMonitorSample]:
+    """Run due checks concurrently (bounded) and persist the results one by one."""
     items_list = list(items)
     if not items_list:
         return {}
 
     check_time = _coerce_utc(now or datetime.now(tz=timezone.utc))
-    latest_samples = await _load_latest_samples(session, {item.id for item in items_list})
-    # Resolve the retention window once per tick (this may commit to seed the
-    # default system settings) so the per-monitor savepoints below only wrap
-    # the sample writes themselves.
-    retention_window = await metric_retention_timedelta(session)
-    for item in items_list:
-        latest_sample = latest_samples.get(item.id)
-        if not force and not _is_due(item, latest_sample, check_time):
-            continue
-        try:
-            result = await _run_site_check(item, check_time)
-        except Exception:
-            logger.exception(
-                "Site monitor check failed during polling tick: id=%s name=%r check_type=%s target=%r",
-                item.id,
-                item.name,
-                item.check_type,
-                item.target,
-            )
-            continue
-        try:
-            # Isolate each monitor's writes in a savepoint so a single failed
-            # persist cannot poison the session or discard samples already
-            # stored for other monitors during the same tick.
-            async with session.begin_nested():
-                persisted_sample = await _persist_site_sample(
-                    session, item, result, latest_sample, retention_window
+    latest = await _resolve_latest_results(session, items_list)
+    due = [item for item in items_list if force or _is_due(item, latest.get(item.id), check_time)]
+    if not due:
+        return {}
+
+    semaphore = asyncio.Semaphore(_CHECK_CONCURRENCY)
+
+    async def _checked(item: SiteMonitor) -> SiteCheckResult | BaseException:
+        async with semaphore:
+            try:
+                return await _run_site_check(item, check_time)
+            except Exception as exc:
+                logger.exception(
+                    "Site monitor check failed during polling tick: id=%s name=%r check_type=%s target=%r",
+                    item.id,
+                    item.name,
+                    item.check_type,
+                    item.target,
                 )
+                return exc
+
+    results = await asyncio.gather(*(_checked(item) for item in due))
+
+    persisted: dict[int, SiteMonitorSample] = {}
+    for item, result in zip(due, results):
+        if not isinstance(result, SiteCheckResult):
+            continue
+        try:
+            async with session.begin_nested():
+                sample = await _persist_site_sample(session, item, result, latest.get(item.id))
         except Exception:
             logger.exception(
                 "Failed to persist site monitor sample: id=%s name=%r check_type=%s target=%r",
@@ -533,9 +585,9 @@ async def refresh_due_site_monitor_samples(
                 item.target,
             )
             continue
-        if persisted_sample is not None:
-            latest_samples[item.id] = persisted_sample
-    return latest_samples
+        if sample is not None:
+            persisted[item.id] = sample
+    return persisted
 
 
 async def build_site_monitor_statuses(
@@ -551,8 +603,7 @@ async def build_site_monitor_statuses(
 
     check_time = _coerce_utc(now or datetime.now(tz=timezone.utc))
     history_window_start, history_window_end = _history_window_bounds(check_time)
-    if latest_samples is None:
-        latest_samples = await _load_latest_samples(session, {item.id for item in items_list})
+    latest = await _resolve_latest_results(session, items_list, override=latest_samples)
     history_samples = await _load_history_samples(
         session,
         {item.id for item in items_list},
@@ -560,23 +611,26 @@ async def build_site_monitor_statuses(
         history_window_end,
     )
 
-    return [
-        SiteMonitorStatusRead(
-            id=item.id,
-            name=item.name,
-            check_type=item.check_type,
-            target=item.target,
-            status=_resolve_status(item, latest_samples.get(item.id)),
-            display_value=_format_display_value(item, latest_samples.get(item.id)),
-            history=_build_history(history_samples.get(item.id, []), history_window_start, history_window_end),
-            checked_at=latest_samples.get(item.id).checked_at if latest_samples.get(item.id) else None,
-            latency_ms=latest_samples.get(item.id).latency_ms if latest_samples.get(item.id) else None,
-            status_code=latest_samples.get(item.id).status_code if latest_samples.get(item.id) else None,
-            detail=latest_samples.get(item.id).detail if latest_samples.get(item.id) else None,
-            consecutive_failures=latest_samples.get(item.id).consecutive_failures if latest_samples.get(item.id) else 0,
+    statuses: list[SiteMonitorStatusRead] = []
+    for item in items_list:
+        current = latest.get(item.id)
+        statuses.append(
+            SiteMonitorStatusRead(
+                id=item.id,
+                name=item.name,
+                check_type=item.check_type,
+                target=item.target,
+                status=_resolve_status(item, current),
+                display_value=_format_display_value(item, current),
+                history=_build_history(history_samples.get(item.id, []), history_window_start, history_window_end),
+                checked_at=current.checked_at if current else None,
+                latency_ms=current.latency_ms if current else None,
+                status_code=current.status_code if current else None,
+                detail=current.detail if current else None,
+                consecutive_failures=current.consecutive_failures if current else 0,
+            )
         )
-        for item in items_list
-    ]
+    return statuses
 
 
 async def run_due_site_monitor_checks(session: AsyncSession, *, now: datetime | None = None) -> None:
@@ -597,7 +651,7 @@ async def create_site_monitor(session: AsyncSession, payload: SiteMonitorCreate)
         timeout_ms=payload.timeout_ms,
         warning_consecutive_failures=payload.warning_consecutive_failures,
         critical_consecutive_failures=payload.critical_consecutive_failures,
-        check_interval_seconds=_site_monitor_check_interval_seconds(),
+        check_interval_seconds=max(_MIN_CHECK_INTERVAL_SECONDS, int(payload.check_interval_seconds or _DEFAULT_CHECK_INTERVAL_SECONDS)),
         display_order=payload.display_order,
         is_active=payload.is_active,
     )
@@ -616,7 +670,7 @@ async def update_site_monitor(session: AsyncSession, item: SiteMonitor, payload:
     item.timeout_ms = payload.timeout_ms
     item.warning_consecutive_failures = payload.warning_consecutive_failures
     item.critical_consecutive_failures = payload.critical_consecutive_failures
-    item.check_interval_seconds = _site_monitor_check_interval_seconds(item)
+    item.check_interval_seconds = max(_MIN_CHECK_INTERVAL_SECONDS, int(payload.check_interval_seconds or _DEFAULT_CHECK_INTERVAL_SECONDS))
     item.display_order = payload.display_order
     item.is_active = payload.is_active
     await session.commit()

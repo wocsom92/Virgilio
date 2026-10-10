@@ -616,8 +616,8 @@ async def queue_quick_status_notifications(
     batch_window_seconds = max(0, int(settings_model.notification_batch_window_seconds or 0))
     due_at = now + timedelta(seconds=batch_window_seconds)
 
-    # Use the latest persisted snapshots to evaluate the current tile state after ingest.
-    tiles = await build_quick_status_tiles(session, items, persist_prometheus_history=True)
+    # Evaluate the current tile state from the newest persisted readings (no history, no network).
+    tiles = await build_quick_status_tile_summaries(session, items, include_details=True, persist_alert_state=True)
     tiles_by_id = {tile.id: tile for tile in tiles}
 
     changed = False
@@ -703,7 +703,7 @@ async def dispatch_due_quick_status_notifications(
     )
     items = list(result.scalars())
 
-    tiles = await build_quick_status_tiles(session, items, persist_prometheus_history=True)
+    tiles = await build_quick_status_tile_summaries(session, items, include_details=True, persist_alert_state=True)
     tiles_by_id = {tile.id: tile for tile in tiles}
     events: list[QuickStatusNotificationEvent] = []
     changed = False
