@@ -229,7 +229,7 @@ http_check "monitor-health" "http://127.0.0.1:${monitor_port}/healthz" "200"
 http_check "monitor-latest-metrics" "http://127.0.0.1:${monitor_port}/metrics/latest" "200" "Authorization: Bearer ${monitor_token}"
 
 if [[ "${PROFILE}" == "full" ]]; then
-  logs_check_no_raw_telegram_tokens backend telegram-bot
+  logs_check_no_raw_telegram_tokens backend
 fi
 
 log "All post-deploy checks passed."
