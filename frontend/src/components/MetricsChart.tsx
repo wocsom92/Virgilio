@@ -257,7 +257,7 @@ function MetricsChartComponent({
 
   return (
     <div className="d-flex flex-column gap-2 metrics-chart" aria-busy={loading}>
-      <h6 className="text-uppercase small fw-semibold mb-0 text-secondary">{title}</h6>
+      <h6 className="metrics-chart__title">{title}</h6>
       <div className="metrics-chart__canvas" style={{ minHeight: 160, position: 'relative' }}>
         {loading ? <div className="metrics-chart__progress" aria-hidden="true" /> : null}
         <Line options={options} data={chartData} plugins={plugins} />

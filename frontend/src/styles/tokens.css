@@ -1,0 +1,125 @@
+/* Design tokens. Light is the default; dark is applied via data-theme on <html>.
+   Keep colours here only; components reference roles, never raw values. */
+:root,
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f4f6fa;
+  --bg-elevated: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f1f4f9;
+  --surface-3: #e7ebf2;
+  --border: #dde3ec;
+  --border-strong: #c3ccd9;
+  --text: #0f172a;
+  --text-2: #475569;
+  --text-3: #64748b;
+  --accent: #2563eb;
+  --accent-soft: #e3ecff;
+  --accent-fg: #ffffff;
+  --focus: rgba(37, 99, 235, 0.35);
+  --danger: #dc2626;
+  --danger-soft: #fde8e8;
+  --backdrop: rgba(15, 23, 42, 0.45);
+
+  --status-ok-bg: #e4f6ea;
+  --status-ok-fg: #166534;
+  --status-ok-border: #a7dcb9;
+  --status-info-bg: #e3ecff;
+  --status-info-fg: #1d4ed8;
+  --status-info-border: #b7c9f7;
+  --status-warn-bg: #fdf1d6;
+  --status-warn-fg: #92400e;
+  --status-warn-border: #f4d58d;
+  --status-critical-bg: #fde4e4;
+  --status-critical-fg: #991b1b;
+  --status-critical-border: #f3b1b1;
+  --status-unknown-bg: #eef1f6;
+  --status-unknown-fg: #475569;
+  --status-unknown-border: #cfd6e0;
+  --status-stale-bg: #e9edf3;
+  --status-stale-fg: #334155;
+  --status-stale-border: #c3ccd9;
+
+  --chart-grid: rgba(15, 23, 42, 0.08);
+  --chart-tick: #64748b;
+  --chart-marker: rgba(220, 38, 38, 0.6);
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.1);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-xs: 0.72rem;
+  --text-sm: 0.85rem;
+  --text-md: 1rem;
+  --text-lg: 1.2rem;
+  --text-xl: 1.5rem;
+  --text-2xl: 2rem;
+
+  --sidebar-width: 240px;
+  --bottom-nav-height: 60px;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0b1220;
+  --bg-elevated: #111a2b;
+  --surface: #151f31;
+  --surface-2: #1b2638;
+  --surface-3: #223047;
+  --border: #253249;
+  --border-strong: #35466a;
+  --text: #e6ebf3;
+  --text-2: #a9b4c6;
+  --text-3: #8391a7;
+  --accent: #60a5fa;
+  --accent-soft: #1c2d4d;
+  --accent-fg: #0b1220;
+  --focus: rgba(96, 165, 250, 0.45);
+  --danger: #f87171;
+  --danger-soft: #3b1d1d;
+  --backdrop: rgba(0, 0, 0, 0.6);
+
+  --status-ok-bg: #11301f;
+  --status-ok-fg: #86efac;
+  --status-ok-border: #1f5a37;
+  --status-info-bg: #15264a;
+  --status-info-fg: #93c5fd;
+  --status-info-border: #27448a;
+  --status-warn-bg: #3a2a0d;
+  --status-warn-fg: #fcd34d;
+  --status-warn-border: #6b4d12;
+  --status-critical-bg: #3f1717;
+  --status-critical-fg: #fca5a5;
+  --status-critical-border: #7a2626;
+  --status-unknown-bg: #1b2638;
+  --status-unknown-fg: #a9b4c6;
+  --status-unknown-border: #35466a;
+  --status-stale-bg: #182131;
+  --status-stale-fg: #a9b4c6;
+  --status-stale-border: #35466a;
+
+  --chart-grid: rgba(230, 235, 243, 0.1);
+  --chart-tick: #8391a7;
+  --chart-marker: rgba(248, 113, 113, 0.7);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+}

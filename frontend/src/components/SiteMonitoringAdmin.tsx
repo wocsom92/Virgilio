@@ -205,8 +205,8 @@ export function SiteMonitoringAdmin() {
         </div>
       </div>
 
-      <div className="card bg-dark border border-secondary">
-        <div className="card-header border-secondary text-uppercase fw-semibold">Configured Checks</div>
+      <div className="card">
+        <div className="card-header text-uppercase fw-semibold">Configured Checks</div>
         <div className="card-body d-flex flex-column gap-3">
           {loading ? (
             <div className="text-secondary small">Loading site monitors…</div>
@@ -216,14 +216,14 @@ export function SiteMonitoringAdmin() {
             <div className="list-group">
               {items.map((item) => (
                 <div
-                  className="list-group-item bg-dark text-light border-secondary d-flex flex-column flex-md-row justify-content-between gap-3"
+                  className="list-group-item d-flex flex-column flex-md-row justify-content-between gap-3"
                   key={item.id}
                 >
                   <div>
                     <div className="fw-semibold d-flex align-items-center gap-2 flex-wrap">
                       {item.name}
-                      <span className="badge bg-secondary text-uppercase">{item.check_type}</span>
-                      {!item.is_active && <span className="badge bg-warning text-dark">Inactive</span>}
+                      <span className="badge text-uppercase">{item.check_type}</span>
+                      {!item.is_active && <span className="badge badge-warn">Inactive</span>}
                     </div>
                     <div className="small text-secondary">{item.target}</div>
                     <div className="small text-secondary mt-1">
@@ -235,10 +235,10 @@ export function SiteMonitoringAdmin() {
                     </div>
                   </div>
                   <div className="d-flex gap-2 flex-wrap align-items-start">
-                    <button className="btn btn-sm btn-outline-light" type="button" onClick={() => handleEdit(item)}>
+                    <button className="btn btn-sm btn-ghost" type="button" onClick={() => handleEdit(item)}>
                       Edit
                     </button>
-                    <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => void handleDelete(item)}>
+                    <button className="btn btn-sm btn-danger-outline" type="button" onClick={() => void handleDelete(item)}>
                       Delete
                     </button>
                   </div>
@@ -249,8 +249,8 @@ export function SiteMonitoringAdmin() {
         </div>
       </div>
 
-      <div className="card bg-dark border border-secondary">
-        <div className="card-header border-secondary text-uppercase fw-semibold">
+      <div className="card">
+        <div className="card-header text-uppercase fw-semibold">
           {editingId === null ? 'Add Site Monitor' : 'Edit Site Monitor'}
         </div>
         <div className="card-body d-flex flex-column gap-3">
@@ -266,7 +266,7 @@ export function SiteMonitoringAdmin() {
               <div className="col-12 col-lg-6">
                 <label className="form-label">Name</label>
                 <input
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.name}
                   onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
                   placeholder="Homepage"
@@ -275,7 +275,7 @@ export function SiteMonitoringAdmin() {
               <div className="col-12 col-lg-6">
                 <label className="form-label">Check Type</label>
                 <select
-                  className="form-select bg-dark text-light border-secondary"
+                  className="form-select"
                   value={form.check_type}
                   onChange={(event) =>
                     setForm((prev) => ({
@@ -293,7 +293,7 @@ export function SiteMonitoringAdmin() {
               <div className="col-12">
                 <label className="form-label">{isHttpCheck ? 'URL' : 'Host / IP'}</label>
                 <input
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.target}
                   onChange={(event) => setForm((prev) => ({ ...prev, target: event.target.value }))}
                   placeholder={isHttpCheck ? 'https://example.com/healthz' : 'example.com'}
@@ -304,7 +304,7 @@ export function SiteMonitoringAdmin() {
                   <div className="col-12 col-lg-6">
                     <label className="form-label">Valid Status Codes</label>
                     <input
-                      className="form-control bg-dark text-light border-secondary"
+                      className="form-control"
                       value={form.expected_status_codes}
                       onChange={(event) =>
                         setForm((prev) => ({ ...prev, expected_status_codes: event.target.value }))
@@ -316,7 +316,7 @@ export function SiteMonitoringAdmin() {
                   <div className="col-12 col-lg-6">
                     <label className="form-label">Expected Response Text</label>
                     <input
-                      className="form-control bg-dark text-light border-secondary"
+                      className="form-control"
                       value={form.expected_response_substring}
                       onChange={(event) =>
                         setForm((prev) => ({ ...prev, expected_response_substring: event.target.value }))
@@ -332,7 +332,7 @@ export function SiteMonitoringAdmin() {
                 <input
                   type="number"
                   min={100}
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.timeout_ms}
                   onChange={(event) =>
                     setForm((prev) => ({
@@ -348,7 +348,7 @@ export function SiteMonitoringAdmin() {
                 <input
                   type="number"
                   min={1}
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.warning_consecutive_failures}
                   onChange={(event) =>
                     setForm((prev) => ({
@@ -363,7 +363,7 @@ export function SiteMonitoringAdmin() {
                 <input
                   type="number"
                   min={1}
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.critical_consecutive_failures}
                   onChange={(event) =>
                     setForm((prev) => ({
@@ -379,7 +379,7 @@ export function SiteMonitoringAdmin() {
                   type="number"
                   min={SITE_MONITOR_INTERVAL_SECONDS}
                   max={SITE_MONITOR_INTERVAL_SECONDS}
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.check_interval_seconds}
                   disabled
                   onChange={(event) =>
@@ -396,7 +396,7 @@ export function SiteMonitoringAdmin() {
                 <input
                   type="number"
                   min={0}
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.display_order}
                   onChange={(event) =>
                     setForm((prev) => ({
@@ -423,11 +423,11 @@ export function SiteMonitoringAdmin() {
             </div>
 
             <div className="d-flex gap-2 flex-wrap">
-              <button className="btn btn-light text-dark" type="submit">
+              <button className="btn btn-primary" type="submit">
                 {editingId === null ? 'Add site monitor' : 'Save changes'}
               </button>
               {editingId !== null && (
-                <button className="btn btn-outline-light" type="button" onClick={() => resetForm()}>
+                <button className="btn btn-ghost" type="button" onClick={() => resetForm()}>
                   Cancel edit
                 </button>
               )}

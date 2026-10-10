@@ -10,10 +10,10 @@ const SITE_MONITOR_PAGE_SIZE = 20;
 const SITE_MONITOR_INTERVAL_MS = 60_000;
 
 function getStatusBadgeClass(status: SiteMonitorStatus['status']): string {
-  if (status === 'critical') return 'bg-danger';
-  if (status === 'warn') return 'bg-warning text-dark';
-  if (status === 'ok') return 'bg-success';
-  return 'bg-secondary';
+  if (status === 'critical') return 'badge-critical';
+  if (status === 'warn') return 'badge-warn';
+  if (status === 'ok') return 'badge-ok';
+  return 'badge-info';
 }
 
 function formatCheckedAt(value: string | null | undefined): string {
@@ -79,7 +79,7 @@ const SiteMonitorRow = memo(function SiteMonitorRow({ site, expanded, onToggle }
       </div>
       {expanded && (
         <div className="site-monitor-row__details">
-          <span className="badge bg-secondary text-uppercase">{site.check_type}</span>
+          <span className="badge text-uppercase">{site.check_type}</span>
           <span className={classNames('badge text-uppercase', getStatusBadgeClass(site.status))}>{site.status}</span>
           <span className="site-monitor-row__value">{site.display_value}</span>
           <span className="site-monitor-row__target">{site.target}</span>
@@ -137,7 +137,7 @@ export function SiteMonitoring() {
           </p>
         </div>
         <button
-          className="btn btn-outline-light"
+          className="btn btn-ghost"
           type="button"
           onClick={() => {
             void handleReload();
@@ -171,7 +171,7 @@ export function SiteMonitoring() {
                   Page {currentPage} of {totalPages}
                 </span>
                 <button
-                  className="btn btn-sm btn-outline-light"
+                  className="btn btn-sm btn-ghost"
                   type="button"
                   onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
                   disabled={currentPage <= 1}
@@ -179,7 +179,7 @@ export function SiteMonitoring() {
                   Previous
                 </button>
                 <button
-                  className="btn btn-sm btn-outline-light"
+                  className="btn btn-sm btn-ghost"
                   type="button"
                   onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
                   disabled={currentPage >= totalPages}

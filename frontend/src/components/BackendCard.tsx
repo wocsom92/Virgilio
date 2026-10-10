@@ -394,24 +394,24 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
   const canGoNext = navigationOffsets.next !== null && navigationOffsets.next < currentOffset;
 
   return (
-    <div className={classNames('card shadow-sm border-0 overflow-hidden', { 'border border-danger': hasWarnings })}>
-      <div className="card-header bg-dark text-light">
+    <div className={classNames('card overflow-hidden', { 'backend-card--warning': hasWarnings })}>
+      <div className="card-header">
         <div className="d-flex flex-column flex-md-row gap-2 align-items-start align-items-md-center w-100">
           <div className="flex-grow-1">
-            <span className="fw-semibold me-2 text-uppercase">{backend.name}</span>
+            <span className="backend-card__title">{backend.name}</span>
           </div>
           <div className="d-flex flex-wrap align-items-center justify-content-end gap-2 w-100 w-md-auto">
             <div className="btn-group flex-shrink-0" role="group" aria-label={`Actions for ${backend.name}`}>
               <button
                 type="button"
-                className={classNames('btn btn-sm text-nowrap', hidden ? 'btn-light text-dark' : 'btn-outline-light')}
+                className={classNames('btn btn-sm text-nowrap', hidden ? 'btn-primary' : 'btn-ghost')}
                 onClick={() => onToggleHidden(backend.id)}
               >
                 {hidden ? 'Show' : 'Hide'}
               </button>
               {onRefresh && (
                 <button
-                  className="btn btn-sm btn-outline-light text-nowrap"
+                  className="btn btn-sm btn-ghost text-nowrap"
                   onClick={() => onRefresh(backend)}
                   disabled={disabled}
                 >
@@ -425,7 +425,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
               </div>
             )}
             {hasWarnings && (
-              <span className="badge bg-danger d-flex align-items-center gap-1">
+              <span className="badge badge-critical d-flex align-items-center gap-1">
                 <FiAlertTriangle /> Warning
               </span>
             )}
@@ -434,7 +434,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
       </div>
       {hidden ? null : (
         <>
-          <div className="card-body bg-dark text-light">
+          <div className="card-body">
             <div className="d-flex flex-column gap-3">
               <div className="d-flex flex-wrap justify-content-between gap-2 align-items-center">
                 <div className="d-flex flex-wrap align-items-center gap-2">
@@ -444,8 +444,8 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                         key={option.value}
                         type="button"
                         className={classNames('btn btn-sm', {
-                          'btn-light text-dark': range === option.value,
-                          'btn-outline-light': range !== option.value,
+                          'btn-primary': range === option.value,
+                          'btn-ghost': range !== option.value,
                         })}
                         onClick={() => handleRangeChange(option.value)}
                       >
@@ -456,7 +456,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                   <div className="btn-group" role="group" aria-label="Navigate time windows">
                     <button
                       type="button"
-                      className="btn btn-sm btn-outline-light"
+                      className="btn btn-sm btn-ghost"
                       onClick={() => handleNavigateTo(navigationOffsets.previous)}
                       disabled={!canGoPrevious || seriesLoading}
                     >
@@ -464,7 +464,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-outline-light"
+                      className="btn btn-sm btn-ghost"
                       onClick={() => handleNavigateTo(navigationOffsets.next)}
                       disabled={!canGoNext || seriesLoading}
                     >
@@ -477,10 +477,10 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                   {/* Latest sample display removed by request */}
                 </div>
               </div>
-              <div className="row row-cols-1 row-cols-md-2 row-cols-xl-4 g-3">
+              <div className="chart-grid">
                 {miniCharts.map((chart) => (
-                  <div className="col" key={chart.key}>
-                    <div className="card-panel rounded-4 p-3 h-100 bg-dark bg-opacity-25">
+                  <div className="chart-tile" key={chart.key}>
+                    <div className="h-100">
                       <MetricsChart
                         title={chart.title}
                         range={range}

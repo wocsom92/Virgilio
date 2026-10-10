@@ -63,7 +63,7 @@ const QuickStatusSection = memo(function QuickStatusSection({
               <div className="text-uppercase card-panel__heading fw-semibold">{selectedTile.label}</div>
               <div className="small text-secondary">{selectedTile.backend_name}</div>
             </div>
-            <button type="button" className="btn btn-sm btn-outline-light" onClick={onCloseDetails}>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onCloseDetails}>
               Close
             </button>
           </div>

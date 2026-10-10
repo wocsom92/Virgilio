@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
 - 24-hour tile history strips are now built from a run-length status event log (`quick_status_status_events`, one row per status change, written on ingest and rebuilt when a tile's thresholds change) instead of re-evaluating up to 1,440 snapshots per tile per request; heartbeat strips read timestamps only.
 - `GET /dashboard/{id}/series` loads only chart columns and downsamples to `max_points` (default 300) per window, averaging numeric metrics per bucket and computing network throughput from counter deltas; the response carries `bucket_seconds` when bucketing was applied.
 - `GET /dashboard/` no longer includes `raw_payload`, and `GET /metrics/{id}/latest` now requires an authenticated user.
+- New look: a token-based design system with light and dark themes (follows the OS by default, toggle in the header, remembered per browser), opaque surfaces without blur or gradients, system font with tabular numerals, a desktop sidebar plus a phone bottom tab bar, and status colours derived from one palette. Bootstrap is gone (stylesheet 258 KB → 28 KB).
+- The admin console loads each section's data the first time that section is opened instead of ~9 requests on mount.
 - Monitor backends are polled concurrently (bounded), site monitors honour their configured `check_interval_seconds` (minimum 30 s) and keep their latest result on the `site_monitors` row, and the poller sleeps until the next due check instead of waking every 5 s.
 
 ### Removed

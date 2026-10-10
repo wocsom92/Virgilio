@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackendCreatePayload,
   MountDisplayEntry,
@@ -763,10 +763,24 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     })();
   }, [isAuthenticated]);
 
+  // Section data loads lazily the first time a section is opened instead of ~9 requests on mount.
+  const loadedSectionsRef = useRef<Set<string>>(new Set());
+  const shouldLoadSection = (sectionId: AdminSectionId): boolean => {
+    if (!isAdmin || activeSection !== sectionId || loadedSectionsRef.current.has(sectionId)) {
+      return false;
+    }
+    loadedSectionsRef.current.add(sectionId);
+    return true;
+  };
+
   useEffect(() => {
     if (!isAdmin) {
       setTelegram(null);
       setDbSizeBytes(null);
+      loadedSectionsRef.current.clear();
+      return;
+    }
+    if (!shouldLoadSection('telegram-bots')) {
       return;
     }
     void (async () => {
@@ -778,12 +792,16 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setTelegramStatus(extractErrorMessage(err, 'Could not load Telegram settings. Check your admin access and try again.'));
       }
     })();
-  }, [isAdmin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, activeSection]);
 
   useEffect(() => {
     if (!isAdmin) {
       setQuickStatusItems([]);
       setQuickStatusTiles([]);
+      return;
+    }
+    if (!shouldLoadSection('quick-status')) {
       return;
     }
     void (async () => {
@@ -797,82 +815,65 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         setQuickStatusStatus(extractErrorMessage(err, 'Could not load quick tiles. Check the API connection and try again.'));
       }
     })();
-  }, [isAdmin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, activeSection]);
 
   useEffect(() => {
     if (!isAdmin) {
       setDbSizeBytes(null);
       setDbSizeStatus(null);
-      return;
-    }
-    setDbSizeStatus('Fetching database size…');
-    void (async () => {
-      try {
-        const size = await fetchDatabaseSize();
-        setDbSizeBytes(size);
-        setDbSizeStatus(null);
-      } catch (err) {
-        setDbSizeBytes(null);
-        setDbSizeStatus(extractErrorMessage(err, 'Could not load the database size right now. Try again.'));
-      }
-    })();
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) {
       setRetentionDays('');
       setRetentionStatus(null);
-      return;
-    }
-    setRetentionStatus('Loading retention…');
-    void (async () => {
-      try {
-        const settings = await fetchSystemSettings();
-        setRetentionDays(settings.retention_days);
-        setRetentionStatus(null);
-      } catch (err) {
-        setRetentionDays('');
-        setRetentionStatus(extractErrorMessage(err, 'Could not load retention settings. Try again.'));
-      }
-    })();
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) {
       setAuthSessionMinutes('');
       setAuthSessionStatus(null);
-      return;
-    }
-    setAuthSessionStatus('Loading session settings…');
-    void (async () => {
-      try {
-        const settings = await fetchAuthSessionSettings();
-        setAuthSessionMinutes(settings.auth_session_minutes);
-        setAuthSessionStatus(null);
-      } catch (err) {
-        setAuthSessionMinutes('');
-        setAuthSessionStatus(extractErrorMessage(err, 'Could not load session settings. Try again.'));
-      }
-    })();
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (!isAdmin) {
       setUsers([]);
       return;
     }
+    if (!shouldLoadSection('system-access')) {
+      return;
+    }
+    setDbSizeStatus('Fetching database size…');
+    setRetentionStatus('Loading retention…');
+    setAuthSessionStatus('Loading session settings…');
     setUserStatus('Loading users…');
     void (async () => {
-      try {
-        const data = await listUsers();
-        setUsers(data);
+      const [size, retention, authSession, userList] = await Promise.allSettled([
+        fetchDatabaseSize(),
+        fetchSystemSettings(),
+        fetchAuthSessionSettings(),
+        listUsers(),
+      ]);
+      if (size.status === 'fulfilled') {
+        setDbSizeBytes(size.value);
+        setDbSizeStatus(null);
+      } else {
+        setDbSizeBytes(null);
+        setDbSizeStatus(extractErrorMessage(size.reason, 'Could not load the database size right now. Try again.'));
+      }
+      if (retention.status === 'fulfilled') {
+        setRetentionDays(retention.value.retention_days);
+        setRetentionStatus(null);
+      } else {
+        setRetentionDays('');
+        setRetentionStatus(extractErrorMessage(retention.reason, 'Could not load retention settings. Try again.'));
+      }
+      if (authSession.status === 'fulfilled') {
+        setAuthSessionMinutes(authSession.value.auth_session_minutes);
+        setAuthSessionStatus(null);
+      } else {
+        setAuthSessionMinutes('');
+        setAuthSessionStatus(extractErrorMessage(authSession.reason, 'Could not load session settings. Try again.'));
+      }
+      if (userList.status === 'fulfilled') {
+        setUsers(userList.value);
         setUserStatus(null);
-      } catch (err) {
+      } else {
         setUsers([]);
-        setUserStatus(extractErrorMessage(err, 'Could not load users. Try again.'));
+        setUserStatus(extractErrorMessage(userList.reason, 'Could not load users. Try again.'));
       }
     })();
-  }, [isAdmin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, activeSection]);
 
   useEffect(() => {
     if (editingId && isAdmin) {
@@ -1413,10 +1414,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
           <h5 className="mb-0">{title}</h5>
           <p className="text-secondary small mb-0">{description}</p>
         </div>
-        {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
+        {!isAdmin && <span className="badge badge-warn">Admin access required to save changes</span>}
       </div>
-      <div className="card bg-dark border border-secondary">
-        <div className="card-header border-secondary text-uppercase fw-semibold">{cardTitle}</div>
+      <div className="card">
+        <div className="card-header text-uppercase fw-semibold">{cardTitle}</div>
         <div className="card-body">
           {error && <div className="alert alert-danger">{error}</div>}
           <form className="d-flex flex-column gap-3" onSubmit={handleSubmit}>
@@ -1429,7 +1430,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               <div className="col-md-6">
                 <label className="form-label">Name</label>
                 <input
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.name}
                   onChange={(event) => setForm({ ...form, name: event.target.value })}
                   required
@@ -1438,7 +1439,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               <div className="col-md-6">
                 <label className="form-label">Base URL</label>
                 <input
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.base_url}
                   onChange={(event) => setForm({ ...form, base_url: event.target.value })}
                   placeholder="http://server:9000"
@@ -1449,7 +1450,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <label className="form-label">Monitor Token</label>
                 <input
                   type="password"
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.api_token}
                   onChange={(event) => setForm({ ...form, api_token: event.target.value })}
                   required={!editingId}
@@ -1462,7 +1463,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <label className="form-label">Display Order</label>
                 <input
                   type="number"
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.display_order}
                   onChange={(event) => {
                     const next = event.target.value;
@@ -1494,7 +1495,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <input
                   type="number"
                   min={30}
-                  className="form-control bg-dark text-light border-secondary"
+                  className="form-control"
                   value={form.poll_interval_seconds ?? 60}
                   onChange={(event) =>
                     setForm({
@@ -1510,7 +1511,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             <div>
               <label className="form-label">Notes</label>
               <textarea
-                className="form-control bg-dark text-light border-secondary"
+                className="form-control"
                 rows={2}
                 value={form.notes}
                 onChange={(event) => setForm({ ...form, notes: event.target.value })}
@@ -1519,7 +1520,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
             <div className="card-panel rounded-3 p-3">
               <div className="d-flex justify-content-between align-items-center mb-2">
                 <h6 className="text-uppercase card-panel__heading fw-semibold mb-0">Dashboard Metrics</h6>
-                <span className="badge bg-light text-dark">{metricsSelectedCount} selected</span>
+                <span className="badge bg-light">{metricsSelectedCount} selected</span>
               </div>
               <div className="row g-2">
                 {metricOptions.map((option) => (
@@ -1556,7 +1557,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <div className="col-md-6">
                   <label className="form-label">Network interfaces to chart (comma-separated)</label>
                   <input
-                    className="form-control bg-dark text-light border-secondary"
+                    className="form-control"
                     value={networkInterfacesText}
                     onChange={(event) =>
                       setForm((prev) => ({
@@ -1579,7 +1580,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   <div className="d-flex gap-2">
                     {canFetchMountOptions && (
                       <button
-                        className="btn btn-sm btn-outline-light"
+                        className="btn btn-sm btn-ghost"
                         type="button"
                         onClick={() => editingId && loadMountOptions(editingId)}
                         disabled={loadingMountOptions}
@@ -1587,7 +1588,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         {loadingMountOptions ? 'Fetching…' : 'Refresh from monitor'}
                       </button>
                     )}
-                    <button className="btn btn-sm btn-outline-light" type="button" onClick={handleAddMountPoint}>
+                    <button className="btn btn-sm btn-ghost" type="button" onClick={handleAddMountPoint}>
                       Add mount point
                     </button>
                   </div>
@@ -1621,7 +1622,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           {availableMountOptions.length > 0 ? (
                             <>
                               <select
-                                className="form-select bg-dark text-light border-secondary"
+                                className="form-select"
                                 value={
                                   mount.path && availableMountOptions.includes(mount.path)
                                     ? mount.path
@@ -1639,7 +1640,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                               </select>
                               {(mount.path === '' || !availableMountOptions.includes(mount.path)) && (
                                 <input
-                                  className="form-control bg-dark text-light border-secondary mt-2"
+                                  className="form-control mt-2"
                                   value={mount.path}
                                   onChange={(event) => handleMountChange(index, 'path', event.target.value)}
                                   placeholder="/mnt/storage"
@@ -1648,7 +1649,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             </>
                           ) : (
                             <input
-                              className="form-control bg-dark text-light border-secondary"
+                              className="form-control"
                               value={mount.path}
                               onChange={(event) => handleMountChange(index, 'path', event.target.value)}
                               placeholder="/mnt/storage"
@@ -1658,7 +1659,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         <div className="col-12 col-md-5">
                           <label className="form-label small mb-1">Label</label>
                           <input
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={mount.label}
                             onChange={(event) => handleMountChange(index, 'label', event.target.value)}
                             placeholder="Storage"
@@ -1666,7 +1667,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         </div>
                         <div className="col-12 col-md-2 d-grid">
                           <button
-                            className="btn btn-sm btn-outline-danger"
+                            className="btn btn-sm btn-danger-outline"
                             type="button"
                             onClick={() => handleRemoveMount(index)}
                           >
@@ -1680,10 +1681,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
               </div>
             )}
             <div className="d-flex gap-2">
-              <button className="btn btn-light text-dark" type="submit" disabled={!isAdmin}>
+              <button className="btn btn-primary" type="submit" disabled={!isAdmin}>
                 {editingId ? 'Update Backend' : 'Add Backend'}
               </button>
-              <button className="btn btn-outline-light" type="button" onClick={resetForm}>
+              <button className="btn btn-ghost" type="button" onClick={resetForm}>
                 Reset
               </button>
               <span className="text-secondary align-self-center">{status}</span>
@@ -2125,12 +2126,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   }, [activeBackend, editingId, isAdmin]);
 
   if (!isAuthenticated) {
-    return <div className="alert alert-secondary text-dark">Sign in to manage backends and settings.</div>;
+    return <div className="alert alert-secondary">Sign in to manage backends and settings.</div>;
   }
 
   if (!isAdmin) {
     return (
-      <div className="alert alert-warning text-dark">
+      <div className="alert alert-warning">
         You are signed in as a viewer. Admin access is required to manage backends or settings.
       </div>
     );
@@ -2148,17 +2149,17 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       ) : null}
       <div className="list-group">
         {backends.length === 0 ? (
-          <div className="list-group-item bg-dark text-secondary border-secondary">No backends yet.</div>
+          <div className="list-group-item text-secondary">No backends yet.</div>
         ) : (
           backends.map((backend, index) => (
             <div
               key={backend.id}
-              className="list-group-item bg-dark text-light border-secondary d-flex flex-column flex-md-row justify-content-between gap-3"
+              className="list-group-item d-flex flex-column flex-md-row justify-content-between gap-3"
             >
               <div>
                 <div className="fw-semibold d-flex align-items-center gap-2">
                   {backend.name}
-                  <span className="badge bg-secondary text-uppercase">#{index + 1}</span>
+                  <span className="badge text-uppercase">#{index + 1}</span>
                 </div>
                 <div className="small text-secondary">{backend.base_url}</div>
                 {backendActionStatus?.backendId === backend.id ? (
@@ -2173,7 +2174,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <div className="btn-group" role="group" aria-label="Reorder backend">
                   <button
                     type="button"
-                    className="btn btn-sm btn-outline-light"
+                    className="btn btn-sm btn-ghost"
                     onClick={() => void handleReorder(backend.id, 'up')}
                     disabled={isOrdering || deletingBackendId === backend.id || !isAdmin || index === 0}
                   >
@@ -2181,7 +2182,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   </button>
                   <button
                     type="button"
-                    className="btn btn-sm btn-outline-light"
+                    className="btn btn-sm btn-ghost"
                     onClick={() => void handleReorder(backend.id, 'down')}
                     disabled={isOrdering || deletingBackendId === backend.id || !isAdmin || index === backends.length - 1}
                   >
@@ -2189,7 +2190,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   </button>
                 </div>
                 <button
-                  className="btn btn-sm btn-outline-light"
+                  className="btn btn-sm btn-ghost"
                   onClick={() => handleEdit(backend)}
                   disabled={deletingBackendId === backend.id || !isAdmin}
                 >
@@ -2203,7 +2204,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   {rebootingBackendId === backend.id ? 'Rebooting…' : 'Reboot host'}
                 </button>
                 <button
-                  className="btn btn-sm btn-outline-danger"
+                  className="btn btn-sm btn-danger-outline"
                   onClick={() => void handleDelete(backend)}
                   disabled={deletingBackendId !== null || !isAdmin}
                 >
@@ -2220,8 +2221,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   return (
     <div className="admin-panel row g-4">
       <div className="col-12 col-lg-3 order-lg-1">
-        <div className="card bg-dark border border-secondary position-sticky admin-panel__menu" style={{ top: '1rem' }}>
-          <div className="card-header border-secondary text-uppercase fw-semibold">Sections</div>
+        <div className="card position-sticky admin-panel__menu" style={{ top: '1rem' }}>
+          <div className="card-header text-uppercase fw-semibold">Sections</div>
           <div className="card-body d-flex flex-column gap-2">
             {ADMIN_SECTIONS.map((section) => {
               const isActive = activeSection === section.id;
@@ -2229,14 +2230,14 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <button
                   key={section.id}
                   type="button"
-                  className={`btn w-100 text-start admin-panel__nav-button ${isActive ? 'btn-light text-dark' : 'btn-outline-light'}`}
+                  className={`btn w-100 text-start admin-panel__nav-button ${isActive ? 'btn-primary' : 'btn-ghost'}`}
                   onClick={() => handleSectionChange(section.id)}
                 >
                   <div className="fw-semibold">{section.label}</div>
                 </button>
               );
             })}
-            <hr className="border-secondary my-2" />
+            <hr className="my-2" />
             <div className="text-uppercase small text-secondary">Backends</div>
             {backends.length === 0 ? (
               <span className="text-secondary small">No backends yet.</span>
@@ -2248,7 +2249,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   <button
                     key={backend.id}
                     type="button"
-                    className={`btn w-100 text-start admin-panel__nav-button ${isActive ? 'btn-light text-dark' : 'btn-outline-light'}`}
+                    className={`btn w-100 text-start admin-panel__nav-button ${isActive ? 'btn-primary' : 'btn-ghost'}`}
                     onClick={() => handleSectionChange(sectionId)}
                   >
                     <div className="fw-semibold">{backend.name}</div>
@@ -2260,12 +2261,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
         </div>
       </div>
       <div className="col-12 col-lg-9 order-lg-2 d-flex flex-column gap-4">
-        <section className="card bg-dark border border-secondary">
+        <section className="card">
           <div className="card-body d-flex flex-wrap align-items-center gap-2">
-            <span className="badge bg-secondary">Frontend v{FRONTEND_VERSION}</span>
-            <span className="badge bg-secondary">Backend v{backendVersion}</span>
+            <span className="badge">Frontend v{FRONTEND_VERSION}</span>
+            <span className="badge">Backend v{backendVersion}</span>
             {monitorVersionsByBackend.map((item) => (
-              <span className="badge bg-secondary" key={item.backendId}>
+              <span className="badge" key={item.backendId}>
                 {item.backendName}: Monitor v{item.version}
               </span>
             ))}
@@ -2278,15 +2279,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <h5 className="mb-0">Manage backends</h5>
                 <p className="text-secondary small mb-0">Create, edit, and organize monitored servers.</p>
               </div>
-              {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
+              {!isAdmin && <span className="badge badge-warn">Admin access required to save changes</span>}
             </div>
-            <div className="card bg-dark border border-secondary">
+            <div className="card">
               <div className="card-body d-flex flex-column gap-3">
                 {renderBackendList()}
                 <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
                   <h6 className="text-uppercase text-secondary mb-0">New backend</h6>
                   <button
-                    className={`btn btn-sm ${showNewForm ? 'btn-outline-light' : 'btn-light text-dark'}`}
+                    className={`btn btn-sm ${showNewForm ? 'btn-ghost' : 'btn-primary'}`}
                     type="button"
                     onClick={() => {
                       resetForm();
@@ -2319,10 +2320,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <h5 className="mb-0">Dashboard items</h5>
                 <p className="text-secondary small mb-0">Mix square quick tiles with wide Prometheus graph cards.</p>
               </div>
-              {!isAdmin && <span className="badge bg-warning text-dark">Admin access required to save changes</span>}
+              {!isAdmin && <span className="badge badge-warn">Admin access required to save changes</span>}
             </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Overview Preview</div>
+            <div className="card">
+              <div className="card-header text-uppercase fw-semibold">Overview Preview</div>
               <div className="card-body d-flex flex-column gap-3">
                 {isAdmin && quickStatusItems.length > 1 && (
                   <div className="text-secondary small">
@@ -2347,7 +2348,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             <button
                               type="button"
                               className={`btn btn-sm ${
-                                quickStatusOrderingBackendId === group.backendId ? 'btn-light text-dark' : 'btn-outline-light'
+                                quickStatusOrderingBackendId === group.backendId ? 'btn-primary' : 'btn-ghost'
                               }`}
                               onClick={() => {
                                 setQuickStatusOrderingBackendId((current) =>
@@ -2405,7 +2406,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                               <div className="quick-status-tile-controls">
                                 <button
                                   type="button"
-                                  className="btn btn-sm btn-outline-light"
+                                  className="btn btn-sm btn-ghost"
                                   onClick={() =>
                                     void handleQuickStatusShift(group.backendId, group.items, index, 'earlier')
                                   }
@@ -2415,7 +2416,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                 </button>
                                 <button
                                   type="button"
-                                  className="btn btn-sm btn-outline-light"
+                                  className="btn btn-sm btn-ghost"
                                   onClick={() =>
                                     void handleQuickStatusShift(group.backendId, group.items, index, 'later')
                                   }
@@ -2462,15 +2463,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 )}
               </div>
             </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Existing Items</div>
+            <div className="card">
+              <div className="card-header text-uppercase fw-semibold">Existing Items</div>
               <div className="card-body d-flex flex-column gap-3">
                 <div className="d-flex flex-column flex-lg-row gap-2 justify-content-between align-items-lg-center">
                   <div className="text-secondary small">
                     Search items by server, label, metric, mount path, or ping target.
                   </div>
                   <input
-                    className="form-control bg-dark text-light border-secondary"
+                    className="form-control"
                     style={{ maxWidth: '360px' }}
                     value={quickStatusListSearch}
                     onChange={(event) => {
@@ -2486,10 +2487,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   <div className="text-secondary small">No dashboard items match the current search.</div>
                 ) : (
                   quickStatusListGroups.map((group) => (
-                    <div key={`list-${group.backendId}`} className="rounded-3 border border-secondary p-3 d-flex flex-column gap-3">
+                    <div key={`list-${group.backendId}`} className="rounded-3 p-3 d-flex flex-column gap-3">
                       <button
                         type="button"
-                        className="btn btn-outline-light d-flex justify-content-between align-items-center gap-2 text-start"
+                        className="btn btn-ghost d-flex justify-content-between align-items-center gap-2 text-start"
                         onClick={() =>
                           setQuickStatusCollapsedByBackend((prev) => ({
                             ...prev,
@@ -2499,7 +2500,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       >
                         <span className="text-uppercase small fw-semibold">{group.backendName}</span>
                         <span className="d-flex align-items-center gap-2">
-                          <span className="badge bg-secondary-subtle text-secondary border border-secondary">
+                          <span className="badge text-secondary">
                             {group.filteredItemsCount}
                             {group.filteredItemsCount !== group.allItemsCount ? ` / ${group.allItemsCount}` : ''}{' '}
                             {group.filteredItemsCount === 1 ? 'item' : 'items'}
@@ -2569,7 +2570,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                 <div className="d-flex gap-2">
                                   <button
                                     type="button"
-                                    className="btn btn-sm btn-outline-light"
+                                    className="btn btn-sm btn-ghost"
                                     onClick={() => handleQuickStatusEdit(item)}
                                     disabled={!isAdmin}
                                   >
@@ -2577,7 +2578,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                   </button>
                                   <button
                                     type="button"
-                                    className="btn btn-sm btn-outline-danger"
+                                    className="btn btn-sm btn-danger-outline"
                                     onClick={() => void handleQuickStatusDelete(item)}
                                     disabled={!isAdmin}
                                   >
@@ -2595,7 +2596,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                               <div className="d-flex gap-2">
                                 <button
                                   type="button"
-                                  className="btn btn-sm btn-outline-light"
+                                  className="btn btn-sm btn-ghost"
                                   onClick={() =>
                                     setQuickStatusPageByBackend((prev) => ({
                                       ...prev,
@@ -2608,7 +2609,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                                 </button>
                                 <button
                                   type="button"
-                                  className="btn btn-sm btn-outline-light"
+                                  className="btn btn-sm btn-ghost"
                                   onClick={() =>
                                     setQuickStatusPageByBackend((prev) => ({
                                       ...prev,
@@ -2629,8 +2630,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 )}
               </div>
             </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">
+            <div className="card">
+              <div className="card-header text-uppercase fw-semibold">
                 {quickStatusEditingId ? 'Edit dashboard item' : 'Add dashboard item'}
               </div>
               <div className="card-body">
@@ -2639,7 +2640,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <div className="col-md-6">
                       <label className="form-label">Backend</label>
                       <select
-                        className="form-select bg-dark text-light border-secondary"
+                        className="form-select"
                         value={quickStatusForm.backend_id}
                         onChange={(event) =>
                           setQuickStatusForm((prev) => ({
@@ -2662,7 +2663,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <div className="col-md-6">
                       <label className="form-label">Metric</label>
                       <select
-                        className="form-select bg-dark text-light border-secondary"
+                        className="form-select"
                         value={quickStatusForm.metric_key}
                         onChange={(event) =>
                           handleQuickStatusMetricChange(event.target.value as QuickStatusMetricKey)
@@ -2682,7 +2683,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       <div className="col-md-6">
                         <label className="form-label">Display style</label>
                         <select
-                          className="form-select bg-dark text-light border-secondary"
+                          className="form-select"
                           value={quickStatusForm.display_variant}
                           onChange={(event) =>
                             handleQuickStatusDisplayVariantChange(event.target.value as QuickStatusDisplayVariant)
@@ -2703,7 +2704,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       <div className="col-12">
                         <label className="form-label">Mount path</label>
                         <input
-                          className="form-control bg-dark text-light border-secondary"
+                          className="form-control"
                           value={quickStatusForm.mount_path}
                           onChange={(event) =>
                             setQuickStatusForm((prev) => ({ ...prev, mount_path: event.target.value }))
@@ -2718,7 +2719,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         <div className="col-12 col-lg-8">
                           <label className="form-label">Ping target</label>
                           <input
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.ping_endpoint}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({ ...prev, ping_endpoint: event.target.value }))
@@ -2734,7 +2735,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           <label className="form-label">Ping interval (sec)</label>
                           <input
                             type="number"
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.ping_interval_seconds}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({
@@ -2756,7 +2757,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         <div className="col-12">
                           <label className="form-label">Prometheus base URL</label>
                           <input
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.prometheus_url}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({ ...prev, prometheus_url: event.target.value }))
@@ -2771,7 +2772,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         <div className="col-12">
                           <label className="form-label">Prometheus query</label>
                           <textarea
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.prometheus_query}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({ ...prev, prometheus_query: event.target.value }))
@@ -2784,7 +2785,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         <div className="col-md-3">
                           <label className="form-label">Display unit</label>
                           <input
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.display_unit}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({ ...prev, display_unit: event.target.value }))
@@ -2796,7 +2797,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           <div className="col-md-3">
                             <label className="form-label">Threshold direction</label>
                             <select
-                              className="form-select bg-dark text-light border-secondary"
+                              className="form-select"
                               value={quickStatusForm.prometheus_threshold_direction}
                               onChange={(event) =>
                                 setQuickStatusForm((prev) => ({
@@ -2814,7 +2815,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                             <label className="form-label">
                               {quickStatusForm.display_variant === 'humidity' ? 'Humidity band' : 'Temperature band'}
                             </label>
-                            <div className="form-control bg-dark text-light border-secondary d-flex align-items-center">
+                            <div className="form-control d-flex align-items-center">
                               Comfort range
                             </div>
                           </div>
@@ -2823,7 +2824,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           <label className="form-label">Refresh interval (sec)</label>
                           <input
                             type="number"
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.prometheus_interval_seconds}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({
@@ -2841,7 +2842,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <div className="col-md-6">
                       <label className="form-label">Label</label>
                       <input
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={quickStatusForm.label}
                         onChange={(event) =>
                           setQuickStatusForm((prev) => ({ ...prev, label: event.target.value }))
@@ -2860,7 +2861,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                               </label>
                               <input
                                 type="number"
-                                className="form-control bg-dark text-light border-secondary"
+                                className="form-control"
                                 value={quickStatusForm.lower_warning_threshold}
                                 onChange={(event) =>
                                   setQuickStatusForm((prev) => ({
@@ -2878,7 +2879,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                               </label>
                               <input
                                 type="number"
-                                className="form-control bg-dark text-light border-secondary"
+                                className="form-control"
                                 value={quickStatusForm.lower_critical_threshold}
                                 onChange={(event) =>
                                   setQuickStatusForm((prev) => ({
@@ -2902,7 +2903,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           </label>
                           <input
                             type="number"
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.warning_threshold}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({
@@ -2925,7 +2926,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                           </label>
                           <input
                             type="number"
-                            className="form-control bg-dark text-light border-secondary"
+                            className="form-control"
                             value={quickStatusForm.critical_threshold}
                             onChange={(event) =>
                               setQuickStatusForm((prev) => ({
@@ -2951,7 +2952,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       <label className="form-label">Display order</label>
                       <input
                         type="number"
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={quickStatusForm.display_order}
                         onChange={(event) => {
                           const next = event.target.value;
@@ -2990,10 +2991,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     </div>
                   </div>
                   <div className="d-flex gap-2 flex-wrap">
-                    <button className="btn btn-light text-dark" type="submit" disabled={!isAdmin}>
+                    <button className="btn btn-primary" type="submit" disabled={!isAdmin}>
                       {quickStatusEditingId ? 'Save item' : 'Add item'}
                     </button>
-                    <button className="btn btn-outline-light" type="button" onClick={() => resetQuickStatusForm()}>
+                    <button className="btn btn-ghost" type="button" onClick={() => resetQuickStatusForm()}>
                       Reset
                     </button>
                     {quickStatusStatus && <span className="text-secondary align-self-center">{quickStatusStatus}</span>}
@@ -3012,18 +3013,18 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <p className="text-secondary small mb-0">Configure notifications and test outgoing messages.</p>
               </div>
             </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Telegram Bot</div>
+            <div className="card">
+              <div className="card-header text-uppercase fw-semibold">Telegram Bot</div>
               <div className="card-body">
                 {!isAdmin ? (
-                  <div className="alert alert-secondary text-dark">Admin access is required to configure Telegram.</div>
+                  <div className="alert alert-secondary">Admin access is required to configure Telegram.</div>
                 ) : (
                   <form className="d-flex flex-column gap-3" onSubmit={handleTelegramSave}>
                     <div>
                       <label className="form-label">Bot Token</label>
                       <input
                         type="password"
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={telegram?.bot_token ?? ''}
                         onChange={(event) =>
                           setTelegram((prev) => {
@@ -3039,7 +3040,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <div>
                       <label className="form-label">Default Chat ID</label>
                       <input
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={telegram?.default_chat_id ?? ''}
                         onChange={(event) =>
                           setTelegram((prev) => {
@@ -3073,7 +3074,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         type="number"
                         min={0}
                         max={3600}
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={telegram?.notification_batch_window_seconds ?? 60}
                         onChange={(event) =>
                           setTelegram((prev) => {
@@ -3097,7 +3098,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         type="number"
                         min={0}
                         max={10080}
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={telegram?.quick_status_alert_confirmation_minutes ?? 5}
                         onChange={(event) =>
                           setTelegram((prev) => {
@@ -3121,7 +3122,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         type="number"
                         min={0}
                         max={10080}
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={telegram?.notification_cooldown_minutes ?? 15}
                         onChange={(event) =>
                           setTelegram((prev) => {
@@ -3146,18 +3147,18 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       sent when that state clears.
                     </div>
                     <div className="d-flex gap-2">
-                      <button className="btn btn-light text-dark" type="submit">
+                      <button className="btn btn-primary" type="submit">
                         Save Telegram Settings
                       </button>
                       <button
-                        className="btn btn-outline-light"
+                        className="btn btn-ghost"
                         type="button"
                         onClick={() => void handleTelegramCommand('stats')}
                       >
                         Test /stats
                       </button>
                       <button
-                        className="btn btn-outline-danger"
+                        className="btn btn-danger-outline"
                         type="button"
                         onClick={() => void handleTelegramCommand('warn')}
                       >
@@ -3179,12 +3180,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 <p className="text-secondary small mb-0">Handle credentials and host-level controls.</p>
               </div>
             </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Access control</div>
+            <div className="card">
+              <div className="card-header text-uppercase fw-semibold">Access control</div>
               <div className="card-body d-flex flex-column gap-3">
                 <div className="d-flex flex-wrap align-items-center gap-2">
-                  <span className="badge bg-secondary">Signed in as {currentUser?.username}</span>
-                  <span className="badge bg-light text-dark text-uppercase">{currentUser?.role}</span>
+                  <span className="badge">Signed in as {currentUser?.username}</span>
+                  <span className="badge bg-light text-uppercase">{currentUser?.role}</span>
                 </div>
                 <div>
                   <h6 className="text-uppercase text-secondary mb-2">Existing users</h6>
@@ -3196,15 +3197,15 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                       {sortedUsers.map((user) => (
                         <div
                           key={user.id}
-                          className="d-flex flex-wrap align-items-center gap-2 bg-secondary bg-opacity-10 px-2 py-1 rounded"
+                          className="d-flex flex-wrap align-items-center gap-2 list-group-item"
                         >
-                          <span className={`badge ${user.role === 'admin' ? 'bg-danger' : 'bg-secondary'}`}>
+                          <span className={`badge ${user.role === 'admin' ? 'badge-critical' : ''}`}>
                             {user.role}
                           </span>
-                          <span className="text-light fw-semibold">{user.username}</span>
+                          <span className="fw-semibold">{user.username}</span>
                           <button
                             type="button"
-                            className="btn btn-sm btn-outline-danger"
+                            className="btn btn-sm btn-danger-outline"
                             onClick={() => void handleUserDelete(user)}
                             disabled={user.id === currentUser?.id}
                           >
@@ -3219,7 +3220,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   <div className="col-md-4">
                     <label className="form-label">Username</label>
                     <input
-                      className="form-control bg-dark text-light border-secondary"
+                      className="form-control"
                       value={userForm.username}
                       onChange={(event) => setUserForm((prev) => ({ ...prev, username: event.target.value }))}
                       required
@@ -3230,7 +3231,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <label className="form-label">Password</label>
                     <input
                       type="password"
-                      className="form-control bg-dark text-light border-secondary"
+                      className="form-control"
                       value={userForm.password}
                       onChange={(event) => setUserForm((prev) => ({ ...prev, password: event.target.value }))}
                       required
@@ -3240,7 +3241,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   <div className="col-md-2">
                     <label className="form-label">Role</label>
                     <select
-                      className="form-select bg-dark text-light border-secondary"
+                      className="form-select"
                       value={userForm.role}
                       onChange={(event) => setUserForm((prev) => ({ ...prev, role: event.target.value as AuthRole }))}
                     >
@@ -3249,7 +3250,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     </select>
                   </div>
                   <div className="col-md-2 d-grid">
-                    <button className="btn btn-light text-dark" type="submit">
+                    <button className="btn btn-primary" type="submit">
                       Add user
                     </button>
                   </div>
@@ -3259,8 +3260,8 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 </div>
               </div>
             </div>
-            <div className="card bg-dark border border-secondary">
-              <div className="card-header border-secondary text-uppercase fw-semibold">Server Controls</div>
+            <div className="card">
+              <div className="card-header text-uppercase fw-semibold">Server Controls</div>
               <div className="card-body">
                 <>
                   <p className="small text-secondary mb-3">
@@ -3274,7 +3275,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         type="number"
                         min={1}
                         max={90}
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={retentionDays}
                         onChange={(event) =>
                           setRetentionDays(event.target.value === '' ? '' : Number(event.target.value))
@@ -3285,7 +3286,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <div className="col-auto d-flex align-items-end">
                       <button
                         type="button"
-                        className="btn btn-light text-dark"
+                        className="btn btn-primary"
                         onClick={() => void handleRetentionSave()}
                         disabled={retentionDays === '' || !isAdmin}
                       >
@@ -3301,7 +3302,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                         type="number"
                         min={AUTH_SESSION_MINUTES_MIN}
                         max={AUTH_SESSION_MINUTES_MAX}
-                        className="form-control bg-dark text-light border-secondary"
+                        className="form-control"
                         value={authSessionMinutes}
                         onChange={(event) =>
                           setAuthSessionMinutes(event.target.value === '' ? '' : Number(event.target.value))
@@ -3314,7 +3315,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                     <div className="col-auto d-flex align-items-end">
                       <button
                         type="button"
-                        className="btn btn-light text-dark"
+                        className="btn btn-primary"
                         onClick={() => void handleAuthSessionSave()}
                         disabled={authSessionMinutes === '' || !isAdmin}
                       >
@@ -3325,13 +3326,13 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   </div>
                   <div className="small text-secondary mb-2 d-flex flex-column">
                     <span>
-                      DB size: <span className="text-light fw-semibold">{formatBinaryBytes(dbSizeBytes)}</span>
+                      DB size: <span className="fw-semibold">{formatBinaryBytes(dbSizeBytes)}</span>
                     </span>
                     {dbSizeStatus && <span className="text-warning">{dbSizeStatus}</span>}
                   </div>
                   <button
                     type="button"
-                    className="btn btn-outline-danger"
+                    className="btn btn-danger-outline"
                     onClick={() => void handleRebootRequest()}
                     disabled={rebootPending}
                   >

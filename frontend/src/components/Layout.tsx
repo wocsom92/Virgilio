@@ -1,9 +1,19 @@
-import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useState } from 'react';
 import type { IconType } from 'react-icons';
-import { FiActivity, FiBarChart2, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings } from 'react-icons/fi';
+import {
+  FiActivity,
+  FiBarChart2,
+  FiBell,
+  FiGlobe,
+  FiLogOut,
+  FiMoon,
+  FiSettings,
+  FiSun,
+} from 'react-icons/fi';
 import { AuthUser, fetchBackendVersion, fetchNotificationsUnreadCount } from '../api/client';
 import { DEFAULT_BACKEND_VERSION, FRONTEND_VERSION } from '../constants/versions';
 import { usePolling } from '../hooks/usePolling';
+import { useTheme } from '../hooks/useTheme';
 import { NotificationCenter } from './NotificationCenter';
 
 const UNREAD_INTERVAL_MS = 60_000;
@@ -18,43 +28,49 @@ interface LayoutProps {
   children: ReactNode;
 }
 
-const VIEW_META: Record<AppView, { label: string; description: string; navDescription: string; icon: IconType }> = {
+const VIEW_META: Record<AppView, { label: string; short: string; description: string; icon: IconType }> = {
   monitoring: {
     label: 'Monitoring',
-    description: 'Quick tiles and notifications for the current fleet state.',
-    navDescription: 'Quick tiles',
+    short: 'Monitor',
+    description: 'Quick tiles for the current fleet state.',
     icon: FiActivity,
   },
   'site-monitoring': {
     label: 'Site Monitoring',
+    short: 'Sites',
     description: 'Ping and HTTP checks for public sites and external services.',
-    navDescription: 'Sites and history',
     icon: FiGlobe,
   },
   graphs: {
     label: 'Graphs',
-    description: 'All backend charts and time-window navigation.',
-    navDescription: 'All graphs',
+    short: 'Graphs',
+    description: 'Backend charts with time-window navigation.',
     icon: FiBarChart2,
   },
   notifications: {
-    label: 'Notification Center',
-    description: 'Notification history across Telegram and local quick-status events.',
-    navDescription: 'History and unread alerts',
-    icon: FiMessageSquare,
+    label: 'Notifications',
+    short: 'Alerts',
+    description: 'Alert history across Telegram and local quick-status events.',
+    icon: FiBell,
   },
   admin: {
     label: 'Settings',
+    short: 'Settings',
     description: 'Backends, dashboard items, notifications, and system controls.',
-    navDescription: 'Configuration',
     icon: FiSettings,
   },
 };
 
+const NAV_ORDER: AppView[] = ['monitoring', 'site-monitoring', 'graphs', 'notifications', 'admin'];
+
+function formatBadge(count: number): string {
+  return count > 99 ? '99+' : String(count);
+}
+
 export function Layout({ activeView, onSwitch, currentUser, onLogout, children }: LayoutProps) {
   const [backendVersion, setBackendVersion] = useState(DEFAULT_BACKEND_VERSION);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const theme = useTheme();
   const viewMeta = VIEW_META[activeView];
   const canOpenAdmin = currentUser.role !== 'viewer';
 
@@ -83,90 +99,81 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
     };
   }, []);
 
-  useEffect(() => {
-    setMenuOpen(false);
-  }, [activeView]);
-
-  const handleOpenNotifications = () => {
-    onSwitch('notifications');
-  };
-
   const handleMarkedRead = useCallback(() => {
     setUnreadCount(0);
   }, []);
 
-  const adminVersionBadges = useMemo(
-    () => (
-      <div className="d-flex flex-wrap align-items-center gap-2">
-        <span className="badge bg-secondary">Frontend v{FRONTEND_VERSION}</span>
-        <span className="badge bg-secondary">Backend v{backendVersion}</span>
-      </div>
-    ),
-    [backendVersion]
-  );
+  const renderNavItems = (variant: 'sidebar' | 'bottom') =>
+    NAV_ORDER.map((view) => {
+      const meta = VIEW_META[view];
+      const Icon = meta.icon;
+      const isActive = activeView === view;
+      const isDisabled = view === 'admin' && !canOpenAdmin;
+      const badge = view === 'notifications' && unreadCount > 0 ? formatBadge(unreadCount) : null;
+      if (variant === 'bottom') {
+        return (
+          <button
+            key={view}
+            type="button"
+            className={`bottom-nav__item ${isActive ? 'bottom-nav__item--active' : ''}`}
+            onClick={() => onSwitch(view)}
+            disabled={isDisabled}
+            aria-current={isActive ? 'page' : undefined}
+          >
+            <Icon size={20} aria-hidden="true" />
+            <span>{meta.short}</span>
+            {badge ? <span className="bottom-nav__badge">{badge}</span> : null}
+          </button>
+        );
+      }
+      return (
+        <button
+          key={view}
+          type="button"
+          className={`app-nav-link ${isActive ? 'app-nav-link--active' : ''}`}
+          onClick={() => onSwitch(view)}
+          disabled={isDisabled}
+          aria-current={isActive ? 'page' : undefined}
+        >
+          <span className="app-nav-link__icon">
+            <Icon size={18} aria-hidden="true" />
+          </span>
+          <span className="app-nav-link__copy">
+            <span className="app-nav-link__title">{meta.label}</span>
+          </span>
+          {badge ? <span className="app-nav-link__badge">{badge}</span> : null}
+        </button>
+      );
+    });
+
+  const themeLabel = theme.resolved === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
 
   return (
     <div className="app-shell">
-      {menuOpen && (
-        <button
-          type="button"
-          className="app-shell__backdrop"
-          aria-label="Close navigation"
-          onClick={() => setMenuOpen(false)}
-        />
-      )}
-      <aside className={`app-sidebar ${menuOpen ? 'app-sidebar--open' : ''}`}>
+      <aside className="app-sidebar">
         <div className="app-sidebar__brand">
-          <div className="app-sidebar__eyebrow">Virgilio</div>
-          <div className="app-sidebar__title">Server Monitor</div>
-          <div className="app-sidebar__quote">Fleet health, alerts, and configuration.</div>
+          <span className="app-sidebar__mark" aria-hidden="true">
+            V
+          </span>
+          <div>
+            <div className="app-sidebar__eyebrow">Virgilio</div>
+            <div className="app-sidebar__title">Server Monitor</div>
+          </div>
         </div>
 
         <nav className="app-sidebar__nav" aria-label="Primary">
-          {(Object.entries(VIEW_META) as Array<[AppView, (typeof VIEW_META)[AppView]]>).map(([view, meta]) => {
-            const Icon = meta.icon;
-            const isActive = activeView === view;
-            const isDisabled = view === 'admin' && !canOpenAdmin;
-            return (
-              <button
-                key={view}
-                type="button"
-                className={`app-nav-link ${isActive ? 'app-nav-link--active' : ''}`}
-                onClick={() => {
-                  if (view === 'notifications') {
-                    handleOpenNotifications();
-                    return;
-                  }
-                  onSwitch(view);
-                }}
-                disabled={isDisabled}
-              >
-                <span className="app-nav-link__icon">
-                  <Icon size={18} />
-                </span>
-                <span className="app-nav-link__copy">
-                  <span className="app-nav-link__title">{meta.label}</span>
-                  <span className="app-nav-link__description">{meta.navDescription}</span>
-                </span>
-                {view === 'notifications' && unreadCount > 0 && (
-                  <span className="app-nav-link__badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
-                )}
-              </button>
-            );
-          })}
+          {renderNavItems('sidebar')}
         </nav>
 
         <div className="app-sidebar__footer">
-          <div className="d-flex flex-wrap align-items-center gap-2">
-            <span className="badge bg-secondary text-uppercase">{currentUser.role}</span>
-            <span className="small text-secondary">Signed in as {currentUser.username}</span>
+          <div>
+            Signed in as <strong>{currentUser.username}</strong> · {currentUser.role}
           </div>
-          <div className="d-flex flex-wrap gap-2">
-            <span className="badge bg-secondary">Frontend v{FRONTEND_VERSION}</span>
-            <span className="badge bg-secondary">Backend v{backendVersion}</span>
+          <div>
+            Frontend v{FRONTEND_VERSION} · Backend v{backendVersion}
           </div>
-          <button className="btn btn-sm btn-outline-light app-sidebar__signout" type="button" onClick={onLogout}>
-            <FiLogOut size={16} />
+          <button className="btn btn-sm btn-ghost" type="button" onClick={onLogout}>
+            <FiLogOut size={14} aria-hidden="true" />
             <span>Sign out</span>
           </button>
         </div>
@@ -174,39 +181,28 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
 
       <div className="app-content">
         <header className="app-header">
-          <div className="d-flex align-items-start gap-3">
-            <button
-              className="btn btn-sm btn-outline-light d-xl-none"
-              type="button"
-              aria-label="Open navigation"
-              onClick={() => setMenuOpen(true)}
-            >
-              <FiMenu size={18} />
-            </button>
-            <div>
-              <div className="app-header__eyebrow">Control Center</div>
-              <h1 className="app-header__title">{viewMeta.label}</h1>
-              <p className="app-header__description mb-0">{viewMeta.description}</p>
-            </div>
+          <div>
+            <h1 className="app-header__title">{viewMeta.label}</h1>
+            <p className="app-header__description">{viewMeta.description}</p>
           </div>
-          <div className="d-flex flex-wrap align-items-center justify-content-end gap-2">
+          <div className="app-header__actions">
             {activeView !== 'notifications' && (
               <button
-                className="btn btn-sm btn-outline-light position-relative notification-trigger"
+                className="icon-button notification-trigger"
                 type="button"
-                aria-label="Open notification center"
-                onClick={handleOpenNotifications}
+                aria-label={unreadCount > 0 ? `Open notifications, ${unreadCount} unread` : 'Open notifications'}
+                onClick={() => onSwitch('notifications')}
               >
-                <FiMessageSquare size={16} />
-                <span>Notifications</span>
-                {unreadCount > 0 && (
-                  <span className="notification-trigger__badge">
-                    {unreadCount > 99 ? '99+' : unreadCount}
-                  </span>
-                )}
+                <FiBell size={18} aria-hidden="true" />
+                {unreadCount > 0 && <span className="notification-trigger__badge">{formatBadge(unreadCount)}</span>}
               </button>
             )}
-            {activeView === 'admin' && adminVersionBadges}
+            <button className="icon-button" type="button" aria-label={themeLabel} title={themeLabel} onClick={theme.toggle}>
+              {theme.resolved === 'dark' ? <FiSun size={18} aria-hidden="true" /> : <FiMoon size={18} aria-hidden="true" />}
+            </button>
+            <button className="icon-button d-xl-none" type="button" aria-label="Sign out" title="Sign out" onClick={onLogout}>
+              <FiLogOut size={18} aria-hidden="true" />
+            </button>
           </div>
         </header>
 
@@ -214,6 +210,10 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
           {activeView === 'notifications' ? <NotificationCenter onMarkedRead={handleMarkedRead} /> : children}
         </main>
       </div>
+
+      <nav className="bottom-nav" aria-label="Primary">
+        {renderNavItems('bottom')}
+      </nav>
     </div>
   );
 }

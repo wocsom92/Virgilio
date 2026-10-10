@@ -142,6 +142,9 @@ export function usePolling<T>(
     runRef.current = run;
     if (pauseWhenHidden && typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', handleVisibility);
+      // Some embedded browsers show a page without a visibilitychange event; focus is a cheap
+      // second chance to resume (handleVisibility is a no-op when nothing is due).
+      window.addEventListener('focus', handleVisibility);
     }
     if (!hidden()) {
       void run();
@@ -154,6 +157,7 @@ export function usePolling<T>(
       runRef.current = null;
       if (pauseWhenHidden && typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', handleVisibility);
+        window.removeEventListener('focus', handleVisibility);
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -1,0 +1,9 @@
+{
+  "name": "Virgilio",
+  "short_name": "Virgilio",
+  "display": "standalone",
+  "start_url": "/",
+  "background_color": "#0b1220",
+  "theme_color": "#111a2b",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

@@ -130,22 +130,20 @@ export default function App() {
   );
   if (authLoading) {
     return (
-      <div className="container py-5 app-auth-shell">
-        <div className="h4 mb-1">Loading…</div>
-        <div className="text-secondary small">Checking authentication status.</div>
+      <div className="app-auth-shell">
+        <div className="text-center">
+          <div className="fw-semibold mb-1">Loading…</div>
+          <div className="text-secondary small">Checking authentication status.</div>
+        </div>
       </div>
     );
   }
 
   if (!currentUser) {
     return (
-      <div className="container py-5 app-auth-shell">
-        <div className="row justify-content-center">
-          <div className="col-12 col-md-8 col-lg-6">
-            <div className="card app-auth-card shadow-sm">
-              <div className="card-header text-uppercase fw-semibold app-auth-card__header">
-                {authTitle}
-              </div>
+      <div className="app-auth-shell">
+        <div className="card app-auth-card">
+              <div className="card-header">{authTitle}</div>
               <div className="card-body d-flex flex-column gap-3">
                 <p className="text-secondary mb-0">
                   {needsBootstrap
@@ -157,7 +155,7 @@ export default function App() {
                   <div>
                     <label className="form-label">Username</label>
                     <input
-                      className="form-control bg-dark border-secondary"
+                      className="form-control"
                       value={authForm.username}
                       onChange={(event) =>
                         setAuthForm((prev) => ({ ...prev, username: event.target.value }))
@@ -170,7 +168,7 @@ export default function App() {
                     <label className="form-label">Password</label>
                     <input
                       type="password"
-                      className="form-control bg-dark border-secondary"
+                      className="form-control"
                       value={authForm.password}
                       onChange={(event) =>
                         setAuthForm((prev) => ({ ...prev, password: event.target.value }))
@@ -180,13 +178,11 @@ export default function App() {
                       minLength={needsBootstrap ? 8 : 6}
                     />
                   </div>
-                  <button className="btn btn-light text-dark" type="submit" disabled={authSubmitting}>
+                  <button className="btn btn-primary" type="submit" disabled={authSubmitting}>
                     {authSubmitting ? 'Saving…' : authTitle}
                   </button>
                 </form>
               </div>
-            </div>
-          </div>
         </div>
       </div>
     );

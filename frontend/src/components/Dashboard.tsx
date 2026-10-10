@@ -160,7 +160,7 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
           </p>
         </div>
         <button
-          className="btn btn-outline-light"
+          className="btn btn-ghost"
           onClick={() => {
             void handleReload();
           }}
@@ -199,7 +199,7 @@ export function Dashboard({ canRefresh, mode }: DashboardProps) {
           {graphsLoading ? (
             <div className="text-secondary">Loading metrics…</div>
           ) : backends.length === 0 ? (
-            !dashboardError && <div className="alert alert-secondary text-dark">No backends configured yet.</div>
+            !dashboardError && <div className="alert alert-secondary">No backends configured yet.</div>
           ) : (
             <Suspense fallback={<div className="text-secondary">Loading charts…</div>}>
               {backends.map((backend) => (

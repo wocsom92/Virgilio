@@ -11,17 +11,15 @@ interface NotificationCenterProps {
   onMarkedRead: () => void;
 }
 
+function severityKey(severity: string): 'ok' | 'warn' | 'critical' | 'info' {
+  if (severity === 'critical' || severity === 'warn' || severity === 'ok') {
+    return severity;
+  }
+  return 'info';
+}
+
 function getSeverityBadgeClass(severity: string) {
-  if (severity === 'critical') {
-    return 'bg-danger';
-  }
-  if (severity === 'warn') {
-    return 'bg-warning text-dark';
-  }
-  if (severity === 'ok') {
-    return 'bg-success';
-  }
-  return 'bg-secondary';
+  return `badge-${severityKey(severity)}`;
 }
 
 /** Notification history. Mounted only while the view is open; no background polling. */
@@ -111,7 +109,7 @@ export function NotificationCenter({ onMarkedRead }: NotificationCenterProps) {
           </p>
         </div>
         <button
-          className="btn btn-outline-light"
+          className="btn btn-ghost"
           type="button"
           onClick={() => {
             void loadPage(page);
@@ -143,7 +141,7 @@ export function NotificationCenter({ onMarkedRead }: NotificationCenterProps) {
               return (
                 <article
                   key={item.id}
-                  className={`notification-entry${isExpanded ? ' notification-entry--expanded' : ''}`}
+                  className={`notification-entry notification-entry--${severityKey(item.severity)}${isExpanded ? ' notification-entry--expanded' : ''}`}
                   role="button"
                   tabIndex={0}
                   onClick={() => toggleExpanded(item.id)}
@@ -157,8 +155,8 @@ export function NotificationCenter({ onMarkedRead }: NotificationCenterProps) {
                   <div className="notification-entry__summary">
                     <div className="notification-entry__meta">
                       <span className={`badge text-uppercase ${getSeverityBadgeClass(item.severity)}`}>{item.severity}</span>
-                      {item.delivery_status === 'failed' && <span className="badge bg-danger">failed</span>}
-                      {item.backend_name && <span className="badge bg-dark border border-secondary">{item.backend_name}</span>}
+                      {item.delivery_status === 'failed' && <span className="badge badge-critical">failed</span>}
+                      {item.backend_name && <span className="badge">{item.backend_name}</span>}
                       <span className="text-secondary notification-entry__date">{new Date(item.created_at).toLocaleString()}</span>
                     </div>
                     <span className="notification-entry__title">{item.title}</span>
@@ -180,7 +178,7 @@ export function NotificationCenter({ onMarkedRead }: NotificationCenterProps) {
         {!loading && !error && totalPages > 1 && (
           <div className="d-flex align-items-center justify-content-between gap-2">
             <button
-              className="btn btn-sm btn-outline-light"
+              className="btn btn-sm btn-ghost"
               type="button"
               disabled={page <= 1}
               onClick={() => {
@@ -190,7 +188,7 @@ export function NotificationCenter({ onMarkedRead }: NotificationCenterProps) {
               Previous
             </button>
             <button
-              className="btn btn-sm btn-outline-light"
+              className="btn btn-sm btn-ghost"
               type="button"
               disabled={page >= totalPages}
               onClick={() => {
