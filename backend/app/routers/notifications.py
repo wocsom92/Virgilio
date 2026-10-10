@@ -33,6 +33,12 @@ async def list_notifications(
     )
 
 
+@router.get("/unread-count")
+async def unread_notifications_count(session: AsyncSession = Depends(get_session)) -> dict[str, int]:
+    """Cheap badge endpoint: one indexed COUNT, no page payload."""
+    return {"unread_count": await count_unread_notification_events(session)}
+
+
 @router.post("/read-all")
 async def mark_all_notifications_read(
     session: AsyncSession = Depends(get_session),

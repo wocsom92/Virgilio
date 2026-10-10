@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - Dashboard GET endpoints no longer run ping/Prometheus/site checks or write to the database; the background poller is the only place network checks and alert-confirmation bookkeeping happen. Reads use the newest stored sample or the in-memory check cache.
 - Retention is now one hourly batched task (plus a WAL checkpoint) instead of a `DELETE` on every inserted snapshot or sample.
 - The 24-hour history builder only loads snapshots for the backends that actually own the requested metric tiles, and never decodes `raw_payload` unless an SSH/VPN/Wi-Fi tile needs it.
+- Frontend polling goes through one shared hook: requests pause while the tab is hidden, abort on unmount, back off after errors, and a 401 signs the session out once instead of every view showing its own error. The monitoring view no longer downloads the full backend list every 30 s, the Graphs view fetches each series once per cadence, the notification badge uses a new `GET /notifications/unread-count`, and 24-hour history is hydrated with a single request on first load.
+- Charts stay mounted across refreshes (no canvas teardown), animations are off, tiles and chart cards are memoised with one shared clock, and the admin console and Chart.js now load as separate chunks only when needed.
 - Monitor backends are polled concurrently (bounded), site monitors honour their configured `check_interval_seconds` (minimum 30 s) and keep their latest result on the `site_monitors` row, and the poller sleeps until the next due check instead of waking every 5 s.
 
 ### Removed

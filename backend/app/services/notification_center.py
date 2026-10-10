@@ -71,7 +71,6 @@ async def list_notification_events(
     page: int = 1,
     page_size: int = 20,
 ) -> NotificationEventPage:
-    await prune_notification_events(session)
     normalized_page = max(1, int(page))
     normalized_page_size = max(1, min(int(page_size), 100))
     total_result = await session.execute(select(func.count(NotificationEvent.id)))
@@ -94,7 +93,6 @@ async def list_notification_events(
 
 
 async def count_unread_notification_events(session: AsyncSession) -> int:
-    await prune_notification_events(session)
     result = await session.execute(
         select(func.count(NotificationEvent.id)).where(NotificationEvent.read_at.is_(None))
     )

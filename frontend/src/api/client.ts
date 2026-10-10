@@ -16,8 +16,34 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+let unauthorizedHandler: (() => void) | null = null;
+
+// Any 401 outside the sign-in endpoints means the session is gone: let the app sign out once
+// instead of every poller surfacing its own error banner.
+api.interceptors.response.use(
+  (response) => response,
+  (error: unknown) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      const url = error.config?.url ?? '';
+      if (!url.includes('/auth/login') && !url.includes('/auth/bootstrap')) {
+        unauthorizedHandler?.();
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export function setAccessToken(token: string | null) {
   accessToken = token;
+}
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
+}
+
+/** True for requests aborted through an AbortSignal (never shown to the user). */
+export function isCancelledError(error: unknown): boolean {
+  return axios.isCancel(error);
 }
 
 export type AuthRole = 'admin' | 'viewer';
@@ -356,39 +382,55 @@ export interface NotificationCenterResponse {
   items: NotificationEvent[];
 }
 
-export async function fetchDashboard(): Promise<MonitoredBackend[]> {
-  const { data } = await api.get<MonitoredBackend[]>('/dashboard/');
+export async function fetchDashboard(signal?: AbortSignal): Promise<MonitoredBackend[]> {
+  const { data } = await api.get<MonitoredBackend[]>('/dashboard/', { signal });
   return data;
 }
 
-export async function fetchQuickStatusTiles(): Promise<QuickStatusTile[]> {
-  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status');
+export async function fetchQuickStatusTiles(signal?: AbortSignal): Promise<QuickStatusTile[]> {
+  const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status', { signal });
   return data;
 }
 
-export async function fetchQuickStatusTileHistory(tileIds: number[]): Promise<QuickStatusTile[]> {
+/** 24h history for the given tiles, or for every tile (incl. heartbeat) when `tileIds` is omitted. */
+export async function fetchQuickStatusTileHistory(
+  tileIds?: number[] | null,
+  signal?: AbortSignal
+): Promise<QuickStatusTile[]> {
   const { data } = await api.get<QuickStatusTile[]>('/dashboard/quick-status/history', {
-    params: { tile_ids: tileIds },
+    params: tileIds ? { tile_ids: tileIds } : undefined,
     paramsSerializer: {
       indexes: null,
     },
+    signal,
   });
   return data;
 }
 
-export async function fetchQuickStatusTileDetail(tileId: number): Promise<QuickStatusTile> {
-  const { data } = await api.get<QuickStatusTile>(`/dashboard/quick-status/${tileId}/detail`);
+export async function fetchQuickStatusTileDetail(tileId: number, signal?: AbortSignal): Promise<QuickStatusTile> {
+  const { data } = await api.get<QuickStatusTile>(`/dashboard/quick-status/${tileId}/detail`, { signal });
   return data;
 }
 
-export async function fetchSiteMonitorStatuses(): Promise<SiteMonitorStatus[]> {
-  const { data } = await api.get<SiteMonitorStatus[]>('/dashboard/site-monitors');
+export async function fetchSiteMonitorStatuses(signal?: AbortSignal): Promise<SiteMonitorStatus[]> {
+  const { data } = await api.get<SiteMonitorStatus[]>('/dashboard/site-monitors', { signal });
   return data;
 }
 
-export async function fetchBackendVersion(): Promise<string> {
-  const { data } = await api.get<{ version: string }>('/version');
-  return data.version;
+let backendVersionPromise: Promise<string> | null = null;
+
+/** Memoised per session: the version never changes while the page is open. */
+export function fetchBackendVersion(): Promise<string> {
+  if (!backendVersionPromise) {
+    backendVersionPromise = api
+      .get<{ version: string }>('/version')
+      .then(({ data }) => data.version)
+      .catch((error: unknown) => {
+        backendVersionPromise = null;
+        throw error;
+      });
+  }
+  return backendVersionPromise;
 }
 
 export async function listBackends(): Promise<MonitoredBackend[]> {
@@ -446,9 +488,10 @@ export async function fetchDatabaseSize() {
   return data.size_bytes;
 }
 
-export async function fetchMetricSeries(id: number, range: MetricRange, offset = 0) {
+export async function fetchMetricSeries(id: number, range: MetricRange, offset = 0, signal?: AbortSignal) {
   const { data } = await api.get<MetricSeriesResponse>(`/dashboard/${id}/series`, {
     params: { range_name: range, offset },
+    signal,
   });
   return data;
 }
@@ -536,11 +579,17 @@ export async function requestReboot(reason?: string) {
   return data;
 }
 
-export async function fetchNotifications(page = 1, pageSize = 20) {
+export async function fetchNotifications(page = 1, pageSize = 20, signal?: AbortSignal) {
   const { data } = await api.get<NotificationCenterResponse>('/notifications/', {
     params: { page, page_size: pageSize },
+    signal,
   });
   return data;
+}
+
+export async function fetchNotificationsUnreadCount(signal?: AbortSignal): Promise<number> {
+  const { data } = await api.get<{ unread_count: number }>('/notifications/unread-count', { signal });
+  return data.unread_count;
 }
 
 export async function markNotificationsRead() {

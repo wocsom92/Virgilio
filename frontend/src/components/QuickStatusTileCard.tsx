@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useState, type DragEventHandler, type KeyboardEventHandler, type ReactNode } from 'react';
+import { memo, useMemo, type DragEventHandler, type KeyboardEventHandler, type ReactNode } from 'react';
 import classNames from 'classnames';
 import { QuickStatusTile } from '../api/client';
+import { useNow } from '../contexts/NowContext';
+import { formatUpdatedAge, getStaleHintClass, getStatusClass } from '../utils/formatting';
 
 interface QuickStatusTileCardProps {
   tile: QuickStatusTile;
@@ -12,45 +14,6 @@ interface QuickStatusTileCardProps {
   onDragOver?: DragEventHandler<HTMLDivElement>;
   onDragEnd?: DragEventHandler<HTMLDivElement>;
   onDrop?: DragEventHandler<HTMLDivElement>;
-}
-
-function getStatusClass(status: QuickStatusTile['status']): string {
-  if (status === 'critical') return 'quick-status--critical';
-  if (status === 'warn') return 'quick-status--warn';
-  if (status === 'info') return 'quick-status--info';
-  if (status === 'ok') return 'quick-status--ok';
-  return 'quick-status--unknown';
-}
-
-function getStaleHintClass(status: QuickStatusTile['status']): string {
-  if (status === 'critical') return 'quick-status--stale-hint-critical';
-  if (status === 'warn') return 'quick-status--stale-hint-warn';
-  if (status === 'info' || status === 'ok') return 'quick-status--stale-hint-ok';
-  return 'quick-status--stale-hint-unknown';
-}
-
-function formatUpdatedAge(reportedAt: string | null | undefined, nowMs: number): string | null {
-  if (!reportedAt) {
-    return 'upd: no data';
-  }
-  const parsed = Date.parse(reportedAt);
-  if (Number.isNaN(parsed)) {
-    return null;
-  }
-  const elapsedSeconds = Math.max(0, Math.round((nowMs - parsed) / 1000));
-  if (elapsedSeconds < 45) {
-    return 'upd: just now';
-  }
-  if (elapsedSeconds < 3600) {
-    const minutes = Math.max(1, Math.round(elapsedSeconds / 60));
-    return `upd: ${minutes} minute${minutes === 1 ? '' : 's'} ago`;
-  }
-  if (elapsedSeconds < 86_400) {
-    const hours = Math.max(1, Math.round(elapsedSeconds / 3600));
-    return `upd: ${hours} hour${hours === 1 ? '' : 's'} ago`;
-  }
-  const days = Math.max(1, Math.round(elapsedSeconds / 86_400));
-  return `upd: ${days} day${days === 1 ? '' : 's'} ago`;
 }
 
 function renderHistorySegments(tile: QuickStatusTile) {
@@ -79,7 +42,7 @@ function renderHistorySegments(tile: QuickStatusTile) {
   );
 }
 
-export function QuickStatusTileCard({
+function QuickStatusTileCardComponent({
   tile,
   onClick,
   action,
@@ -90,17 +53,7 @@ export function QuickStatusTileCard({
   onDragEnd,
   onDrop,
 }: QuickStatusTileCardProps) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (!tile.show_updated_age) {
-      return;
-    }
-    const intervalId = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 60_000);
-    return () => window.clearInterval(intervalId);
-  }, [tile.show_updated_age]);
+  const nowMs = useNow();
 
   const updatedLabel = useMemo(
     () => (tile.show_updated_age ? formatUpdatedAge(tile.reported_at, nowMs) : null),
@@ -163,3 +116,5 @@ export function QuickStatusTileCard({
     </div>
   );
 }
+
+export const QuickStatusTileCard = memo(QuickStatusTileCardComponent);

@@ -3,7 +3,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend.app.models.monitors import NotificationEvent, SystemSettings
-from backend.app.services.notification_center import count_unread_notification_events, list_notification_events
+from backend.app.services.notification_center import (
+    count_unread_notification_events,
+    list_notification_events,
+    prune_notification_events,
+)
 
 
 async def _create_system_settings(session, retention_days: int) -> SystemSettings:
@@ -71,6 +75,10 @@ async def test_notification_center_prunes_events_older_than_metric_retention(db_
         title="fresh-event",
         created_at=now - timedelta(days=1),
     )
+
+    # Pruning is owned by the retention task; reads never delete.
+    assert (await list_notification_events(db_session, page=1, page_size=20)).total_items == 2
+    assert await prune_notification_events(db_session) == 1
 
     page = await list_notification_events(db_session, page=1, page_size=20)
     unread_count = await count_unread_notification_events(db_session)

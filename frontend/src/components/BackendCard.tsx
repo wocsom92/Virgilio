@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { FiAlertTriangle, FiArrowLeft, FiArrowRight } from 'react-icons/fi';
 import classNames from 'classnames';
 
@@ -9,6 +9,7 @@ import type {
   MonitoredBackend,
 } from '../api/client';
 import { fetchMetricSeries } from '../api/client';
+import { usePolling } from '../hooks/usePolling';
 import { MetricsChart } from './MetricsChart';
 import { getUserFacingErrorMessage } from '../utils/errors';
 import { formatBinarySizeFromGiB, formatTemperature } from '../utils/formatting';
@@ -74,30 +75,23 @@ function formatUptime(snapshot: MetricSnapshot | null | undefined) {
   return `${days}d ${remainderHours}h ${remainderMinutes}m`;
 }
 
-export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidden }: BackendCardProps) {
+const EMPTY_SERIES: MetricSeriesPoint[] = [];
+
+function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHidden }: BackendCardProps) {
   const snapshot = backend.latest_snapshot ?? null;
   const warnings = snapshot?.warnings ?? [];
   const hasWarnings = warnings.length > 0;
-  const latestSampleDate = snapshot?.reported_at ? parseDate(snapshot.reported_at) : null;
-  const latestSample = latestSampleDate ? latestSampleDate.toLocaleString() : null;
   const [range, setRange] = useState<MetricRange>('hourly');
-  const [series, setSeries] = useState<MetricSeriesPoint[]>([]);
-  const [seriesLoading, setSeriesLoading] = useState(false);
-  const [seriesError, setSeriesError] = useState<string | null>(null);
-  const [seriesRefreshTick, setSeriesRefreshTick] = useState(0);
-  const [rebootMarkers, setRebootMarkers] = useState<number[]>([]);
   const [rangeOffsets, setRangeOffsets] = useState<Record<MetricRange, number>>({
     hourly: 0,
     daily: 0,
     weekly: 0,
   });
-  const [windowBounds, setWindowBounds] = useState<{ start: number; end: number } | null>(null);
-  const [navigationOffsets, setNavigationOffsets] = useState<{ previous: number | null; next: number | null }>({
-    previous: null,
-    next: null,
-  });
   const selectedMetrics = backend.selected_metrics ?? undefined;
-  const mountSelection = normalizeMountMetricSelection(backend.selected_metrics?.mounted_usage);
+  const mountSelection = useMemo(
+    () => normalizeMountMetricSelection(backend.selected_metrics?.mounted_usage),
+    [backend.selected_metrics?.mounted_usage]
+  );
   const selectedMounts = mountSelection.enabled ? mountSelection.mounts : [];
   const showMountNotice = mountSelection.enabled && selectedMounts.length === 0;
   const uptime = formatUptime(snapshot);
@@ -105,76 +99,59 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
     snapshot?.docker_container_count ?? snapshot?.docker_running_containers?.length ?? null;
   const currentOffset = rangeOffsets[range] ?? 0;
 
+  // One request per cadence: the live window polls at the backend's own interval (≥ 60 s);
+  // historical windows (offset > 0) are fetched once and never re-polled.
+  const pollIntervalMs = currentOffset === 0 ? Math.max(backend.poll_interval_seconds || 60, 60) * 1000 : null;
+  const seriesPolling = usePolling(
+    useCallback(
+      (signal: AbortSignal) => fetchMetricSeries(backend.id, range, currentOffset, signal),
+      [backend.id, range, currentOffset]
+    ),
+    { intervalMs: pollIntervalMs, enabled: !hidden, deps: [backend.id, range, currentOffset] }
+  );
+  const seriesResponse = seriesPolling.data;
+  const seriesLoading = seriesPolling.loading;
+  const seriesError = seriesPolling.error
+    ? getUserFacingErrorMessage(
+        seriesPolling.error,
+        'Could not load chart data for this backend. Check the connection and try again.'
+      )
+    : null;
+  const series = hidden ? EMPTY_SERIES : seriesResponse?.points ?? EMPTY_SERIES;
+
   useEffect(() => {
-    if (hidden || currentOffset !== 0) {
+    if (!seriesResponse) {
       return;
     }
+    setRangeOffsets((prev) =>
+      prev[seriesResponse.range] === seriesResponse.window_offset
+        ? prev
+        : { ...prev, [seriesResponse.range]: seriesResponse.window_offset }
+    );
+  }, [seriesResponse]);
 
-    const intervalSeconds = Math.max(backend.poll_interval_seconds || 60, 30);
-    const intervalId = window.setInterval(() => {
-      setSeriesRefreshTick((value) => value + 1);
-    }, intervalSeconds * 1000);
-
-    return () => window.clearInterval(intervalId);
-  }, [backend.poll_interval_seconds, currentOffset, hidden]);
-
-  useEffect(() => {
-    if (hidden) {
-      setSeries([]);
-      setSeriesError(null);
-      setSeriesLoading(false);
-      setWindowBounds(null);
-      setNavigationOffsets({ previous: null, next: null });
-      return;
+  const rebootMarkers = useMemo(
+    () =>
+      (seriesResponse?.reboot_markers || [])
+        .map((value) => parseDate(value)?.getTime() ?? Number.NaN)
+        .filter((ts): ts is number => Number.isFinite(ts)),
+    [seriesResponse?.reboot_markers]
+  );
+  const windowBounds = useMemo(() => {
+    if (!seriesResponse) {
+      return null;
     }
-    let cancelled = false;
-    setSeriesLoading(true);
-    setSeriesError(null);
-    void (async () => {
-      try {
-        const data = await fetchMetricSeries(backend.id, range, currentOffset);
-        if (!cancelled) {
-          setSeries(data.points);
-          setRebootMarkers(
-            (data.reboot_markers || [])
-              .map((value) => parseDate(value)?.getTime() ?? Number.NaN)
-              .filter((ts): ts is number => Number.isFinite(ts))
-          );
-          setRangeOffsets((prev) => {
-            if (prev[range] === data.window_offset) {
-              return prev;
-            }
-            return { ...prev, [range]: data.window_offset };
-          });
-          const parsedStart = parseDate(data.window_start)?.getTime() ?? Number.NaN;
-          const parsedEnd = parseDate(data.window_end)?.getTime() ?? Number.NaN;
-          setWindowBounds(
-            Number.isFinite(parsedStart) && Number.isFinite(parsedEnd)
-              ? { start: parsedStart, end: parsedEnd }
-              : null
-          );
-          setNavigationOffsets({
-            previous: data.previous_offset_with_data ?? null,
-            next: data.next_offset_with_data ?? null,
-          });
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setSeries([]);
-          setSeriesError(
-            getUserFacingErrorMessage(err, 'Could not load chart data for this backend. Check the connection and try again.')
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setSeriesLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [backend.id, range, currentOffset, hidden, seriesRefreshTick, backend.latest_snapshot?.reported_at]);
+    const parsedStart = parseDate(seriesResponse.window_start)?.getTime() ?? Number.NaN;
+    const parsedEnd = parseDate(seriesResponse.window_end)?.getTime() ?? Number.NaN;
+    return Number.isFinite(parsedStart) && Number.isFinite(parsedEnd) ? { start: parsedStart, end: parsedEnd } : null;
+  }, [seriesResponse]);
+  const navigationOffsets = useMemo(
+    () => ({
+      previous: seriesResponse?.previous_offset_with_data ?? null,
+      next: seriesResponse?.next_offset_with_data ?? null,
+    }),
+    [seriesResponse]
+  );
 
   const windowLabel = useMemo(() => {
     if (!windowBounds || Number.isNaN(windowBounds.start) || Number.isNaN(windowBounds.end)) {
@@ -184,6 +161,33 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
     const end = new Date(windowBounds.end);
     return `${start.toLocaleString()} – ${end.toLocaleString()}`;
   }, [windowBounds]);
+
+  // Index network counters once per series instead of a `find` per interface per point per render.
+  const networkByPoint = useMemo(() => {
+    const index = new WeakMap<MetricSeriesPoint, Map<string, { tx_bps: number | null; rx_bps: number | null }>>();
+    for (const point of series) {
+      if (!point.network_bps?.length) continue;
+      const byInterface = new Map<string, { tx_bps: number | null; rx_bps: number | null }>();
+      for (const entry of point.network_bps) {
+        if (entry.interface) byInterface.set(entry.interface, { tx_bps: entry.tx_bps, rx_bps: entry.rx_bps });
+      }
+      index.set(point, byInterface);
+    }
+    return index;
+  }, [series]);
+  const networkInterfacesKey = useMemo(() => {
+    const names = new Set<string>();
+    for (const point of series) {
+      for (const entry of point.network_bps ?? []) {
+        if (entry.interface) names.add(entry.interface);
+      }
+    }
+    return Array.from(names).sort().join('|');
+  }, [series]);
+  const networkInterfaces = useMemo(
+    () => (networkInterfacesKey ? networkInterfacesKey.split('|') : []),
+    [networkInterfacesKey]
+  );
 
   const baseCharts = useMemo(() => {
     const charts: Array<{
@@ -311,33 +315,26 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
       });
     }
 
-    // Network throughput per interface (bps)
-    const interfaces = new Set<string>();
-    series.forEach((point) => {
-      point.network_bps?.forEach((entry) => {
-        if (entry.interface) interfaces.add(entry.interface);
-      });
-    });
-    if (interfaces.size > 0) {
+    // Network throughput per interface (bps). The interface list (not the series) drives the
+    // dataset config, so refreshes with the same interfaces keep the chart config identity.
+    if (networkInterfaces.length > 0) {
       const ifaceColors = ['#0ea5e9', '#22c55e', '#eab308', '#ef4444', '#a855f7'];
       const datasets: Array<{
         label: string;
         color: string;
         extractor: (point: MetricSeriesPoint) => number | null;
       }> = [];
-      Array.from(interfaces).forEach((iface, idx) => {
+      networkInterfaces.forEach((iface, idx) => {
         const color = ifaceColors[idx % ifaceColors.length];
         datasets.push({
           label: `${iface} TX`,
           color,
-          extractor: (point: MetricSeriesPoint) =>
-            point.network_bps?.find((entry) => entry.interface === iface)?.tx_bps ?? null,
+          extractor: (point: MetricSeriesPoint) => networkByPoint.get(point)?.get(iface)?.tx_bps ?? null,
         });
         datasets.push({
           label: `${iface} RX`,
           color: '#38bdf8',
-          extractor: (point: MetricSeriesPoint) =>
-            point.network_bps?.find((entry) => entry.interface === iface)?.rx_bps ?? null,
+          extractor: (point: MetricSeriesPoint) => networkByPoint.get(point)?.get(iface)?.rx_bps ?? null,
         });
       });
       charts.push({
@@ -351,7 +348,7 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
     }
 
     return charts;
-  }, [selectedMetrics, series]);
+  }, [selectedMetrics, networkInterfaces, networkByPoint]);
 
   const mountCharts = useMemo(
     () =>
@@ -384,8 +381,6 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
   const handleRangeChange = (nextRange: MetricRange) => {
     setRange(nextRange);
     setRangeOffsets((prev) => ({ ...prev, [nextRange]: 0 }));
-    setWindowBounds(null);
-    setNavigationOffsets({ previous: null, next: null });
   };
 
   const handleNavigateTo = (targetOffset: number | null | undefined) => {
@@ -592,3 +587,5 @@ export function BackendCard({ backend, onRefresh, disabled, hidden, onToggleHidd
     </div>
   );
 }
+
+export const BackendCard = memo(BackendCardComponent);

@@ -1494,3 +1494,25 @@ pre {
   background: rgba(148, 163, 184, 0.5);
   border-radius: 4px;
 }
+
+.metrics-chart__progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+  background-size: 200% 100%;
+  animation: metrics-chart-progress 1.2s linear infinite;
+  z-index: 1;
+}
+
+@keyframes metrics-chart-progress {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}

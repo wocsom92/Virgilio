@@ -18,6 +18,7 @@ vi.mock('../api/client', () => ({
   fetchQuickStatusTileHistory: vi.fn(),
   fetchQuickStatusTiles: vi.fn(),
   refreshBackend: vi.fn(),
+  isCancelledError: () => false,
 }));
 
 vi.mock('./BackendCard', () => ({
@@ -245,5 +246,19 @@ describe('Dashboard', () => {
     await waitFor(() => {
       expect(container.querySelectorAll('.quick-status-grid__item--wide')).toHaveLength(2);
     });
+  });
+
+  it('does not fetch the backend list in monitoring mode', async () => {
+    vi.mocked(fetchQuickStatusTiles).mockResolvedValue([
+      makeQuickStatusTile({ id: 10, backend_id: 1, backend_display_order: 1, backend_name: 'Alpha' }),
+    ]);
+
+    render(<Dashboard canRefresh={false} mode="monitoring" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Alpha')).toBeInTheDocument();
+    });
+    expect(fetchDashboard).not.toHaveBeenCalled();
+    expect(fetchQuickStatusTileHistory).toHaveBeenCalledTimes(1);
   });
 });

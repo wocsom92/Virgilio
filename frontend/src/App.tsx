@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   AuthStatus,
   AuthUser,
@@ -8,13 +8,17 @@ import {
   fetchCurrentUser,
   login,
   setAccessToken,
+  setUnauthorizedHandler,
 } from './api/client';
 import { Dashboard } from './components/Dashboard';
-import { AdminPanel } from './components/AdminPanel';
 import { AppView, Layout } from './components/Layout';
 import { SiteMonitoring } from './components/SiteMonitoring';
+import { NowProvider } from './contexts/NowContext';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { getUserFacingErrorMessage } from './utils/errors';
+
+// The admin console is by far the largest screen; load it only when an admin opens it.
+const AdminPanel = lazy(() => import('./components/AdminPanel').then((module) => ({ default: module.AdminPanel })));
 
 export default function App() {
   const [view, setView] = useState<AppView>('monitoring');
@@ -27,27 +31,19 @@ export default function App() {
   const [authForm, setAuthForm] = useState({ username: '', password: '' });
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    try {
-      const persistedToken = window.localStorage.getItem('server-monitor-auth-token');
-      const sessionToken = window.sessionStorage.getItem('server-monitor-auth-token');
-      if (sessionToken && !persistedToken) {
-        window.localStorage.setItem('server-monitor-auth-token', sessionToken);
-        setStoredToken(JSON.parse(sessionToken) as string);
-      }
-      if (sessionToken) {
-        window.sessionStorage.removeItem('server-monitor-auth-token');
-      }
-    } catch {
-      // Ignore storage migration failures and continue with the current auth state.
-    }
-  }, [setStoredToken]);
-
-  useEffect(() => {
     setAccessToken(storedToken || null);
   }, [storedToken]);
+
+  // A 401 from any poller means the session is gone: sign out once instead of N error banners.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setStoredToken('');
+      setAccessToken(null);
+      setCurrentUser(null);
+      setAuthError('Your session expired. Sign in again.');
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [setStoredToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,14 +193,18 @@ export default function App() {
   }
 
   return (
-    <Layout activeView={view} onSwitch={setView} currentUser={currentUser} onLogout={handleLogout}>
-      {view === 'admin' ? (
-        <AdminPanel currentUser={currentUser} />
-      ) : view === 'site-monitoring' ? (
-        <SiteMonitoring />
-      ) : view === 'notifications' ? null : (
-        <Dashboard canRefresh={currentUser.role === 'admin'} mode={view === 'graphs' ? 'graphs' : 'monitoring'} />
-      )}
-    </Layout>
+    <NowProvider>
+      <Layout activeView={view} onSwitch={setView} currentUser={currentUser} onLogout={handleLogout}>
+        {view === 'admin' ? (
+          <Suspense fallback={<div className="text-secondary">Loading settings…</div>}>
+            <AdminPanel currentUser={currentUser} />
+          </Suspense>
+        ) : view === 'site-monitoring' ? (
+          <SiteMonitoring />
+        ) : view === 'notifications' ? null : (
+          <Dashboard canRefresh={currentUser.role === 'admin'} mode={view === 'graphs' ? 'graphs' : 'monitoring'} />
+        )}
+      </Layout>
+    </NowProvider>
   );
 }

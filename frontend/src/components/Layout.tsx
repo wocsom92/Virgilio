@@ -1,15 +1,12 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import type { IconType } from 'react-icons';
-import { FiActivity, FiBarChart2, FiChevronDown, FiChevronUp, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings } from 'react-icons/fi';
-import {
-  AuthUser,
-  NotificationEvent,
-  fetchBackendVersion,
-  fetchNotifications,
-  markNotificationsRead,
-} from '../api/client';
+import { FiActivity, FiBarChart2, FiGlobe, FiLogOut, FiMenu, FiMessageSquare, FiSettings } from 'react-icons/fi';
+import { AuthUser, fetchBackendVersion, fetchNotificationsUnreadCount } from '../api/client';
 import { DEFAULT_BACKEND_VERSION, FRONTEND_VERSION } from '../constants/versions';
-import { formatNotificationDeliveryError, getUserFacingErrorMessage } from '../utils/errors';
+import { usePolling } from '../hooks/usePolling';
+import { NotificationCenter } from './NotificationCenter';
+
+const UNREAD_INTERVAL_MS = 60_000;
 
 export type AppView = 'monitoring' | 'site-monitoring' | 'graphs' | 'notifications' | 'admin';
 
@@ -55,19 +52,19 @@ const VIEW_META: Record<AppView, { label: string; description: string; navDescri
 };
 
 export function Layout({ activeView, onSwitch, currentUser, onLogout, children }: LayoutProps) {
-  const notificationPageSize = 20;
   const [backendVersion, setBackendVersion] = useState(DEFAULT_BACKEND_VERSION);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [notifications, setNotifications] = useState<NotificationEvent[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [notificationsLoading, setNotificationsLoading] = useState(false);
-  const [notificationsError, setNotificationsError] = useState<string | null>(null);
-  const [notificationPage, setNotificationPage] = useState(1);
-  const [notificationTotalPages, setNotificationTotalPages] = useState(1);
-  const [notificationTotalItems, setNotificationTotalItems] = useState(0);
-  const [expandedNotificationIds, setExpandedNotificationIds] = useState<Set<number>>(new Set());
   const viewMeta = VIEW_META[activeView];
   const canOpenAdmin = currentUser.role !== 'viewer';
+
+  // Badge only: one tiny COUNT request per minute instead of a full notification page.
+  const unread = usePolling(fetchNotificationsUnreadCount, { intervalMs: UNREAD_INTERVAL_MS });
+  useEffect(() => {
+    if (unread.data !== null) {
+      setUnreadCount(unread.data);
+    }
+  }, [unread.data]);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,108 +87,13 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
     setMenuOpen(false);
   }, [activeView]);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadNotifications = async (page = 1) => {
-      try {
-        const data = await fetchNotifications(page, notificationPageSize);
-        if (cancelled) {
-          return;
-        }
-        setNotifications(data.items);
-        setUnreadCount(data.unread_count);
-        setNotificationPage(data.page);
-        setNotificationTotalPages(data.total_pages);
-        setNotificationTotalItems(data.total_items);
-        setNotificationsError(null);
-      } catch (error) {
-        if (!cancelled) {
-          setNotificationsError(
-            getUserFacingErrorMessage(error, 'Could not load notification history. Check the API connection and try again.')
-          );
-        }
-      }
-    };
-
-    void loadNotifications(notificationPage);
-    const timer = window.setInterval(() => {
-      void loadNotifications(notificationPage);
-    }, 30000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [notificationPage]);
-
-  const loadNotificationPage = async (page: number) => {
-    setNotificationsLoading(true);
-    try {
-      const data = await fetchNotifications(page, notificationPageSize);
-      setNotifications(data.items);
-      setUnreadCount(data.unread_count);
-      setNotificationPage(data.page);
-      setNotificationTotalPages(data.total_pages);
-      setNotificationTotalItems(data.total_items);
-      setNotificationsError(null);
-    } catch (error) {
-      setNotificationsError(
-        getUserFacingErrorMessage(error, 'Could not load notification history. Check the API connection and try again.')
-      );
-    } finally {
-      setNotificationsLoading(false);
-    }
-  };
-
-  const handleOpenNotifications = async () => {
+  const handleOpenNotifications = () => {
     onSwitch('notifications');
-    setNotificationsLoading(true);
-    try {
-      await markNotificationsRead();
-      setUnreadCount(0);
-      await loadNotificationPage(1);
-    } catch (error) {
-      setNotificationsLoading(false);
-      setNotificationsError(
-        getUserFacingErrorMessage(error, 'Could not load notification history. Check the API connection and try again.')
-      );
-    }
   };
 
-  const handleChangeNotificationPage = async (page: number) => {
-    if (page < 1 || page > notificationTotalPages || page === notificationPage) {
-      return;
-    }
-    await loadNotificationPage(page);
-  };
-
-  const notificationRangeStart = notificationTotalItems === 0 ? 0 : (notificationPage - 1) * notificationPageSize + 1;
-  const notificationRangeEnd = Math.min(notificationPage * notificationPageSize, notificationTotalItems);
-  const getSeverityBadgeClass = (severity: string) => {
-    if (severity === 'critical') {
-      return 'bg-danger';
-    }
-    if (severity === 'warn') {
-      return 'bg-warning text-dark';
-    }
-    if (severity === 'ok') {
-      return 'bg-success';
-    }
-    return 'bg-secondary';
-  };
-
-  const toggleNotificationExpanded = (id: number) => {
-    setExpandedNotificationIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
+  const handleMarkedRead = useCallback(() => {
+    setUnreadCount(0);
+  }, []);
 
   const adminVersionBadges = useMemo(
     () => (
@@ -201,112 +103,6 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
       </div>
     ),
     [backendVersion]
-  );
-
-  const notificationCenterContent = (
-    <section className="notification-center-page card-panel rounded-4 p-3 p-md-4">
-      <div className="notification-center-page__header">
-        <div>
-          <h2 className="fw-semibold text-uppercase mb-1">History</h2>
-          <p className="text-secondary small mb-0">
-            Alerts, recoveries, Telegram delivery status, and local quick-status events.
-          </p>
-        </div>
-        <button
-          className="btn btn-outline-light"
-          type="button"
-          onClick={() => {
-            void loadNotificationPage(notificationPage);
-          }}
-          disabled={notificationsLoading}
-        >
-          Reload
-        </button>
-      </div>
-      <div className="d-flex flex-column gap-3 notification-center-body">
-        {notificationsLoading && <div className="text-secondary small">Loading notifications...</div>}
-        {notificationsError && <div className="alert alert-danger mb-0">{notificationsError}</div>}
-        {!notificationsLoading && !notificationsError && notificationTotalItems > 0 && (
-          <div className="d-flex align-items-center justify-content-between gap-2 small text-secondary">
-            <span>
-              Showing {notificationRangeStart}-{notificationRangeEnd} of {notificationTotalItems}
-            </span>
-            <span>
-              Page {notificationPage} / {notificationTotalPages}
-            </span>
-          </div>
-        )}
-        {!notificationsLoading && !notifications.length && !notificationsError && (
-          <div className="text-secondary small">No notifications yet.</div>
-        )}
-        {!notificationsLoading && notifications.length > 0 && (
-          <div className="d-flex flex-column gap-2 notification-center-list">
-            {notifications.map((item) => {
-              const deliveryError = formatNotificationDeliveryError(item.error_message);
-              const isExpanded = expandedNotificationIds.has(item.id);
-              return (
-                <article
-                  key={item.id}
-                  className={`notification-entry${isExpanded ? ' notification-entry--expanded' : ''}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => toggleNotificationExpanded(item.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      toggleNotificationExpanded(item.id);
-                    }
-                  }}
-                >
-                  <div className="notification-entry__summary">
-                    <div className="notification-entry__meta">
-                      <span className={`badge text-uppercase ${getSeverityBadgeClass(item.severity)}`}>{item.severity}</span>
-                      {item.delivery_status === 'failed' && <span className="badge bg-danger">failed</span>}
-                      {item.backend_name && <span className="badge bg-dark border border-secondary">{item.backend_name}</span>}
-                      <span className="text-secondary notification-entry__date">{new Date(item.created_at).toLocaleString()}</span>
-                    </div>
-                    <span className="notification-entry__title">{item.title}</span>
-                    <span className="notification-entry__chevron">
-                      {isExpanded ? <FiChevronUp size={14} /> : <FiChevronDown size={14} />}
-                    </span>
-                  </div>
-                  {isExpanded && (
-                    <div className="notification-entry__details">
-                      <pre className="notification-entry__body">{item.body}</pre>
-                      {deliveryError && <div className="small text-danger">Delivery error: {deliveryError}</div>}
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-          </div>
-        )}
-        {!notificationsLoading && !notificationsError && notificationTotalPages > 1 && (
-          <div className="d-flex align-items-center justify-content-between gap-2">
-            <button
-              className="btn btn-sm btn-outline-light"
-              type="button"
-              disabled={notificationPage <= 1}
-              onClick={() => {
-                void handleChangeNotificationPage(notificationPage - 1);
-              }}
-            >
-              Previous
-            </button>
-            <button
-              className="btn btn-sm btn-outline-light"
-              type="button"
-              disabled={notificationPage >= notificationTotalPages}
-              onClick={() => {
-                void handleChangeNotificationPage(notificationPage + 1);
-              }}
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </div>
-    </section>
   );
 
   return (
@@ -338,7 +134,7 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
                 className={`app-nav-link ${isActive ? 'app-nav-link--active' : ''}`}
                 onClick={() => {
                   if (view === 'notifications') {
-                    void handleOpenNotifications();
+                    handleOpenNotifications();
                     return;
                   }
                   onSwitch(view);
@@ -399,9 +195,7 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
                 className="btn btn-sm btn-outline-light position-relative notification-trigger"
                 type="button"
                 aria-label="Open notification center"
-                onClick={() => {
-                  void handleOpenNotifications();
-                }}
+                onClick={handleOpenNotifications}
               >
                 <FiMessageSquare size={16} />
                 <span>Notifications</span>
@@ -416,7 +210,9 @@ export function Layout({ activeView, onSwitch, currentUser, onLogout, children }
           </div>
         </header>
 
-        <main className="app-main">{activeView === 'notifications' ? notificationCenterContent : children}</main>
+        <main className="app-main">
+          {activeView === 'notifications' ? <NotificationCenter onMarkedRead={handleMarkedRead} /> : children}
+        </main>
       </div>
     </div>
   );

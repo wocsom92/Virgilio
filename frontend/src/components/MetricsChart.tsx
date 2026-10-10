@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import {
   Chart as ChartJS,
   ChartData,
@@ -56,7 +56,7 @@ function parseTimestamp(value: string): number {
   return new Date(normalized).getTime();
 }
 
-export function MetricsChart({
+function MetricsChartComponent({
   title,
   range,
   points,
@@ -197,8 +197,16 @@ export function MetricsChart({
       },
       elements: {
         line: {
-          tension: 0.3,
+          tension: 0,
         },
+      },
+      // Pi-friendly: no animation frames, no bezier smoothing, cheap hover lookup.
+      animation: false as const,
+      normalized: true,
+      interaction: {
+        mode: 'nearest' as const,
+        axis: 'x' as const,
+        intersect: false,
       },
     }),
     [datasets.length, suggestedMin, suggestedMax, processed.window.end, processed.window.start]
@@ -206,7 +214,7 @@ export function MetricsChart({
 
   const markerPlugin = useMemo(
     () => ({
-      id: `markers-${title}`,
+      id: 'reboot-markers',
       afterDraw: (chart: any) => {
         if (!markers || markers.length === 0) return;
         const {
@@ -228,30 +236,36 @@ export function MetricsChart({
         ctx.restore();
       },
     }),
-    [markers, title]
+    [markers]
+  );
+  const plugins = useMemo(() => [markerPlugin], [markerPlugin]);
+  const chartData = useMemo(
+    () => ({ datasets: processed.datasets }) satisfies ChartData<'line', GapPoint[]>,
+    [processed.datasets]
   );
 
-  if (loading) {
+  // Keep the canvas mounted while a refresh is in flight: destroying and recreating a chart
+  // every poll is the single most expensive thing this page used to do.
+  const hasPoints = points.length > 0;
+  if (loading && !hasPoints) {
     return <p className="text-secondary small mb-0">Loading {title}…</p>;
   }
 
-  if (error) {
+  if (error && !hasPoints) {
     return <div className="alert alert-warning small py-2 mb-0">{error}</div>;
   }
 
   return (
-    <div className="d-flex flex-column gap-2">
+    <div className="d-flex flex-column gap-2 metrics-chart" aria-busy={loading}>
       <h6 className="text-uppercase small fw-semibold mb-0 text-secondary">{title}</h6>
-      <div style={{ minHeight: 160 }}>
-        <Line
-          options={options}
-          data={{ datasets: processed.datasets } satisfies ChartData<'line', GapPoint[]>}
-          plugins={[markerPlugin]}
-        />
+      <div className="metrics-chart__canvas" style={{ minHeight: 160, position: 'relative' }}>
+        {loading ? <div className="metrics-chart__progress" aria-hidden="true" /> : null}
+        <Line options={options} data={chartData} plugins={plugins} />
       </div>
-      {!processed.hasAnyValues && (
-        <p className="text-secondary small mb-0">{emptyMessage}</p>
-      )}
+      {!processed.hasAnyValues && !loading && <p className="text-secondary small mb-0">{emptyMessage}</p>}
+      {error ? <p className="text-warning small mb-0">{error}</p> : null}
     </div>
   );
 }
+
+export const MetricsChart = memo(MetricsChartComponent);

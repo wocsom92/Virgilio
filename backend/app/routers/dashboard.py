@@ -72,15 +72,19 @@ async def fetch_quick_status_tiles(
 
 @router.get("/quick-status/history", response_model=list[QuickStatusTileRead])
 async def fetch_quick_status_tile_history(
-    tile_ids: list[int] = Query(...),
+    tile_ids: list[int] | None = Query(None),
     _: object = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> list[QuickStatusTileRead]:
+    """24h strips/series for the requested tiles; without ``tile_ids`` every tile (and heartbeat)."""
+    backends, items = await _load_dashboard_quick_status_context(session)
+    if tile_ids is None:
+        return await build_quick_status_tiles(session, items, include_heartbeat_tiles=True, backends=backends)
+
     requested_ids = [tile_id for tile_id in tile_ids if tile_id != 0]
     if not requested_ids:
         return []
 
-    backends, items = await _load_dashboard_quick_status_context(session)
     positive_ids = {tile_id for tile_id in requested_ids if tile_id > 0}
     scoped_items = [item for item in items if item.id in positive_ids]
     include_heartbeat_tiles = any(tile_id < 0 for tile_id in requested_ids)

@@ -25,3 +25,44 @@ export function formatTemperature(valueCelsius: number | null | undefined): stri
   if (valueCelsius === null || valueCelsius === undefined || Number.isNaN(valueCelsius)) return 'N/A';
   return `${valueCelsius.toFixed(1)} °C`;
 }
+
+export type TileStatus = 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
+
+export function getStatusClass(status: TileStatus): string {
+  if (status === 'critical') return 'quick-status--critical';
+  if (status === 'warn') return 'quick-status--warn';
+  if (status === 'info') return 'quick-status--info';
+  if (status === 'ok') return 'quick-status--ok';
+  return 'quick-status--unknown';
+}
+
+export function getStaleHintClass(status: TileStatus): string {
+  if (status === 'critical') return 'quick-status--stale-hint-critical';
+  if (status === 'warn') return 'quick-status--stale-hint-warn';
+  if (status === 'info' || status === 'ok') return 'quick-status--stale-hint-ok';
+  return 'quick-status--stale-hint-unknown';
+}
+
+export function formatUpdatedAge(reportedAt: string | null | undefined, nowMs: number): string | null {
+  if (!reportedAt) {
+    return 'upd: no data';
+  }
+  const parsed = Date.parse(reportedAt);
+  if (Number.isNaN(parsed)) {
+    return null;
+  }
+  const elapsedSeconds = Math.max(0, Math.round((nowMs - parsed) / 1000));
+  if (elapsedSeconds < 45) {
+    return 'upd: just now';
+  }
+  if (elapsedSeconds < 3600) {
+    const minutes = Math.max(1, Math.round(elapsedSeconds / 60));
+    return `upd: ${minutes} minute${minutes === 1 ? '' : 's'} ago`;
+  }
+  if (elapsedSeconds < 86_400) {
+    const hours = Math.max(1, Math.round(elapsedSeconds / 3600));
+    return `upd: ${hours} hour${hours === 1 ? '' : 's'} ago`;
+  }
+  const days = Math.max(1, Math.round(elapsedSeconds / 86_400));
+  return `upd: ${days} day${days === 1 ? '' : 's'} ago`;
+}
