@@ -49,7 +49,10 @@ _RAW_PAYLOAD_METRICS = {
     "telegram_bot_status",
     "wifi_status",
     "vpn_status",
+    "fail2ban_status",
 }
+# Sentinel value for the fail2ban tile: installed but the daemon is not running (shown as STOPPED).
+_FAIL2BAN_STOPPED_VALUE = -1.0
 _ALERT_STATUSES = {"warn", "critical"}
 _HISTORY_SEGMENT_COUNT = 12
 _HISTORY_SEGMENT_DURATION = timedelta(hours=2)
@@ -292,6 +295,18 @@ def _extract_raw_payload_value(snapshot: MetricSnapshot, key: str) -> float | No
     return float(raw) if isinstance(raw, (int, float)) else None
 
 
+def _fail2ban_value(snapshot: MetricSnapshot) -> float | None:
+    """Currently banned IPs while fail2ban runs, the STOPPED sentinel when installed but down, else None."""
+    payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    level = payload.get("fail2ban_status_level")
+    if not isinstance(level, (int, float)):
+        return None
+    if level >= 2:
+        return _FAIL2BAN_STOPPED_VALUE
+    banned = payload.get("fail2ban_banned_total")
+    return float(banned) if isinstance(banned, (int, float)) else 0.0
+
+
 def _telegram_bot_evaluation(snapshot: MetricSnapshot) -> tuple[int | None, list[tuple[str, str]]] | None:
     """Bot status from this backend's own polling state, or None when the bot is not run here.
 
@@ -353,6 +368,8 @@ def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | N
         return _extract_raw_payload_value(snapshot, "ssh_status_level")
     if metric_key == "telegram_bot_status":
         return _telegram_bot_level(snapshot)
+    if metric_key == "fail2ban_status":
+        return _fail2ban_value(snapshot)
     if metric_key == "wifi_status":
         return _extract_raw_payload_value(snapshot, "wifi_status_level")
     if metric_key == "vpn_status":
@@ -394,6 +411,11 @@ def _format_value(metric_key: str, value: float | None) -> str:
         if level == 1:
             return "WARN"
         return "CRIT"
+    if metric_key == "fail2ban_status":
+        if value < 0:
+            return "STOPPED"
+        count = int(round(value))
+        return f"{count} banned"
     if metric_key in _PROMETHEUS_METRICS:
         return _format_compact_number(value)
     return f"{value:.2f}"
@@ -457,6 +479,58 @@ def _format_ip_detail(ip_value: str, country_code: Any, probe_service: Any) -> s
         else ""
     )
     return f"{ip_value.strip()}{country_suffix}{service_suffix}"
+
+
+def _fail2ban_detail_lines(payload: dict) -> list[QuickStatusDetailLine]:
+    if "fail2ban_status_level" not in payload:
+        return [QuickStatusDetailLine(text="fail2ban: no data from the agent (agent older than 9.4?)", severity="warn")]
+    level = payload.get("fail2ban_status_level")
+    if not isinstance(level, (int, float)):
+        return [QuickStatusDetailLine(text="fail2ban: not installed on this host", severity="warn")]
+    lines: list[QuickStatusDetailLine] = []
+    version = payload.get("fail2ban_version")
+    version_text = f" v{version}" if isinstance(version, str) and version.strip() else ""
+    if level >= 2:
+        error = payload.get("fail2ban_error")
+        detail = f" ({error})" if isinstance(error, str) and error.strip() else ""
+        lines.append(QuickStatusDetailLine(text=f"fail2ban: installed but not running{detail}", severity="critical"))
+    else:
+        lines.append(QuickStatusDetailLine(text=f"fail2ban{version_text}: running", severity="ok"))
+    jails = payload.get("fail2ban_jails")
+    if isinstance(jails, list):
+        if not jails and level < 2:
+            lines.append(QuickStatusDetailLine(text="No jails enabled", severity="warn"))
+        for jail in jails:
+            if not isinstance(jail, dict) or not jail.get("name"):
+                continue
+            banned = jail.get("banned")
+            total = jail.get("total_banned")
+            failing = jail.get("failed")
+            parts = [f"{banned if isinstance(banned, int) else '?'} banned now"]
+            if isinstance(total, int):
+                parts.append(f"{total} total")
+            if isinstance(failing, int) and failing > 0:
+                parts.append(f"{failing} failing")
+            lines.append(
+                QuickStatusDetailLine(
+                    text=f"{jail['name']}: {', '.join(parts)}",
+                    severity="warn" if isinstance(banned, int) and banned > 0 else "ok",
+                )
+            )
+            ips = jail.get("banned_ips")
+            if isinstance(ips, list) and ips:
+                lines.append(QuickStatusDetailLine(text=f"  banned: {', '.join(str(ip) for ip in ips[:10])}", severity="warn"))
+    bans_24h = payload.get("fail2ban_bans_24h")
+    if isinstance(bans_24h, int):
+        lines.append(QuickStatusDetailLine(text=f"Bans in last 24h: {bans_24h}", severity="warn" if bans_24h else "ok"))
+    last_ip = payload.get("fail2ban_last_ban_ip")
+    if isinstance(last_ip, str) and last_ip:
+        jail_name = payload.get("fail2ban_last_ban_jail")
+        age = payload.get("fail2ban_last_ban_age_seconds")
+        age_text = f" {_format_uptime_hours(age / 3600)} ago" if isinstance(age, (int, float)) else ""
+        jail_text = f" ({jail_name})" if isinstance(jail_name, str) and jail_name else ""
+        lines.append(QuickStatusDetailLine(text=f"Last ban: {last_ip}{jail_text}{age_text}", severity="ok"))
+    return lines
 
 
 def _build_detail_lines(
@@ -557,6 +631,9 @@ def _build_detail_lines(
         if isinstance(raw_line, str) and raw_line.strip():
             lines.append(QuickStatusDetailLine(text=f"Log: {raw_line.strip()}", severity=severity))
         return lines or None
+
+    if item.metric_key == "fail2ban_status":
+        return _fail2ban_detail_lines(payload) or None
 
     if item.metric_key == "telegram_bot_status":
         evaluation = _telegram_bot_evaluation(snapshot)
@@ -905,6 +982,15 @@ def _resolve_status(
         if value >= 2:
             return "critical"
         if value >= 1:
+            return "warn"
+        return "ok"
+    if metric_key == "fail2ban_status":
+        if value < 0:
+            return "critical"  # installed but not running
+        # Optional thresholds on the number of currently banned IPs (0 = never alert).
+        if critical_threshold > 0 and value >= critical_threshold:
+            return "critical"
+        if warning_threshold > 0 and value >= warning_threshold:
             return "warn"
         return "ok"
     if lower_warning_threshold is not None and lower_critical_threshold is not None:
@@ -1603,6 +1689,9 @@ def _has_detail_content(
             if isinstance(value, str) and value.strip():
                 return True
         return False
+
+    if item.metric_key == "fail2ban_status":
+        return True  # always explains itself (running, stopped or not installed)
 
     if item.metric_key == "telegram_bot_status":
         if bot_health.get_bot_health().enabled:

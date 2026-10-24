@@ -71,6 +71,16 @@ class MetricPayload(BaseModel):
     telegram_bot_status: str | None = None
     telegram_bot_running: bool | None = None
     telegram_egress_proxy_running: bool | None = None
+    fail2ban_status_level: int | None = None
+    fail2ban_status: str | None = None
+    fail2ban_version: str | None = None
+    fail2ban_banned_total: int | None = None
+    fail2ban_bans_24h: int | None = None
+    fail2ban_last_ban_ip: str | None = None
+    fail2ban_last_ban_jail: str | None = None
+    fail2ban_last_ban_age_seconds: int | None = None
+    fail2ban_jails: list[dict[str, Any]] | None = None
+    fail2ban_error: str | None = None
     wifi_status_level: int | None = None
     wifi_status: str | None = None
     wifi_ssid: str | None = None

@@ -25,6 +25,7 @@ QuickStatusMetricKey = Literal[
     "telegram_bot_status",
     "wifi_status",
     "vpn_status",
+    "fail2ban_status",
     "prometheus_query",
 ]
 
@@ -52,6 +53,7 @@ SUPPORTED_QUICK_STATUS_METRIC_KEYS: set[str] = {
     "telegram_bot_status",
     "wifi_status",
     "vpn_status",
+    "fail2ban_status",
     "prometheus_query",
 }
 
@@ -66,6 +68,7 @@ _NO_THRESHOLD_METRICS = {
     "vpn_status",
     "swap_used_percent",
     "docker_container_count",  # informational only since 9.3.1
+    "fail2ban_status",  # thresholds on the banned count are optional (0 = never alert)
 }
 _PROMETHEUS_METRICS = {"prometheus_query"}
 _BAND_THRESHOLD_METRICS = {"cpu_temperature_c", "prometheus_query"}

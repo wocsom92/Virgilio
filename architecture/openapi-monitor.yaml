@@ -429,6 +429,62 @@ components:
           - type: boolean
           - type: 'null'
           title: Telegram Egress Proxy Running
+        fail2ban_status_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fail2Ban Status Level
+          description: 0 while fail2ban answers on its socket, 2 when installed but not running, null when absent
+        fail2ban_status:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fail2Ban Status
+        fail2ban_version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fail2Ban Version
+        fail2ban_banned_total:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fail2Ban Banned Total
+          description: IPs currently banned across all jails
+        fail2ban_bans_24h:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fail2Ban Bans 24H
+        fail2ban_last_ban_ip:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fail2Ban Last Ban Ip
+        fail2ban_last_ban_jail:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fail2Ban Last Ban Jail
+        fail2ban_last_ban_age_seconds:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fail2Ban Last Ban Age Seconds
+        fail2ban_jails:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Fail2Ban Jails
+          description: Per jail name, banned, total_banned, failed, total_failed and up to 10 banned_ips
+        fail2ban_error:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Fail2Ban Error
         wifi_status_level:
           anyOf:
           - type: integer

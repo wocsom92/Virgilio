@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Fail2ban tile** (`fail2ban_status`): the monitor agent reads the host's fail2ban over its own socket (through the host-root bind mount when it runs in Docker) and its sqlite history, reporting per-jail currently banned / total banned / failing counts, banned IPs, bans in the last 24 h and the last ban. The tile shows "N banned", turns critical when fail2ban is installed but not running, shows "—" when it is not installed, and optionally warns/alerts on the banned count via thresholds.
+
 ### Fixed
 - **Telegram bot tile was always red:** the monitor agent judged the bot by looking for a `server-monitor-telegram-bot` container, which 9.0.0 removed when the bot moved into the backend process. The backend now tracks its own bot (polling started, last successful Telegram call, last error) and evaluates the tile from that; the agent only reports whether the egress proxy container on its host is running, which degrades the tile to a warning when the backend is configured to send through it. Tile details show the last contact time and route, or the last error.
 

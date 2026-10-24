@@ -685,3 +685,128 @@ def test_extract_ssh_failure_details_parses_preauth_disconnect():
         "port": 55123,
         "raw_line": "Mar 16 11:22:33 host sshd[123]: Connection closed by authenticating user root 192.0.2.8 port 55123 [preauth]",
     }
+
+
+def _fake_fail2ban_server(sock_path: str, responses: dict[tuple, object]):
+    """Minimal fail2ban socket server: pickled command list in, pickled (0, payload) out."""
+    import pickle
+    import socket
+    import threading
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(sock_path)
+    server.listen(4)
+    end = b"<F2B_END_COMMAND>"
+
+    def serve():
+        while True:
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            with conn:
+                buffer = b""
+                while not buffer.endswith(end):
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    buffer += chunk
+                command = tuple(pickle.loads(buffer[: -len(end)]))
+                reply = responses.get(command, (1, f"unknown command {command}"))
+                if command in responses:
+                    reply = (0, responses[command])
+                conn.sendall(pickle.dumps(reply, protocol=2) + end)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return server
+
+
+def test_collect_fail2ban_snapshot_reads_socket_and_database(tmp_path, monkeypatch):
+    import sqlite3
+    import time as time_module
+
+    import os
+    import tempfile
+
+    metrics._fail2ban_snapshot_cache = None
+    # AF_UNIX paths are limited to ~100 bytes (macOS), so keep the socket out of the long tmp_path.
+    sock_path = os.path.join(tempfile.gettempdir(), f"f2b-test-{os.getpid()}.sock")
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
+    server = _fake_fail2ban_server(
+        sock_path,
+        {
+            ("version",): "1.0.2",
+            ("status",): [("Number of jail", 2), ("Jail list", "sshd, nginx-http-auth")],
+            ("status", "sshd"): [
+                ("Filter", [("Currently failed", 3), ("Total failed", 120), ("File list", "/var/log/auth.log")]),
+                ("Actions", [("Currently banned", 2), ("Total banned", 57), ("Banned IP list", "203.0.113.5 198.51.100.9")]),
+            ],
+            ("status", "nginx-http-auth"): [
+                ("Filter", [("Currently failed", 0), ("Total failed", 4)]),
+                ("Actions", [("Currently banned", 0), ("Total banned", 1), ("Banned IP list", "")]),
+            ],
+        },
+    )
+    db_path = tmp_path / "fail2ban.sqlite3"
+    connection = sqlite3.connect(db_path)
+    connection.execute("CREATE TABLE bans(jail TEXT, ip TEXT, timeofban INTEGER, bantime INTEGER, bancount INTEGER, data JSON)")
+    now = int(time_module.time())
+    connection.executemany(
+        "INSERT INTO bans VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            ("sshd", "203.0.113.5", now - 600, 600, 1, "{}"),
+            ("sshd", "198.51.100.9", now - 7200, 600, 1, "{}"),
+            ("sshd", "192.0.2.77", now - 3 * 86400, 600, 1, "{}"),
+        ],
+    )
+    connection.commit()
+    connection.close()
+    monkeypatch.setattr(metrics, "_fail2ban_socket_path", lambda: sock_path)
+    monkeypatch.setattr(metrics, "_fail2ban_db_path", lambda: str(db_path))
+    try:
+        snapshot = metrics._collect_fail2ban_snapshot()
+    finally:
+        server.close()
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
+
+    assert snapshot["fail2ban_status_level"] == 0
+    assert snapshot["fail2ban_status"] == "running"
+    assert snapshot["fail2ban_version"] == "1.0.2"
+    assert snapshot["fail2ban_banned_total"] == 2
+    assert snapshot["fail2ban_jails"] == [
+        {"name": "sshd", "banned": 2, "total_banned": 57, "failed": 3, "total_failed": 120, "banned_ips": ["203.0.113.5", "198.51.100.9"]},
+        {"name": "nginx-http-auth", "banned": 0, "total_banned": 1, "failed": 0, "total_failed": 4, "banned_ips": []},
+    ]
+    assert snapshot["fail2ban_bans_24h"] == 2
+    assert snapshot["fail2ban_last_ban_ip"] == "203.0.113.5"
+    assert snapshot["fail2ban_last_ban_jail"] == "sshd"
+    assert 590 <= snapshot["fail2ban_last_ban_age_seconds"] <= 620
+
+
+def test_collect_fail2ban_snapshot_installed_but_stopped(tmp_path, monkeypatch):
+    metrics._fail2ban_snapshot_cache = None
+    db_path = tmp_path / "fail2ban.sqlite3"
+    db_path.write_bytes(b"")
+    monkeypatch.setattr(metrics, "_fail2ban_socket_path", lambda: None)
+    monkeypatch.setattr(metrics, "_fail2ban_db_path", lambda: str(db_path))
+
+    snapshot = metrics._collect_fail2ban_snapshot()
+
+    assert snapshot["fail2ban_status_level"] == 2
+    assert snapshot["fail2ban_status"] == "stopped"
+    assert snapshot["fail2ban_jails"] is None
+
+
+def test_collect_fail2ban_snapshot_absent(monkeypatch):
+    metrics._fail2ban_snapshot_cache = None
+    monkeypatch.setattr(metrics, "_fail2ban_socket_path", lambda: None)
+    monkeypatch.setattr(metrics, "_fail2ban_db_path", lambda: None)
+    monkeypatch.setattr(metrics, "_fail2ban_installed", lambda: False)
+
+    snapshot = metrics._collect_fail2ban_snapshot()
+
+    assert snapshot["fail2ban_status_level"] is None
+    assert snapshot["fail2ban_status"] is None

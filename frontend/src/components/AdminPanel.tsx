@@ -323,6 +323,18 @@ const quickStatusMetricOptions: Array<{
     supportsMinMaxBand: false,
   },
   {
+    key: 'fail2ban_status',
+    label: 'Fail2ban',
+    defaultWarning: 0,
+    defaultCritical: 0,
+    helper: 'Currently banned IPs per jail from the host\'s fail2ban. Critical when fail2ban is installed but not running; details list jails, recent bans and the last banned IP.',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
+    requiresPing: false,
+    requiresPrometheus: false,
+    supportsMinMaxBand: false,
+  },
+  {
     key: 'prometheus_query',
     label: 'Prometheus query',
     defaultWarning: 80,

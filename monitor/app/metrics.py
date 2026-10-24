@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import glob
 import gzip
+import io
 import ipaddress
 import json
 import logging
 import os
+import pickle
 import platform
 import re
 import socket
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -1283,6 +1286,199 @@ def _collect_telegram_bot_snapshot(running_containers: list[str] | None) -> dict
     return dict(result)
 
 
+_FAIL2BAN_SNAPSHOT_CACHE_TTL_SECONDS = 30.0
+_fail2ban_snapshot_cache: tuple[float, dict[str, Any]] | None = None
+_F2B_END_MARKER = b"<F2B_END_COMMAND>"
+_F2B_MAX_RESPONSE_BYTES = 4_000_000
+_F2B_MAX_LISTED_IPS = 10
+
+
+def _host_file_candidates(relative: str) -> list[str]:
+    """Absolute paths for a host file: through the host-root bind mount first, then locally."""
+    host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    candidates: list[str] = []
+    if host_target and host_target != "/":
+        candidates.append(os.path.join(host_target, relative.lstrip("/")))
+    candidates.append(relative)
+    return candidates
+
+
+def _fail2ban_socket_path() -> str | None:
+    for relative in ("/var/run/fail2ban/fail2ban.sock", "/run/fail2ban/fail2ban.sock"):
+        for path in _host_file_candidates(relative):
+            if os.path.exists(path):
+                return path
+    return None
+
+
+def _fail2ban_db_path() -> str | None:
+    for path in _host_file_candidates("/var/lib/fail2ban/fail2ban.sqlite3"):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _fail2ban_installed() -> bool:
+    if _fail2ban_db_path() is not None:
+        return True
+    return any(os.path.isdir(path) for path in _host_file_candidates("/etc/fail2ban"))
+
+
+class _Fail2banUnpickler(pickle.Unpickler):
+    """fail2ban answers with plain lists/tuples/strings/numbers; refuse anything that needs a class."""
+
+    def find_class(self, module: str, name: str) -> Any:  # pragma: no cover - defensive
+        raise pickle.UnpicklingError(f"fail2ban response referenced {module}.{name}")
+
+
+def _fail2ban_command(sock_path: str, *command: str) -> Any:
+    """Send one command over fail2ban's own socket protocol and return its result payload."""
+    request = pickle.dumps(list(command), protocol=2) + _F2B_END_MARKER
+    buffer = b""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(3.0)
+        client.connect(sock_path)
+        client.sendall(request)
+        while not buffer.endswith(_F2B_END_MARKER):
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            buffer += chunk
+            if len(buffer) > _F2B_MAX_RESPONSE_BYTES:
+                raise ValueError("fail2ban response too large")
+    if not buffer.endswith(_F2B_END_MARKER):
+        raise ValueError("truncated fail2ban response")
+    result = _Fail2banUnpickler(io.BytesIO(buffer[: -len(_F2B_END_MARKER)])).load()
+    if not isinstance(result, tuple) or len(result) != 2 or result[0] != 0:
+        raise ValueError(f"fail2ban command {' '.join(command)} failed: {str(result)[:160]}")
+    return result[1]
+
+
+def _f2b_pairs(value: Any) -> dict[str, Any]:
+    """fail2ban status payloads are lists of (label, value) pairs."""
+    if not isinstance(value, (list, tuple)):
+        return {}
+    return {str(label): item for label, item in (pair for pair in value if isinstance(pair, (list, tuple)) and len(pair) == 2)}
+
+
+def _f2b_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fail2ban_jail_status(sock_path: str, jail: str) -> dict[str, Any]:
+    status = _f2b_pairs(_fail2ban_command(sock_path, "status", jail))
+    filter_info = _f2b_pairs(status.get("Filter"))
+    actions_info = _f2b_pairs(status.get("Actions"))
+    banned_ips_raw = actions_info.get("Banned IP list")
+    if isinstance(banned_ips_raw, str):
+        banned_ips = [token for token in banned_ips_raw.split() if token]
+    elif isinstance(banned_ips_raw, (list, tuple)):
+        banned_ips = [str(token) for token in banned_ips_raw]
+    else:
+        banned_ips = []
+    return {
+        "name": jail,
+        "banned": _f2b_int(actions_info.get("Currently banned")),
+        "total_banned": _f2b_int(actions_info.get("Total banned")),
+        "failed": _f2b_int(filter_info.get("Currently failed")),
+        "total_failed": _f2b_int(filter_info.get("Total failed")),
+        "banned_ips": banned_ips[:_F2B_MAX_LISTED_IPS],
+    }
+
+
+def _fail2ban_recent_bans(db_path: str, *, window_seconds: int = 86_400) -> dict[str, Any]:
+    """Bans in the last day and the newest ban, from fail2ban's own sqlite file (read-only)."""
+    result: dict[str, Any] = {}
+    uri = f"file:{db_path}?mode=ro&immutable=1"
+    try:
+        connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+    except sqlite3.Error:
+        return result
+    try:
+        since = time.time() - window_seconds
+        row = connection.execute("SELECT COUNT(*) FROM bans WHERE timeofban >= ?", (since,)).fetchone()
+        if row is not None:
+            result["fail2ban_bans_24h"] = _f2b_int(row[0])
+        last = connection.execute("SELECT jail, ip, timeofban FROM bans ORDER BY timeofban DESC LIMIT 1").fetchone()
+        if last is not None:
+            jail, ip, time_of_ban = last
+            result["fail2ban_last_ban_jail"] = str(jail) if jail is not None else None
+            result["fail2ban_last_ban_ip"] = str(ip) if ip is not None else None
+            try:
+                result["fail2ban_last_ban_age_seconds"] = max(0, int(time.time() - float(time_of_ban)))
+            except (TypeError, ValueError):
+                result["fail2ban_last_ban_age_seconds"] = None
+    except sqlite3.Error:
+        pass
+    finally:
+        connection.close()
+    return result
+
+
+def _collect_fail2ban_snapshot() -> dict[str, Any]:
+    """fail2ban state for the host: running (jail counts), stopped (installed, no socket) or absent.
+
+    ``fail2ban_status_level`` is 0 while the daemon answers on its socket, 2 when fail2ban is
+    installed but not running, and None when it is not installed at all.
+    """
+    global _fail2ban_snapshot_cache
+    now = time.monotonic()
+    if _fail2ban_snapshot_cache is not None:
+        cached_at, cached_value = _fail2ban_snapshot_cache
+        if now - cached_at <= _FAIL2BAN_SNAPSHOT_CACHE_TTL_SECONDS:
+            return dict(cached_value)
+
+    result: dict[str, Any] = {
+        "fail2ban_status_level": None,
+        "fail2ban_status": None,
+        "fail2ban_version": None,
+        "fail2ban_banned_total": None,
+        "fail2ban_jails": None,
+        "fail2ban_error": None,
+    }
+    sock_path = _fail2ban_socket_path()
+    if sock_path is not None:
+        try:
+            try:
+                version = _fail2ban_command(sock_path, "version")
+                result["fail2ban_version"] = str(version) if version is not None else None
+            except Exception:
+                pass
+            overview = _f2b_pairs(_fail2ban_command(sock_path, "status"))
+            jail_list = overview.get("Jail list")
+            jail_names = [token.strip() for token in str(jail_list or "").split(",") if token.strip()]
+            jails = [_fail2ban_jail_status(sock_path, jail) for jail in jail_names]
+            result.update(
+                {
+                    "fail2ban_status_level": 0,
+                    "fail2ban_status": "running",
+                    "fail2ban_banned_total": sum(jail.get("banned") or 0 for jail in jails),
+                    "fail2ban_jails": jails,
+                }
+            )
+        except (OSError, ValueError, pickle.UnpicklingError, EOFError) as exc:
+            # Socket present but the daemon did not answer: treat as not running.
+            result.update(
+                {
+                    "fail2ban_status_level": 2,
+                    "fail2ban_status": "stopped",
+                    "fail2ban_error": f"{exc.__class__.__name__}: {str(exc)[:120]}",
+                }
+            )
+    elif _fail2ban_installed():
+        result.update({"fail2ban_status_level": 2, "fail2ban_status": "stopped"})
+
+    db_path = _fail2ban_db_path()
+    if db_path is not None and result["fail2ban_status_level"] is not None:
+        result.update(_fail2ban_recent_bans(db_path))
+
+    _fail2ban_snapshot_cache = (now, result)
+    return dict(result)
+
+
 _WIFI_STATION_LINE = re.compile(r"^\s*Station\s+([0-9a-fA-F:]{17})")
 
 
@@ -1685,6 +1881,7 @@ def collect_metrics() -> dict[str, Any]:
         payload["top_processes"] = top_processes
     payload.update(_collect_ssh_snapshot())
     payload.update(_collect_telegram_bot_snapshot(running_containers))
+    payload.update(_collect_fail2ban_snapshot())
     payload.update(_collect_wifi_snapshot())
     payload.update(_collect_vpn_snapshot())
     warnings = _detect_warnings(payload)

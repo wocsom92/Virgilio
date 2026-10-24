@@ -293,6 +293,7 @@ export type QuickStatusMetricKey =
   | 'telegram_bot_status'
   | 'wifi_status'
   | 'vpn_status'
+  | 'fail2ban_status'
   | 'prometheus_query';
 
 export type PrometheusThresholdDirection = 'higher' | 'lower';

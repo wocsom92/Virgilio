@@ -1210,3 +1210,54 @@ async def test_quick_status_alert_suppression_keeps_ok_until_confirmation_elapse
     await db_session.commit()
     await quick_status.refresh_quick_status_alert_state(db_session, now=later)
     assert item.alert_condition_started_at is None
+
+
+def test_fail2ban_tile_value_status_and_details():
+    running = _snapshot(
+        {
+            "fail2ban_status_level": 0,
+            "fail2ban_status": "running",
+            "fail2ban_version": "1.0.2",
+            "fail2ban_banned_total": 3,
+            "fail2ban_bans_24h": 5,
+            "fail2ban_last_ban_ip": "203.0.113.5",
+            "fail2ban_last_ban_jail": "sshd",
+            "fail2ban_last_ban_age_seconds": 900,
+            "fail2ban_jails": [
+                {"name": "sshd", "banned": 3, "total_banned": 57, "failed": 1, "total_failed": 120, "banned_ips": ["203.0.113.5"]},
+                {"name": "nginx", "banned": 0, "total_banned": 2, "failed": 0, "total_failed": 4, "banned_ips": []},
+            ],
+        }
+    )
+    assert quick_status._metric_value(running, "fail2ban_status", None) == 3
+    assert quick_status._format_value("fail2ban_status", 3) == "3 banned"
+    assert quick_status._resolve_status(3, 0, 0, "fail2ban_status") == "ok"
+    assert quick_status._resolve_status(3, 2, 10, "fail2ban_status") == "warn"
+    assert quick_status._resolve_status(12, 2, 10, "fail2ban_status") == "critical"
+
+    item = QuickStatusItem(label="Fail2ban", metric_key="fail2ban_status", warning_threshold=0, critical_threshold=0)
+    lines = quick_status._build_detail_lines(item, running, status="ok")
+    assert lines is not None
+    assert [line.text for line in lines] == [
+        "fail2ban v1.0.2: running",
+        "sshd: 3 banned now, 57 total, 1 failing",
+        "  banned: 203.0.113.5",
+        "nginx: 0 banned now, 2 total",
+        "Bans in last 24h: 5",
+        "Last ban: 203.0.113.5 (sshd) 15m ago",
+    ]
+
+    stopped = _snapshot({"fail2ban_status_level": 2, "fail2ban_status": "stopped"})
+    assert quick_status._metric_value(stopped, "fail2ban_status", None) == quick_status._FAIL2BAN_STOPPED_VALUE
+    assert quick_status._format_value("fail2ban_status", quick_status._FAIL2BAN_STOPPED_VALUE) == "STOPPED"
+    assert quick_status._resolve_status(quick_status._FAIL2BAN_STOPPED_VALUE, 0, 0, "fail2ban_status") == "critical"
+    assert quick_status._build_detail_lines(item, stopped, status="critical")[0].text == "fail2ban: installed but not running"
+
+    absent = _snapshot({"fail2ban_status_level": None, "fail2ban_status": None})
+    assert quick_status._metric_value(absent, "fail2ban_status", None) is None
+    assert quick_status._resolve_status(None, 0, 0, "fail2ban_status") == "unknown"
+    assert quick_status._build_detail_lines(item, absent, status="unknown")[0].text == "fail2ban: not installed on this host"
+
+    old_agent = _snapshot({})
+    assert quick_status._metric_value(old_agent, "fail2ban_status", None) is None
+    assert quick_status._build_detail_lines(item, old_agent, status="unknown")[0].text.startswith("fail2ban: no data from the agent")

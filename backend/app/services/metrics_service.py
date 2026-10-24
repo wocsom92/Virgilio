@@ -21,7 +21,7 @@ def _escape_markdown(text: str) -> str:
 # Keys of the monitor payload that the backend still reads from ``raw_payload`` after ingest
 # (SSH/Telegram/Wi-Fi/VPN status details, top processes, extra disk figures). Everything else is
 # already stored in a dedicated column, so keeping the whole payload only bloats every row.
-_EXTRA_PAYLOAD_PREFIXES: tuple[str, ...] = ("ssh_", "telegram_", "wifi_", "vpn_")
+_EXTRA_PAYLOAD_PREFIXES: tuple[str, ...] = ("ssh_", "telegram_", "wifi_", "vpn_", "fail2ban_")
 _EXTRA_PAYLOAD_KEYS: frozenset[str] = frozenset({"top_processes", "disk_available_gb", "disk_total_gb", "hostname"})
 
 
