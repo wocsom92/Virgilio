@@ -15,7 +15,7 @@ import classNames from 'classnames';
 import { QuickStatusTile } from '../api/client';
 import { useNow } from '../contexts/NowContext';
 import { formatUpdatedAge, getStaleHintClass, getStatusClass } from '../utils/formatting';
-import { QuickStatusTileCard } from './QuickStatusTileCard';
+import { QuickStatusTileCard, quickStatusLabel, renderHistorySegments } from './QuickStatusTileCard';
 
 interface QuickStatusItemCardProps {
   tile: QuickStatusTile;
@@ -170,14 +170,6 @@ function formatProbeTime(timestampMs: number): string {
   }).format(timestampMs);
 }
 
-function statusLabel(status: QuickStatusTile['status']): string {
-  if (status === 'warn') return 'Warn';
-  if (status === 'critical') return 'Critical';
-  if (status === 'info') return 'Info';
-  if (status === 'unknown') return 'Unknown';
-  return 'OK';
-}
-
 function QuickStatusItemCardComponent({
   tile,
   onClick: onClickProp,
@@ -325,8 +317,8 @@ function QuickStatusItemCardComponent({
         >
           <defs>
             <linearGradient id={`quick-status-fill-${tile.id}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(255,255,255,0.32)" />
-              <stop offset="100%" stopColor="rgba(255,255,255,0.02)" />
+              <stop offset="0%" stopColor="currentColor" stopOpacity="0.32" />
+              <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
             </linearGradient>
           </defs>
           {sparkline.areaPaths.map((areaPath, index) => (
@@ -338,8 +330,9 @@ function QuickStatusItemCardComponent({
               d={linePath}
               fill="none"
               stroke="currentColor"
-              strokeWidth="2.2"
+              strokeWidth="1.8"
               strokeLinecap="round"
+              strokeLinejoin="round"
               vectorEffect="non-scaling-stroke"
             />
           ))}
@@ -387,14 +380,19 @@ function QuickStatusItemCardComponent({
       <div className="quick-status-wide__header">
         <div className="quick-status-wide__title-wrap">
           <div className="quick-status-wide__title">{tile.label}</div>
-          <div className="quick-status-wide__subtitle">{updatedLabel}</div>
+          <div className="quick-status-wide__subtitle">
+            {tile.backend_name} · {updatedLabel}
+          </div>
         </div>
-        <div className="quick-status-wide__status">{statusLabel(tile.status)}</div>
+        <div className="quick-status-wide__status">
+          <span className="quick-status-tile__dot" aria-hidden="true" />
+          {quickStatusLabel(tile.status, tile.stale)}
+        </div>
       </div>
       <div className="quick-status-wide__body">
         <div className="quick-status-wide__value-wrap">
           <div className="quick-status-wide__value">{tile.display_value}</div>
-          <div className="quick-status-wide__backend">{tile.backend_name}</div>
+          {renderHistorySegments(tile)}
         </div>
         {chartShell}
       </div>
@@ -420,7 +418,12 @@ function QuickStatusItemCardComponent({
           </span>
         </div>
       </div>
-      {tile.details && tile.details.length > 0 ? <div className="quick-status-hint">Details</div> : null}
+      {tile.details && tile.details.length > 0 ? (
+        <div className="quick-status-tile__foot quick-status-tile__foot--wide">
+          <span />
+          <span className="quick-status-hint">Details</span>
+        </div>
+      ) : null}
     </div>
   );
 
