@@ -143,19 +143,25 @@ def test_collect_metrics_hides_running_container_names_when_disabled(monkeypatch
     assert payload["docker_running_containers"] is None
 
 
-def test_collect_telegram_bot_snapshot_uses_bot_and_proxy_containers():
+def test_collect_telegram_bot_snapshot_reports_only_the_egress_proxy():
     metrics._telegram_snapshot_cache = None
 
     snapshot = metrics._collect_telegram_bot_snapshot(
-        ["server-monitor-backend", "server-monitor-telegram-bot", "server-monitor-telegram-egress-proxy"]
+        ["server-monitor-backend", "server-monitor-telegram-egress-proxy"]
     )
 
+    # The bot lives in the backend process; its state is not the agent's to judge.
     assert snapshot == {
-        "telegram_bot_status_level": 0,
-        "telegram_bot_status": "ok",
-        "telegram_bot_running": True,
+        "telegram_bot_status_level": None,
+        "telegram_bot_status": None,
+        "telegram_bot_running": None,
         "telegram_egress_proxy_running": True,
     }
+
+    metrics._telegram_snapshot_cache = None
+    assert metrics._collect_telegram_bot_snapshot(["server-monitor-backend"])["telegram_egress_proxy_running"] is False
+    metrics._telegram_snapshot_cache = None
+    assert metrics._collect_telegram_bot_snapshot(None)["telegram_egress_proxy_running"] is None
 
 
 def test_parse_wifi_associated_clients_extracts_macs_and_signal():

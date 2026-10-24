@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Telegram bot tile was always red:** the monitor agent judged the bot by looking for a `server-monitor-telegram-bot` container, which 9.0.0 removed when the bot moved into the backend process. The backend now tracks its own bot (polling started, last successful Telegram call, last error) and evaluates the tile from that; the agent only reports whether the egress proxy container on its host is running, which degrades the tile to a warning when the backend is configured to send through it. Tile details show the last contact time and route, or the last error.
+
+### Changed
+- The **running containers** tile is informational only, like swap: it no longer takes a target range or raises warning/error states.
+
 ## [9.3.0] - 2026-10-24
 
 ### Changed

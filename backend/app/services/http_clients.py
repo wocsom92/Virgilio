@@ -9,6 +9,7 @@ import httpx
 from telegram.error import NetworkError, TimedOut
 from telegram.request import BaseRequest, HTTPXRequest
 
+from backend.app.bot import health as bot_health
 from backend.app.core.config import settings
 
 
@@ -99,12 +100,33 @@ def build_telegram_transport(
     )
 
 
+class RecordingHTTPXRequest(HTTPXRequest):
+    """HTTPXRequest that reports every Telegram call's outcome to the bot health state."""
+
+    def __init__(self, route_name: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._route_name = route_name
+
+    async def do_request(self, *args: Any, **kwargs: Any) -> tuple[int, bytes]:
+        try:
+            code, payload = await super().do_request(*args, **kwargs)
+        except Exception as exc:
+            bot_health.record_request(False, route=self._route_name, error=str(exc) or exc.__class__.__name__)
+            raise
+        if 200 <= code < 300:
+            bot_health.record_request(True, route=self._route_name)
+        else:
+            bot_health.record_request(False, route=self._route_name, error=f"HTTP {code}")
+        return code, payload
+
+
 def _build_single_telegram_request(
     route: TelegramRouteConfig,
     *,
     connection_pool_size: int,
 ) -> HTTPXRequest:
-    return HTTPXRequest(
+    return RecordingHTTPXRequest(
+        route.name,
         connection_pool_size=connection_pool_size,
         read_timeout=10,
         write_timeout=10,

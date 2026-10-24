@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload, undefer
 
+from backend.app.bot import health as bot_health
 from backend.app.core.config import settings
 from backend.app.models.monitors import (
     MetricSnapshot,
@@ -38,7 +39,7 @@ _PERCENT_METRICS = {"disk_usage_percent", "ram_used_percent", "swap_used_percent
 _REVERSE_THRESHOLD_METRICS = {"last_restart", "memory_available_gb", "mount_available_gb", "ssh_last_unsuccessful_attempt"}
 _PING_METRICS = {"ping_result", "ping_delay_ms"}
 _PROMETHEUS_METRICS = {"prometheus_query"}
-_INFO_ONLY_METRICS = {"swap_used_percent"}
+_INFO_ONLY_METRICS = {"swap_used_percent", "docker_container_count"}  # shown, never alerting
 # Metrics whose value lives in the (deferred) raw_payload JSON column.
 _RAW_PAYLOAD_METRICS = {
     "mount_available_gb",
@@ -291,6 +292,33 @@ def _extract_raw_payload_value(snapshot: MetricSnapshot, key: str) -> float | No
     return float(raw) if isinstance(raw, (int, float)) else None
 
 
+def _telegram_bot_evaluation(snapshot: MetricSnapshot) -> tuple[int | None, list[tuple[str, str]]] | None:
+    """Bot status from this backend's own polling state, or None when the bot is not run here.
+
+    The agent only knows whether the egress proxy container on its host is up; that is folded in
+    when the backend is configured to send through the proxy.
+    """
+    health = bot_health.get_bot_health()
+    if not health.enabled:
+        return None
+    payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    proxy_running = payload.get("telegram_egress_proxy_running")
+    return bot_health.evaluate_bot_health(
+        health,
+        proxy_configured=bool(settings.telegram_proxy_url),
+        proxy_running=proxy_running if isinstance(proxy_running, bool) else None,
+    )
+
+
+def _telegram_bot_level(snapshot: MetricSnapshot) -> float | None:
+    evaluation = _telegram_bot_evaluation(snapshot)
+    if evaluation is None:
+        # Bot not run by this backend: fall back to whatever the agent reported (legacy setups).
+        return _extract_raw_payload_value(snapshot, "telegram_bot_status_level")
+    level, _lines = evaluation
+    return float(level) if level is not None else None
+
+
 def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | None) -> float | None:
     if metric_key == "disk_usage_percent":
         return float(snapshot.disk_usage_percent) if snapshot.disk_usage_percent is not None else None
@@ -324,7 +352,7 @@ def _metric_value(snapshot: MetricSnapshot, metric_key: str, mount_path: str | N
     if metric_key == "ssh_status":
         return _extract_raw_payload_value(snapshot, "ssh_status_level")
     if metric_key == "telegram_bot_status":
-        return _extract_raw_payload_value(snapshot, "telegram_bot_status_level")
+        return _telegram_bot_level(snapshot)
     if metric_key == "wifi_status":
         return _extract_raw_payload_value(snapshot, "wifi_status_level")
     if metric_key == "vpn_status":
@@ -531,6 +559,10 @@ def _build_detail_lines(
         return lines or None
 
     if item.metric_key == "telegram_bot_status":
+        evaluation = _telegram_bot_evaluation(snapshot)
+        if evaluation is not None:
+            _level, health_lines = evaluation
+            return [QuickStatusDetailLine(text=text, severity=line_severity) for text, line_severity in health_lines] or None
         bot_running = payload.get("telegram_bot_running")
         egress_proxy_running = payload.get("telegram_egress_proxy_running")
         lines = []
@@ -867,12 +899,6 @@ def _resolve_status(
         return "unknown"
     if metric_key in _INFO_ONLY_METRICS:
         return "info"
-    if metric_key == "docker_container_count":
-        min_allowed = min(warning_threshold, critical_threshold)
-        max_allowed = max(warning_threshold, critical_threshold)
-        if value < min_allowed or value > max_allowed:
-            return "critical"
-        return "ok"
     if metric_key == "ssh_last_successful_login":
         return "ok"
     if metric_key in {"ssh_status", "telegram_bot_status", "wifi_status", "vpn_status"}:
@@ -1579,6 +1605,8 @@ def _has_detail_content(
         return False
 
     if item.metric_key == "telegram_bot_status":
+        if bot_health.get_bot_health().enabled:
+            return True
         return isinstance(payload.get("telegram_bot_running"), bool) or isinstance(
             payload.get("telegram_egress_proxy_running"), bool
         )

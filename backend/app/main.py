@@ -47,8 +47,10 @@ async def lifespan(app: FastAPI):
     bot_stop = asyncio.Event()
     bot_task: asyncio.Task | None = None
     if settings.telegram_bot_enabled and settings.telegram_bot_token:
+        from backend.app.bot import health as bot_health
         from backend.app.bot.polling import run_bot_with_retry
 
+        bot_health.mark_enabled(True)
         bot_task = asyncio.create_task(run_bot_with_retry(bot_stop), name="telegram-bot")
     try:
         yield

@@ -65,6 +65,7 @@ _NO_THRESHOLD_METRICS = {
     "wifi_status",
     "vpn_status",
     "swap_used_percent",
+    "docker_container_count",  # informational only since 9.3.1
 }
 _PROMETHEUS_METRICS = {"prometheus_query"}
 _BAND_THRESHOLD_METRICS = {"cpu_temperature_c", "prometheus_query"}
@@ -137,15 +138,7 @@ class QuickStatusItemBase(BaseModel):
             self.lower_critical_threshold = None
 
         if self.metric_key not in _NO_THRESHOLD_METRICS:
-            if self.metric_key == "docker_container_count":
-                if self.warning_threshold > self.critical_threshold:
-                    # Backward compatibility: legacy rows used warning/critical semantics,
-                    # so normalize to [min..max] interval instead of rejecting reads.
-                    self.warning_threshold, self.critical_threshold = (
-                        self.critical_threshold,
-                        self.warning_threshold,
-                    )
-            elif self.metric_key in _BAND_THRESHOLD_METRICS and self.lower_warning_threshold is not None:
+            if self.metric_key in _BAND_THRESHOLD_METRICS and self.lower_warning_threshold is not None:
                 if self.warning_threshold >= self.critical_threshold:
                     raise ValueError("warning_threshold must be less than critical_threshold")
             elif self.metric_key in _PROMETHEUS_METRICS and self.prometheus_threshold_direction == "lower":

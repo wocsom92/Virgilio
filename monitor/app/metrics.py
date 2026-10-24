@@ -1267,27 +1267,16 @@ def _collect_telegram_bot_snapshot(running_containers: list[str] | None) -> dict
         if now - cached_at <= _SERVICE_SNAPSHOT_CACHE_TTL_SECONDS:
             return dict(cached_value)
 
+    # The bot runs inside the backend process since 9.0.0, so the backend judges its own state
+    # (backend/app/bot/health.py); the agent only reports whether the egress proxy container,
+    # which does run on this host, is up. The bot keys stay in the payload for schema stability.
     names = {name.strip() for name in (running_containers or []) if isinstance(name, str) and name.strip()}
-    bot_running = "server-monitor-telegram-bot" in names
     proxy_running = "server-monitor-telegram-egress-proxy" in names
 
-    if bot_running and proxy_running:
-        status_level = 0
-        status = "ok"
-    elif bot_running:
-        status_level = 1
-        status = "warn"
-    elif running_containers is None:
-        status_level = None
-        status = None
-    else:
-        status_level = 2
-        status = "critical"
-
-    result = {
-        "telegram_bot_status_level": status_level,
-        "telegram_bot_status": status,
-        "telegram_bot_running": bot_running if running_containers is not None else None,
+    result: dict[str, Any] = {
+        "telegram_bot_status_level": None,
+        "telegram_bot_status": None,
+        "telegram_bot_running": None,
         "telegram_egress_proxy_running": proxy_running if running_containers is not None else None,
     }
     _telegram_snapshot_cache = (now, result)

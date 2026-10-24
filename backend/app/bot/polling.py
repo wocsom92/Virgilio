@@ -26,6 +26,7 @@ from backend.app.services.telegram_notifications import (
     send_warn_message,
 )
 from backend.app.bot.boot_tracker import BootTracker
+from backend.app.bot import health as bot_health
 
 logger = logging.getLogger(__name__)
 
@@ -270,11 +271,13 @@ async def start_bot() -> Application:
     if application.updater is None:  # pragma: no cover - PTB always builds an updater here
         raise RuntimeError("Telegram application has no updater")
     await application.updater.start_polling(drop_pending_updates=True)
+    bot_health.mark_started()
     logger.info("Telegram bot polling started in-process")
     return application
 
 
 async def stop_bot(application: Application) -> None:
+    bot_health.mark_stopped()
     try:
         if application.updater is not None and application.updater.running:
             await application.updater.stop()
@@ -297,6 +300,7 @@ async def run_bot_with_retry(stop_event: asyncio.Event) -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            bot_health.mark_stopped(error=str(exc) or exc.__class__.__name__)
             logger.warning("Telegram bot failed to start (%s); retrying in %.0fs", exc, delay)
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=delay)

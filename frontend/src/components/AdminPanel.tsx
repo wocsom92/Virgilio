@@ -77,7 +77,7 @@ const quickStatusMetricOptions: Array<{
   defaultCritical: number;
   helper: string;
   requiresThresholds: boolean;
-  thresholdDirection: 'higher' | 'lower' | 'range';
+  thresholdDirection: 'higher' | 'lower';
   requiresPing: boolean;
   requiresPrometheus: boolean;
   supportsMinMaxBand: boolean;
@@ -135,9 +135,9 @@ const quickStatusMetricOptions: Array<{
     label: 'Running containers (#)',
     defaultWarning: 1,
     defaultCritical: 1,
-    helper: 'Target running container range [X..Y]. Critical when outside this interval.',
-    requiresThresholds: true,
-    thresholdDirection: 'range',
+    helper: 'Number of running containers. Informational only; this tile does not generate warning or error states.',
+    requiresThresholds: false,
+    thresholdDirection: 'higher',
     requiresPing: false,
     requiresPrometheus: false,
     supportsMinMaxBand: false,
@@ -559,9 +559,9 @@ const defaultQuickStatusLabel = (
 
 const getQuickStatusThresholdDirection = (
   metric: QuickStatusMetricKey,
-  metaThresholdDirection: 'higher' | 'lower' | 'range' | undefined,
+  metaThresholdDirection: 'higher' | 'lower' | undefined,
   prometheusThresholdDirection: PrometheusThresholdDirection
-): 'higher' | 'lower' | 'range' => {
+): 'higher' | 'lower' => {
   if (metric === 'prometheus_query') {
     return prometheusThresholdDirection;
   }
@@ -1144,12 +1144,7 @@ export function AdminPanel({ currentUser, onOpenDashboard }: AdminPanelProps) {
           return;
         }
       }
-      if (thresholdDirection === 'range') {
-        if (Number(quickStatusForm.warning_threshold) > Number(quickStatusForm.critical_threshold)) {
-          setQuickStatusStatus('Minimum containers must be less than or equal to maximum containers.');
-          return;
-        }
-      } else if (thresholdDirection === 'lower') {
+      if (thresholdDirection === 'lower') {
         if (Number(quickStatusForm.warning_threshold) <= Number(quickStatusForm.critical_threshold)) {
           setQuickStatusStatus('Warning threshold must be greater than critical threshold.');
           return;
@@ -2575,10 +2570,6 @@ export function AdminPanel({ currentUser, onOpenDashboard }: AdminPanelProps) {
                                   item.lower_critical_threshold !== null &&
                                   item.lower_critical_threshold !== undefined
                                   ? `Warn ≤ ${item.lower_warning_threshold} or ≥ ${item.warning_threshold} / Critical ≤ ${item.lower_critical_threshold} or ≥ ${item.critical_threshold}`
-                                  : thresholdDirection === 'range'
-                                  ? item.warning_threshold === item.critical_threshold
-                                    ? `Target containers: ${item.warning_threshold} (critical outside target)`
-                                    : `Target containers: ${item.warning_threshold}-${item.critical_threshold} (critical outside range)`
                                   : thresholdDirection === 'lower'
                                     ? `Warn ≤ ${item.warning_threshold} / Critical ≤ ${item.critical_threshold}`
                                     : `Warn ${item.warning_threshold} / Critical ${item.critical_threshold}`
@@ -2941,8 +2932,6 @@ export function AdminPanel({ currentUser, onOpenDashboard }: AdminPanelProps) {
                           <label className="form-label">
                             {quickStatusMetricMeta.supportsMinMaxBand
                               ? `Maximum warning${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
-                              : quickStatusThresholdDirection === 'range'
-                              ? `Minimum containers${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
                               : `Warning threshold${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`}
                           </label>
                           <input
@@ -2964,8 +2953,6 @@ export function AdminPanel({ currentUser, onOpenDashboard }: AdminPanelProps) {
                           <label className="form-label">
                             {quickStatusMetricMeta.supportsMinMaxBand
                               ? `Maximum critical${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
-                              : quickStatusThresholdDirection === 'range'
-                              ? `Maximum containers${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`
                               : `Critical threshold${quickStatusThresholdUnit ? ` (${quickStatusThresholdUnit})` : ''}`}
                           </label>
                           <input
