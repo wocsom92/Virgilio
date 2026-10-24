@@ -37,6 +37,7 @@ _OS_VERSION_CACHE_TTL_SECONDS = 300.0
 _SERVICE_SNAPSHOT_CACHE_TTL_SECONDS = 15.0
 _NETWORK_EGRESS_CACHE_TTL_SECONDS = 60.0
 _top_processes_cache: tuple[float, dict[str, list[dict[str, Any]]] | None] | None = None
+_top_processes_sampled_pids: set[int] = set()
 _ssh_snapshot_cache: tuple[float, dict[str, Any]] | None = None
 _ssh_settings_cache: tuple[float, tuple[bool, bool, bool, str, str, str, str, str]] | None = None
 _mount_points_cache: tuple[float, list[str]] | None = None
@@ -119,8 +120,90 @@ def _safe_percent(value: Any) -> float | None:
         return None
 
 
+def _host_procfs_path() -> str | None:
+    """The host's /proc through the host-root bind mount, when it is one."""
+    host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    if not host_target or host_target == "/":
+        return None
+    return os.path.join(host_target, "proc")
+
+
+def _configure_procfs() -> str:
+    """Point psutil at the host's process table when the agent runs in its own PID namespace.
+
+    Inside the container ``/proc`` only lists the agent itself, so the top-process lists would
+    be useless. The read-only host root bind mount carries the host's ``/proc`` (bind mounts are
+    recursive); when it exposes more processes than our own namespace, read from there.
+    """
+    current = getattr(psutil, "PROCFS_PATH", None)  # Linux only
+    candidate = _host_procfs_path()
+    if current is None or not candidate:
+        return current or "/proc"
+    try:
+        host_pids = [entry for entry in os.listdir(candidate) if entry.isdigit()]
+        local_pids = [entry for entry in os.listdir(current) if entry.isdigit()]
+        with open(os.path.join(candidate, "1", "stat"), "r", encoding="utf-8") as handle:
+            handle.read(64)
+    except OSError:
+        return current
+    if len(host_pids) > len(local_pids):
+        psutil.PROCFS_PATH = candidate
+        logger.info("Reading the host process table from %s", candidate)
+    return psutil.PROCFS_PATH
+
+
+_CGROUP_CONTAINER_ID_RE = re.compile(r"([a-f0-9]{64})")
+
+
+def _container_id_for_pid(pid: int) -> str | None:
+    """Docker container id from the process cgroup (``docker-<id>.scope`` or ``/docker/<id>``)."""
+    try:
+        procfs = getattr(psutil, "PROCFS_PATH", "/proc")
+        with open(os.path.join(procfs, str(pid), "cgroup"), "r", encoding="utf-8") as handle:
+            for line in handle:
+                match = _CGROUP_CONTAINER_ID_RE.search(line)
+                if match:
+                    return match.group(1)
+    except (OSError, UnicodeDecodeError):
+        return None
+    return None
+
+
+def _container_name_for_pid(pid: int, names_by_id: dict[str, str] | None) -> str | None:
+    container_id = _container_id_for_pid(pid)
+    if not container_id:
+        return None
+    if names_by_id and container_id in names_by_id:
+        return names_by_id[container_id]
+    return container_id[:12]
+
+
+def _aggregate_containers(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_container: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        container = entry.get("container")
+        if not container:
+            continue
+        aggregate = by_container.setdefault(
+            container, {"name": container, "cpu_percent": 0.0, "memory_percent": 0.0, "process_count": 0}
+        )
+        aggregate["cpu_percent"] += entry.get("cpu_percent") or 0.0
+        aggregate["memory_percent"] += entry.get("memory_percent") or 0.0
+        aggregate["process_count"] += 1
+    for aggregate in by_container.values():
+        aggregate["cpu_percent"] = round(aggregate["cpu_percent"], 1)
+        aggregate["memory_percent"] = round(aggregate["memory_percent"], 1)
+    return list(by_container.values())
+
+
 def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] | None:
-    global _top_processes_cache
+    """Top processes (and Docker containers) by CPU and memory.
+
+    CPU percentages are measured over the time since the previous collection (psutil keeps the
+    last CPU times on the cached ``Process`` objects), so with a one-minute poll they reflect the
+    whole minute instead of a 50 ms sample; processes seen for the first time get a short sample.
+    """
+    global _top_processes_cache, _top_processes_sampled_pids
     now = time.monotonic()
     if _top_processes_cache is not None:
         cached_at, cached_value = _top_processes_cache
@@ -135,30 +218,46 @@ def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] |
     if not processes:
         return None
 
-    for process in processes:
+    def _pid_of(process: Any) -> int | None:
+        pid = getattr(process, "pid", None)
+        if pid is None:
+            pid = (getattr(process, "info", None) or {}).get("pid")
+        return pid if isinstance(pid, int) else None
+
+    fresh = [process for process in processes if _pid_of(process) not in _top_processes_sampled_pids]
+    for process in fresh:
         try:
             process.cpu_percent(interval=None)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
+    if fresh:
+        time.sleep(0.25)
 
-    time.sleep(0.05)
+    scanned = _scan_docker_containers()
+    names_by_id = scanned[2] if scanned is not None else None
 
     entries: list[dict[str, Any]] = []
+    sampled: set[int] = set()
     for process in processes:
         try:
             info = process.info
             pid = info.get("pid")
             name = (info.get("name") or "").strip() or f"pid-{pid}"
-            entries.append(
-                {
-                    "pid": pid,
-                    "name": name[:80],
-                    "cpu_percent": _safe_percent(process.cpu_percent(interval=None)),
-                    "memory_percent": _safe_percent(info.get("memory_percent")),
-                }
-            )
+            entry: dict[str, Any] = {
+                "pid": pid,
+                "name": name[:80],
+                "cpu_percent": _safe_percent(process.cpu_percent(interval=None)),
+                "memory_percent": _safe_percent(info.get("memory_percent")),
+            }
+            container = _container_name_for_pid(pid, names_by_id) if isinstance(pid, int) else None
+            if container:
+                entry["container"] = container
+            entries.append(entry)
+            if isinstance(pid, int):
+                sampled.add(pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
+    _top_processes_sampled_pids = sampled
 
     if not entries:
         return None
@@ -178,17 +277,25 @@ def _collect_top_processes(limit: int = 10) -> dict[str, list[dict[str, Any]]] |
         reverse=True,
     )[:limit]
 
-    result = {
+    result: dict[str, list[dict[str, Any]]] = {
         "cpu": cpu_entries,
         "memory": memory_entries,
     }
+    containers = _aggregate_containers(entries)
+    if containers:
+        result["containers_cpu"] = sorted(
+            containers, key=lambda entry: (entry["cpu_percent"], entry["memory_percent"]), reverse=True
+        )[:limit]
+        result["containers_memory"] = sorted(
+            containers, key=lambda entry: (entry["memory_percent"], entry["cpu_percent"]), reverse=True
+        )[:limit]
     _top_processes_cache = (now, result)
     return result
 
 
 _SHORT_MEMO_TTL_SECONDS = 1.0
 _sensor_memo: tuple[float, dict[str, list[Any]] | None] | None = None
-_docker_scan_memo: tuple[float, tuple[int, list[str]] | None] | None = None
+_docker_scan_memo: tuple[float, tuple[int, list[str], dict[str, str]] | None] | None = None
 
 
 def _read_sensor_temperatures() -> dict[str, list[Any]] | None:
@@ -223,6 +330,59 @@ def _get_cpu_temperature(temps: dict[str, list[Any]] | None = None) -> float | N
             if values:
                 return float(sum(values) / len(values))
     return None
+
+
+def _sysfs_roots() -> list[str]:
+    """sysfs is not namespaced, so the container's /sys is the host's; the bind mount is a fallback."""
+    roots = ["/sys"]
+    host_target = _normalize_mount_path(settings.host_root_target) if settings.host_root_target else ""
+    if host_target and host_target != "/":
+        roots.append(os.path.join(host_target, "sys"))
+    return roots
+
+
+def _read_sysfs_int(path: str) -> int | None:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _read_sysfs_text(path: str) -> str | None:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
+def _collect_fan_snapshot() -> dict[str, int | None]:
+    """Cooling fan level and speed (Raspberry Pi 5 active cooler and similar pwm-fan devices).
+
+    The level comes from the thermal cooling device (``cur_state`` out of ``max_state``, 0 = off)
+    and the speed from the first hwmon fan tachometer (``fan1_input``, RPM).
+    """
+    result: dict[str, int | None] = {"fan_level": None, "fan_max_level": None, "fan_rpm": None}
+    for root in _sysfs_roots():
+        for device in sorted(glob.glob(os.path.join(root, "class", "thermal", "cooling_device*"))):
+            device_type = (_read_sysfs_text(os.path.join(device, "type")) or "").lower()
+            if "fan" not in device_type:
+                continue
+            level = _read_sysfs_int(os.path.join(device, "cur_state"))
+            if level is None:
+                continue
+            result["fan_level"] = level
+            result["fan_max_level"] = _read_sysfs_int(os.path.join(device, "max_state"))
+            break
+        for hwmon in sorted(glob.glob(os.path.join(root, "class", "hwmon", "hwmon*"))):
+            rpm = _read_sysfs_int(os.path.join(hwmon, "fan1_input"))
+            if rpm is not None:
+                result["fan_rpm"] = rpm
+                break
+        if result["fan_level"] is not None or result["fan_rpm"] is not None:
+            break
+    return result
 
 
 def _normalize_mount_path(path: str) -> str:
@@ -1353,8 +1513,8 @@ def _docker_container_roots() -> list[str]:
     return candidate_roots
 
 
-def _scan_docker_containers() -> tuple[int, list[str]] | None:
-    """One pass over /var/lib/docker/containers: (total container dirs, running names).
+def _scan_docker_containers() -> tuple[int, list[str], dict[str, str]] | None:
+    """One pass over /var/lib/docker/containers: (total dirs, running names, names by id).
 
     Memoised for a second so the count and the running list of one collection share a scan.
     """
@@ -1367,7 +1527,7 @@ def _scan_docker_containers() -> tuple[int, list[str]] | None:
     return result
 
 
-def _scan_docker_containers_uncached() -> tuple[int, list[str]] | None:
+def _scan_docker_containers_uncached() -> tuple[int, list[str], dict[str, str]] | None:
     for root in _docker_container_roots():
         try:
             entries = os.listdir(root)
@@ -1376,6 +1536,7 @@ def _scan_docker_containers_uncached() -> tuple[int, list[str]] | None:
 
         total = 0
         running: list[str] = []
+        names_by_id: dict[str, str] = {}
         for entry in entries:
             if not _CONTAINER_DIR_PATTERN.match(entry):
                 continue
@@ -1390,19 +1551,20 @@ def _scan_docker_containers_uncached() -> tuple[int, list[str]] | None:
             except (FileNotFoundError, PermissionError, OSError, json.JSONDecodeError):
                 continue
 
-            state = config.get("State") if isinstance(config, dict) else None
-            if not isinstance(state, dict) or not bool(state.get("Running")):
-                continue
-
-            name = config.get("Name")
+            name = config.get("Name") if isinstance(config, dict) else None
             if isinstance(name, str):
                 name = name.strip().lstrip("/")
             if not name:
                 name = entry[:12]
+            names_by_id[entry] = name
+
+            state = config.get("State") if isinstance(config, dict) else None
+            if not isinstance(state, dict) or not bool(state.get("Running")):
+                continue
             running.append(name)
 
         running.sort(key=str.lower)
-        return total, running
+        return total, running, names_by_id
     return None
 
 
@@ -1414,7 +1576,7 @@ def _count_docker_containers() -> int | None:
         if isinstance(running, list):
             return len([name for name in running if isinstance(name, str) and name.strip()])
         return None
-    total, running = scanned
+    total, running, _names = scanned
     return total if total else len(running)
 
 
@@ -1483,6 +1645,7 @@ def collect_metrics() -> dict[str, Any]:
 
     cpu_temp = _get_cpu_temperature()
     sensor_temps = _read_sensor_temperatures()
+    fan = _collect_fan_snapshot()
     try:
         net_io = psutil.net_io_counters(pernic=True)
     except Exception:
@@ -1508,6 +1671,9 @@ def collect_metrics() -> dict[str, Any]:
         "hostname": socket.gethostname(),
         "monitor_version": settings.version,
         "cpu_temperature_c": cpu_temp,
+        "fan_level": fan.get("fan_level"),
+        "fan_max_level": fan.get("fan_max_level"),
+        "fan_rpm": fan.get("fan_rpm"),
         "ram_used_percent": round(virtual_memory.percent, 2),
         "total_ram_gb": round(virtual_memory.total / (1024 ** 3), 2),
         "memory_available_gb": round(virtual_memory.available / (1024 ** 3), 2),
@@ -1644,3 +1810,7 @@ def _try_sysrq_reboot() -> bool:
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Sysrq reboot trigger failed: %s", exc)
         return False
+
+
+# Decide once at import time whether the host process table is reachable through the bind mount.
+_configure_procfs()

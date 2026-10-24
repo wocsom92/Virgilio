@@ -30,6 +30,9 @@ class DiskTemperature(BaseModel):
 class MetricSnapshotBase(BaseModel):
     reported_at: datetime
     cpu_temperature_c: float | None = None
+    fan_level: int | None = None
+    fan_max_level: int | None = None
+    fan_rpm: int | None = None
     ram_used_percent: float | None = None
     total_ram_gb: float | None = None
     memory_available_gb: float | None = None

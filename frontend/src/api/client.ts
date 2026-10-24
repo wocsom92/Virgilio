@@ -148,6 +148,10 @@ export interface DiskTemperature {
 export interface MetricSeriesPoint {
   reported_at: string;
   cpu_temperature_c?: number | null;
+  /** Cooling fan level (0 = off); the bucket's peak level when the window is downsampled. */
+  fan_level?: number | null;
+  fan_max_level?: number | null;
+  fan_rpm?: number | null;
   ram_used_percent?: number | null;
   memory_available_gb?: number | null;
   swap_used_percent?: number | null;
@@ -177,6 +181,9 @@ export interface MetricSnapshot {
   backend_id?: number;
   reported_at: string;
   cpu_temperature_c?: number | null;
+  fan_level?: number | null;
+  fan_max_level?: number | null;
+  fan_rpm?: number | null;
   ram_used_percent?: number | null;
   total_ram_gb?: number | null;
   memory_available_gb?: number | null;

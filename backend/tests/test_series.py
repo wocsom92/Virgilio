@@ -7,6 +7,9 @@ def _row(at: datetime, value: float | None, *, sent: float = 0, uptime: int | No
     return SeriesRow(
         reported_at=at,
         cpu_temperature_c=value,
+        fan_level=int(value) % 5 if value is not None else None,
+        fan_max_level=4 if value is not None else None,
+        fan_rpm=int(value * 100) if value is not None else None,
         ram_used_percent=value,
         memory_available_gb=None,
         swap_used_percent=None,
@@ -42,6 +45,10 @@ def test_large_windows_are_bucketed_with_mean_last_and_counter_deltas():
     assert first.cpu_load.one == 4.5
     assert first.mounted_usage[0].used_percent == 9.0
     assert first.disk_temperatures[0].temperature_c == 9.0
+    # Fan level is the bucket's peak (minutes 0-9 -> levels 0..4), RPM the mean, max level the last.
+    assert first.fan_level == 4
+    assert first.fan_max_level == 4
+    assert first.fan_rpm == 450
     assert first.network_bps[0]["tx_bps"] is None  # no previous bucket
     # Bucket 1 delta: minutes 9 -> 19 = 10 MB over 600 s = 133,333 bps
     assert round(second.network_bps[0]["tx_bps"]) == round(10_000_000 * 8 / 600)

@@ -26,6 +26,37 @@ export function formatTemperature(valueCelsius: number | null | undefined): stri
   return `${valueCelsius.toFixed(1)} °C`;
 }
 
+/** Network throughput with a sensible SI unit: 950 bps, 12.5 Kbps, 3.2 Mbps, 1.1 Gbps. */
+export function formatBitsPerSecond(bitsPerSecond: number | null | undefined): string {
+  if (bitsPerSecond === null || bitsPerSecond === undefined || Number.isNaN(bitsPerSecond)) return 'N/A';
+  const units = ['bps', 'Kbps', 'Mbps', 'Gbps', 'Tbps'];
+  let value = Math.max(0, bitsPerSecond);
+  let unitIndex = 0;
+  while (value >= 1000 && unitIndex < units.length - 1) {
+    value /= 1000;
+    unitIndex += 1;
+  }
+  const digits = unitIndex === 0 ? 0 : value >= 100 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+/** Fan level and speed for the snapshot list: "level 1/4, 2905 rpm", "off", or N/A. */
+export function formatFan(
+  level: number | null | undefined,
+  maxLevel: number | null | undefined,
+  rpm: number | null | undefined
+): string {
+  if ((level === null || level === undefined) && (rpm === null || rpm === undefined)) return 'N/A';
+  const parts: string[] = [];
+  if (level !== null && level !== undefined) {
+    parts.push(level === 0 ? 'off' : maxLevel ? `level ${level}/${maxLevel}` : `level ${level}`);
+  }
+  if (rpm !== null && rpm !== undefined) {
+    parts.push(`${Math.round(rpm)} rpm`);
+  }
+  return parts.join(', ');
+}
+
 export type TileStatus = 'ok' | 'info' | 'warn' | 'critical' | 'unknown';
 
 export function getStatusClass(status: TileStatus): string {

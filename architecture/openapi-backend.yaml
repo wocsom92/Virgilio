@@ -1441,6 +1441,22 @@ components:
           - type: number
           - type: 'null'
           title: Cpu Temperature C
+        fan_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Level
+          description: Cooling fan level (0 = off) out of fan_max_level
+        fan_max_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Max Level
+        fan_rpm:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Rpm
         ram_used_percent:
           anyOf:
           - type: number
@@ -1558,6 +1574,22 @@ components:
           - type: number
           - type: 'null'
           title: Cpu Temperature C
+        fan_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Level
+          description: Cooling fan level (0 = off) out of fan_max_level
+        fan_max_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Max Level
+        fan_rpm:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Rpm
         ram_used_percent:
           anyOf:
           - type: number
@@ -1681,6 +1713,22 @@ components:
           - type: number
           - type: 'null'
           title: Cpu Temperature C
+        fan_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Level
+          description: Cooling fan level (0 = off) out of fan_max_level
+        fan_max_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Max Level
+        fan_rpm:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Rpm
         ram_used_percent:
           anyOf:
           - type: number
@@ -1794,6 +1842,22 @@ components:
           - type: number
           - type: 'null'
           title: Cpu Temperature C
+        fan_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Level
+          description: Cooling fan level (0 = off) out of fan_max_level
+        fan_max_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Max Level
+        fan_rpm:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Rpm
         ram_used_percent:
           anyOf:
           - type: number

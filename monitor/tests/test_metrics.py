@@ -87,6 +87,7 @@ def test_collect_metrics_includes_monitor_version(monkeypatch):
     monkeypatch.setattr(metrics, "_count_docker_containers", lambda: 7)
     monkeypatch.setattr(metrics, "_list_running_docker_containers", lambda: ["api", "db"])
     monkeypatch.setattr(metrics, "_get_cpu_temperature", lambda: None)
+    monkeypatch.setattr(metrics, "_collect_fan_snapshot", lambda: {"fan_level": 1, "fan_max_level": 4, "fan_rpm": 2900})
     monkeypatch.setattr(metrics.os, "getloadavg", lambda: (0.1, 0.2, 0.3))
     monkeypatch.setattr(
         metrics.psutil,
@@ -112,6 +113,7 @@ def test_collect_metrics_includes_monitor_version(monkeypatch):
     assert payload["vpn_status"] == "ok"
     assert payload["mounted_usage"] == [{"mount_point": "/", "total_gb": 1.0, "used_percent": 50.0}]
     assert payload["top_processes"] == {"cpu": [{"name": "api"}], "memory": []}
+    assert (payload["fan_level"], payload["fan_max_level"], payload["fan_rpm"]) == (1, 4, 2900)
 
 
 def test_collect_metrics_hides_running_container_names_when_disabled(monkeypatch):
@@ -302,7 +304,12 @@ def test_probe_country_code_falls_back_across_three_services(monkeypatch):
 
 
 def test_collect_top_processes_sorts_cpu_and_memory(monkeypatch):
+    metrics._top_processes_cache = None
+    metrics._top_processes_sampled_pids = set()
     monkeypatch.setattr(metrics.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(metrics, "_scan_docker_containers", lambda: (2, ["api", "db"], {"a" * 64: "api", "b" * 64: "db"}))
+    containers_by_pid = {1: "a" * 64, 2: "a" * 64, 3: None}
+    monkeypatch.setattr(metrics, "_container_id_for_pid", lambda pid: containers_by_pid.get(pid))
 
     class FakeProcess:
         def __init__(self, pid, name, cpu_percent, memory_percent):
@@ -328,14 +335,81 @@ def test_collect_top_processes_sorts_cpu_and_memory(monkeypatch):
 
     assert result == {
         "cpu": [
-            {"pid": 2, "name": "worker-b", "cpu_percent": 55.0, "memory_percent": 1.0},
-            {"pid": 1, "name": "worker-a", "cpu_percent": 12.0, "memory_percent": 3.5},
+            {"pid": 2, "name": "worker-b", "cpu_percent": 55.0, "memory_percent": 1.0, "container": "api"},
+            {"pid": 1, "name": "worker-a", "cpu_percent": 12.0, "memory_percent": 3.5, "container": "api"},
         ],
         "memory": [
             {"pid": 3, "name": "worker-c", "cpu_percent": 9.0, "memory_percent": 7.5},
-            {"pid": 1, "name": "worker-a", "cpu_percent": 12.0, "memory_percent": 3.5},
+            {"pid": 1, "name": "worker-a", "cpu_percent": 12.0, "memory_percent": 3.5, "container": "api"},
         ],
+        "containers_cpu": [{"name": "api", "cpu_percent": 67.0, "memory_percent": 4.5, "process_count": 2}],
+        "containers_memory": [{"name": "api", "cpu_percent": 67.0, "memory_percent": 4.5, "process_count": 2}],
     }
+    # Processes already sampled last time are measured against the previous collection only.
+    assert metrics._top_processes_sampled_pids == {1, 2, 3}
+
+
+def test_container_id_for_pid_parses_cgroup_v2_scope(tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    (proc / "42").mkdir(parents=True)
+    container_id = "c" * 64
+    (proc / "42" / "cgroup").write_text(f"0::/system.slice/docker-{container_id}.scope\n")
+    (proc / "43").mkdir()
+    (proc / "43" / "cgroup").write_text("0::/../danted.service\n")
+    monkeypatch.setattr(metrics.psutil, "PROCFS_PATH", str(proc), raising=False)
+
+    assert metrics._container_id_for_pid(42) == container_id
+    assert metrics._container_id_for_pid(43) is None
+    assert metrics._container_id_for_pid(44) is None
+    assert metrics._container_name_for_pid(42, {container_id: "homeassistant"}) == "homeassistant"
+    assert metrics._container_name_for_pid(42, {}) == container_id[:12]
+
+
+def test_configure_procfs_prefers_host_proc_when_it_lists_more_processes(tmp_path, monkeypatch):
+    host_root = tmp_path / "hostfs"
+    host_proc = host_root / "proc"
+    for pid in ("1", "2", "3"):
+        (host_proc / pid).mkdir(parents=True)
+    (host_proc / "1" / "stat").write_text("1 (systemd) S 0\n")
+    local_proc = tmp_path / "proc"
+    (local_proc / "1").mkdir(parents=True)
+    monkeypatch.setattr(metrics.settings, "host_root_target", str(host_root), raising=False)
+    monkeypatch.setattr(metrics.psutil, "PROCFS_PATH", str(local_proc), raising=False)
+
+    assert metrics._configure_procfs() == str(host_proc)
+    assert metrics.psutil.PROCFS_PATH == str(host_proc)
+
+
+def test_configure_procfs_keeps_local_proc_without_host_mount(tmp_path, monkeypatch):
+    local_proc = tmp_path / "proc"
+    (local_proc / "1").mkdir(parents=True)
+    monkeypatch.setattr(metrics.settings, "host_root_target", str(tmp_path / "missing"), raising=False)
+    monkeypatch.setattr(metrics.psutil, "PROCFS_PATH", str(local_proc), raising=False)
+
+    assert metrics._configure_procfs() == str(local_proc)
+
+
+def test_collect_fan_snapshot_reads_cooling_device_and_tachometer(tmp_path, monkeypatch):
+    thermal = tmp_path / "class" / "thermal"
+    (thermal / "cooling_device0").mkdir(parents=True)
+    (thermal / "cooling_device0" / "type").write_text("pwm-fan\n")
+    (thermal / "cooling_device0" / "cur_state").write_text("2\n")
+    (thermal / "cooling_device0" / "max_state").write_text("4\n")
+    hwmon = tmp_path / "class" / "hwmon"
+    (hwmon / "hwmon0").mkdir(parents=True)
+    (hwmon / "hwmon0" / "name").write_text("cpu_thermal\n")
+    (hwmon / "hwmon2").mkdir()
+    (hwmon / "hwmon2" / "name").write_text("pwmfan\n")
+    (hwmon / "hwmon2" / "fan1_input").write_text("2905\n")
+    monkeypatch.setattr(metrics, "_sysfs_roots", lambda: [str(tmp_path)])
+
+    assert metrics._collect_fan_snapshot() == {"fan_level": 2, "fan_max_level": 4, "fan_rpm": 2905}
+
+
+def test_collect_fan_snapshot_without_fan(tmp_path, monkeypatch):
+    monkeypatch.setattr(metrics, "_sysfs_roots", lambda: [str(tmp_path)])
+
+    assert metrics._collect_fan_snapshot() == {"fan_level": None, "fan_max_level": None, "fan_rpm": None}
 
 
 def test_count_docker_containers_falls_back_to_running_list(monkeypatch):

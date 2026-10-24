@@ -319,32 +319,10 @@ def _resource_kind_for_metric(metric_key: str | None) -> str | None:
     return _PROCESS_ALERT_RESOURCE_BY_METRIC.get(metric_key)
 
 
-def _extract_top_processes(snapshot: MetricSnapshotRead | None, resource_kind: str) -> list[dict]:
-    if snapshot is None or not isinstance(snapshot.raw_payload, dict):
-        return []
-    raw_payload = snapshot.raw_payload
-    top_processes = raw_payload.get("top_processes")
-    if not isinstance(top_processes, dict):
-        return []
-    entries = top_processes.get(resource_kind)
-    if not isinstance(entries, list):
-        return []
-    return [entry for entry in entries if isinstance(entry, dict)][:10]
-
-
-def _extract_top_processes_from_payload(payload: dict[str, Any], resource_kind: str) -> list[dict[str, Any]]:
-    top_processes = payload.get("top_processes")
-    if not isinstance(top_processes, dict):
-        return []
-    entries = top_processes.get(resource_kind)
-    if not isinstance(entries, list):
-        return []
-    return [entry for entry in entries if isinstance(entry, dict)][:10]
-
-
 def _format_top_process_line(entry: dict) -> str:
     name = _escape_markdown(str(entry.get("name") or "unknown"))
     pid = entry.get("pid")
+    container = entry.get("container")
     cpu_percent = entry.get("cpu_percent")
     memory_percent = entry.get("memory_percent")
     details: list[str] = []
@@ -354,20 +332,62 @@ def _format_top_process_line(entry: dict) -> str:
         details.append(f"MEM {memory_percent:.1f}%")
     details_text = _escape_markdown(", ".join(details) or "usage unavailable")
     pid_text = f"pid {pid}" if isinstance(pid, int) else "pid ?"
+    if isinstance(container, str) and container.strip():
+        pid_text = f"{pid_text}, {container.strip()}"
     return f"• {name} ({_escape_markdown(pid_text)}): {details_text}"
 
 
+def _extract_top_containers(top_processes: Any, resource_kind: str) -> list[dict]:
+    if not isinstance(top_processes, dict):
+        return []
+    entries = top_processes.get(f"containers_{resource_kind}")
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict) and entry.get("name")][:5]
+
+
+def _format_top_container_line(entry: dict, resource_kind: str) -> str:
+    name = _escape_markdown(str(entry.get("name")))
+    cpu_percent = entry.get("cpu_percent")
+    memory_percent = entry.get("memory_percent")
+    process_count = entry.get("process_count")
+    details: list[str] = []
+    ordered = ("cpu", "memory") if resource_kind == "cpu" else ("memory", "cpu")
+    for kind in ordered:
+        value = cpu_percent if kind == "cpu" else memory_percent
+        if isinstance(value, (int, float)):
+            details.append(f"{'CPU' if kind == 'cpu' else 'MEM'} {value:.1f}%")
+    if isinstance(process_count, int) and process_count > 0:
+        details.append(f"{process_count} process{'es' if process_count != 1 else ''}")
+    return f"• {name}: {_escape_markdown(', '.join(details) or 'usage unavailable')}"
+
+
+def _top_usage_lines(top_processes: Any, resource_kind: str) -> list[str]:
+    """Top processes and, when the monitor could map them, top Docker containers for one resource."""
+    if not isinstance(top_processes, dict):
+        return []
+    processes = top_processes.get(resource_kind)
+    process_entries = [entry for entry in processes if isinstance(entry, dict)][:10] if isinstance(processes, list) else []
+    resource_label = "CPU" if resource_kind == "cpu" else "Memory"
+    lines: list[str] = []
+    if process_entries:
+        lines.append(f"*Top {resource_label} Processes:*")
+        lines.extend(_format_top_process_line(entry) for entry in process_entries)
+    container_entries = _extract_top_containers(top_processes, resource_kind)
+    if container_entries:
+        lines.append(f"*Top {resource_label} Containers:*")
+        lines.extend(_format_top_container_line(entry, resource_kind) for entry in container_entries)
+    return lines
+
+
 def _build_top_process_lines(snapshot: MetricSnapshotRead | None, resource_kinds: set[str]) -> list[str]:
+    if snapshot is None or not isinstance(snapshot.raw_payload, dict):
+        return []
     lines: list[str] = []
     for resource_kind in ("cpu", "memory"):
         if resource_kind not in resource_kinds:
             continue
-        entries = _extract_top_processes(snapshot, resource_kind)
-        if not entries:
-            continue
-        resource_label = "CPU" if resource_kind == "cpu" else "Memory"
-        lines.append(f"*Top {resource_label} Processes:*")
-        lines.extend(_format_top_process_line(entry) for entry in entries)
+        lines.extend(_top_usage_lines(snapshot.raw_payload.get("top_processes"), resource_kind))
     return lines
 
 
@@ -399,11 +419,7 @@ def _build_ssh_failure_lines(snapshot: MetricSnapshotRead | None) -> list[str]:
 
 
 def _format_top_process_lines_from_payload(payload: dict[str, Any], resource_kind: str) -> list[str]:
-    entries = _extract_top_processes_from_payload(payload, resource_kind)
-    if not entries:
-        return []
-    resource_label = "CPU" if resource_kind == "cpu" else "Memory"
-    return [f"*Top {resource_label} Processes:*", *(_format_top_process_line(entry) for entry in entries)]
+    return _top_usage_lines(payload.get("top_processes"), resource_kind)
 
 
 def _build_cpu_message(backend_name: str, payload: MetricSnapshotCreate) -> str:
@@ -420,6 +436,13 @@ def _build_cpu_message(backend_name: str, payload: MetricSnapshotCreate) -> str:
         lines.append(f"• Load avg: {_escape_markdown(', '.join(load_parts))}")
     if payload.cpu_temperature_c is not None:
         lines.append(f"• CPU temp: {payload.cpu_temperature_c:.1f} °C")
+    if payload.fan_level is not None:
+        fan_text = f"level {payload.fan_level}"
+        if payload.fan_max_level:
+            fan_text += f"/{payload.fan_max_level}"
+        if payload.fan_rpm is not None:
+            fan_text += f", {payload.fan_rpm} rpm"
+        lines.append(f"• Fan: {_escape_markdown(fan_text)}")
     timestamp = payload.reported_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines.append(f"_Reported at {timestamp}_")
     lines.extend(_format_top_process_lines_from_payload(payload.raw_payload or {}, "cpu"))

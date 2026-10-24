@@ -194,6 +194,22 @@ components:
           - type: number
           - type: 'null'
           title: Cpu Temperature C
+        fan_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Level
+          description: Cooling fan level (0 = off) out of fan_max_level
+        fan_max_level:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Max Level
+        fan_rpm:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Fan Rpm
         ram_used_percent:
           anyOf:
           - type: number
@@ -534,6 +550,18 @@ components:
             type: array
           - type: 'null'
           title: Configured Mounts
+        top_processes:
+          anyOf:
+          - additionalProperties:
+              items:
+                additionalProperties: true
+                type: object
+              type: array
+            type: object
+          - type: 'null'
+          title: Top Processes
+          description: '"cpu" and "memory" process lists (pid, name, cpu_percent, memory_percent,
+            optional container) plus "containers_cpu" / "containers_memory" per-container totals.'
         raw_payload:
           anyOf:
           - additionalProperties: true

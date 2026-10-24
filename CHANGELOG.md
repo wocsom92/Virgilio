@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [9.1.0] - 2026-10-24
+
+### Added
+- **Fan on the CPU temperature chart:** the monitor reports the cooling fan level (`fan_level` out of `fan_max_level`, from the `pwm-fan` thermal cooling device) and tachometer speed (`fan_rpm`); the backend stores them with each snapshot and serves them in `GET /dashboard/{id}/series` (downsampled windows keep the bucket's highest level). The CPU temperature chart shows the level as a stepped line on a right-hand axis and labels every switch ("Fan 2", "Fan off"); the snapshot list and the `/cpu` Telegram command show the current fan state.
+- **Top containers in CPU/memory alerts:** the monitor maps each process to its Docker container (cgroup → `/var/lib/docker/containers/<id>/config.v2.json` name) and reports per-container totals (`top_processes.containers_cpu` / `containers_memory`). Telegram alerts and the `/cpu`, `/memory`, `/warn` and `/stats` replies list the top containers under the top processes, and each process line names its container.
+
+### Fixed
+- **Graphs showed no line in the daily and weekly views** (values were only visible in the tooltip): the chart treated the gap between averaged buckets as missing data because the gap threshold was derived from the poll interval alone. It now uses the server's `bucket_seconds`.
+- **Telegram alerts never listed top processes:** the monitor's response model silently dropped `top_processes` from the payload, so stored snapshots had none. The key is now part of the monitor schema.
+- **Top processes inside Docker were meaningless:** the agent only saw its own container's processes. When the host root bind mount exposes the host's `/proc`, the agent reads the host process table from there. Per-process CPU is now measured over the whole poll interval instead of a 50 ms sample.
+
+### Changed
+- Charts follow the light/dark theme (grid, ticks, tooltips and legend use the design tokens instead of hard-coded dark-theme colours), draw a soft area fill under single-series lines, show the latest value next to the title, format axes and tooltips with units (°C, %, GiB, Mbps), label reboot markers, and use rounded, slightly smoothed lines.
+- Project version updated from `9.0.0` to `9.1.0` across backend, frontend, monitor, README, package metadata and the displayed UI version constants.
+
 ## [9.0.0] - 2026-10-11
 
 ### Changed

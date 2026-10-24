@@ -10,9 +10,9 @@ import type {
 } from '../api/client';
 import { fetchMetricSeries } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
-import { MetricsChart } from './MetricsChart';
+import { MetricsChart, type ChartAnnotation, type DatasetConfig, type SecondaryAxisConfig } from './MetricsChart';
 import { getUserFacingErrorMessage } from '../utils/errors';
-import { formatBinarySizeFromGiB, formatTemperature } from '../utils/formatting';
+import { formatBinarySizeFromGiB, formatBitsPerSecond, formatFan, formatTemperature } from '../utils/formatting';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
 
 interface BackendCardProps {
@@ -31,6 +31,7 @@ const RANGE_OPTIONS: Array<{ value: MetricRange; label: string }> = [
 
 const CHART_COLORS = {
   cpuTemp: '#f97316',
+  fan: '#64748b',
   ram: '#0d6efd',
   memoryAvailable: '#14b8a6',
   swap: '#f59e0b',
@@ -41,6 +42,24 @@ const CHART_COLORS = {
 };
 
 const MOUNT_COLORS = ['#10b981', '#facc15', '#38bdf8', '#ef4444', '#a855f7', '#22d3ee'];
+
+const formatPercent = (value: number) => `${Number.isInteger(value) ? value : value.toFixed(1)}%`;
+const formatCelsius = (value: number) => `${Number.isInteger(value) ? value : value.toFixed(1)} °C`;
+const formatGiB = (value: number) => `${Number.isInteger(value) ? value : value.toFixed(1)} GiB`;
+const formatLoad = (value: number) => value.toFixed(2);
+const formatFanLevel = (value: number) => (value === 0 ? 'off' : `L${value}`);
+
+interface MiniChartConfig {
+  key: string;
+  title: string;
+  datasets: DatasetConfig[];
+  suggestedMin: number;
+  suggestedMax: number | undefined;
+  emptyMessage: string;
+  formatValue?: (value: number) => string;
+  secondaryAxis?: SecondaryAxisConfig | null;
+  annotations?: ChartAnnotation[] | null;
+}
 
 function parseDate(value: string | null | undefined): Date | null {
   if (!value) return null;
@@ -130,6 +149,29 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
     );
   }, [seriesResponse]);
 
+  // Fan level changes, drawn on the CPU temperature chart ("Fan 2", "Fan off").
+  const fanInfo = useMemo(() => {
+    let maxLevel = 0;
+    let hasFan = false;
+    const changes: ChartAnnotation[] = [];
+    let previousLevel: number | null = null;
+    const ordered = series
+      .map((point) => ({ point, timestamp: parseDate(point.reported_at)?.getTime() ?? Number.NaN }))
+      .filter(({ timestamp }) => Number.isFinite(timestamp))
+      .sort((a, b) => a.timestamp - b.timestamp);
+    for (const { point, timestamp } of ordered) {
+      const level = point.fan_level;
+      if (level === null || level === undefined) continue;
+      hasFan = true;
+      maxLevel = Math.max(maxLevel, level, point.fan_max_level ?? 0);
+      if (previousLevel !== null && level !== previousLevel) {
+        changes.push({ timestamp, label: level === 0 ? 'Fan off' : `Fan ${level}` });
+      }
+      previousLevel = level;
+    }
+    return { hasFan, maxLevel: Math.max(maxLevel, 1), changes };
+  }, [series]);
+
   const rebootMarkers = useMemo(
     () =>
       (seriesResponse?.reboot_markers || [])
@@ -190,33 +232,38 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
   );
 
   const baseCharts = useMemo(() => {
-    const charts: Array<{
-      key: string;
-      title: string;
-      datasets: Array<{
-        label: string;
-        color: string;
-        extractor: (point: MetricSeriesPoint) => number | null;
-      }>;
-      suggestedMin: number;
-      suggestedMax: number | undefined;
-      emptyMessage: string;
-    }> = [];
+    const charts: MiniChartConfig[] = [];
 
     if (metricIsEnabled(selectedMetrics, 'cpu_temperature_c')) {
+      const datasets: DatasetConfig[] = [
+        {
+          label: 'CPU',
+          color: CHART_COLORS.cpuTemp,
+          extractor: (point: MetricSeriesPoint) => point.cpu_temperature_c ?? null,
+          format: formatCelsius,
+        },
+      ];
+      if (fanInfo.hasFan) {
+        datasets.push({
+          label: 'Fan level',
+          color: CHART_COLORS.fan,
+          extractor: (point: MetricSeriesPoint) => point.fan_level ?? null,
+          axis: 'y1',
+          stepped: true,
+          dashed: true,
+          format: formatFanLevel,
+        });
+      }
       charts.push({
         key: 'cpu-temp',
         title: 'CPU Temperature',
-        datasets: [
-          {
-            label: '°C',
-            color: CHART_COLORS.cpuTemp,
-            extractor: (point: MetricSeriesPoint) => point.cpu_temperature_c ?? null,
-          },
-        ],
+        datasets,
         suggestedMin: 0,
         suggestedMax: 100,
         emptyMessage: 'Waiting for CPU temperature samples.',
+        formatValue: formatCelsius,
+        secondaryAxis: fanInfo.hasFan ? { min: 0, max: fanInfo.maxLevel, format: formatFanLevel } : null,
+        annotations: fanInfo.hasFan ? fanInfo.changes : null,
       });
     }
 
@@ -234,6 +281,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
         suggestedMin: 0,
         suggestedMax: 100,
         emptyMessage: 'Waiting for RAM samples.',
+        formatValue: formatPercent,
       });
     }
 
@@ -251,6 +299,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
         suggestedMin: 0,
         suggestedMax: undefined,
         emptyMessage: 'Waiting for memory availability samples.',
+        formatValue: formatGiB,
       });
     }
 
@@ -268,6 +317,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
         suggestedMin: 0,
         suggestedMax: 100,
         emptyMessage: 'Waiting for swap samples.',
+        formatValue: formatPercent,
       });
     }
 
@@ -285,6 +335,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
         suggestedMin: 0,
         suggestedMax: 100,
         emptyMessage: 'Waiting for disk samples.',
+        formatValue: formatPercent,
       });
     }
 
@@ -312,6 +363,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
         suggestedMin: 0,
         suggestedMax: 8,
         emptyMessage: 'Waiting for load averages.',
+        formatValue: formatLoad,
       });
     }
 
@@ -319,11 +371,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
     // dataset config, so refreshes with the same interfaces keep the chart config identity.
     if (networkInterfaces.length > 0) {
       const ifaceColors = ['#0ea5e9', '#22c55e', '#eab308', '#ef4444', '#a855f7'];
-      const datasets: Array<{
-        label: string;
-        color: string;
-        extractor: (point: MetricSeriesPoint) => number | null;
-      }> = [];
+      const datasets: DatasetConfig[] = [];
       networkInterfaces.forEach((iface, idx) => {
         const color = ifaceColors[idx % ifaceColors.length];
         datasets.push({
@@ -339,18 +387,19 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
       });
       charts.push({
         key: 'network-bps',
-        title: 'Network Throughput (bps)',
+        title: 'Network Throughput',
         datasets,
         suggestedMin: 0,
         suggestedMax: undefined,
         emptyMessage: 'Waiting for network samples.',
+        formatValue: (value: number) => formatBitsPerSecond(value),
       });
     }
 
     return charts;
-  }, [selectedMetrics, networkInterfaces, networkByPoint]);
+  }, [selectedMetrics, networkInterfaces, networkByPoint, fanInfo]);
 
-  const mountCharts = useMemo(
+  const mountCharts = useMemo<MiniChartConfig[]>(
     () =>
       selectedMounts.map((mount, index) => {
         const color = MOUNT_COLORS[index % MOUNT_COLORS.length];
@@ -371,6 +420,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
           suggestedMin: 0,
           suggestedMax: 100,
           emptyMessage: `Waiting for ${label} samples.`,
+          formatValue: formatPercent,
         };
       }),
     [selectedMounts]
@@ -492,9 +542,13 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                         suggestedMax={chart.suggestedMax}
                         emptyMessage={chart.emptyMessage}
                         pollIntervalSeconds={backend.poll_interval_seconds}
+                        bucketSeconds={seriesResponse?.bucket_seconds ?? null}
                         windowStart={windowBounds?.start}
                         windowEnd={windowBounds?.end}
                         markers={rebootMarkers}
+                        annotations={chart.annotations ?? null}
+                        formatValue={chart.formatValue}
+                        secondaryAxis={chart.secondaryAxis ?? null}
                       />
                     </div>
                   </div>
@@ -517,6 +571,7 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                             ? formatTemperature(snapshot.cpu_temperature_c)
                             : 'N/A'}
                         </li>
+                        <li>Fan: {formatFan(snapshot.fan_level, snapshot.fan_max_level, snapshot.fan_rpm)}</li>
                         <li>
                           RAM used:{' '}
                           {snapshot.ram_used_percent !== undefined && snapshot.ram_used_percent !== null

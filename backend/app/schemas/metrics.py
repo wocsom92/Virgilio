@@ -9,6 +9,9 @@ from backend.app.schemas.common import CPULoad, MetricSnapshotRead, MountedVolum
 class MetricSnapshotCreate(BaseModel):
     reported_at: datetime = Field(default_factory=datetime.utcnow)
     cpu_temperature_c: float | None = None
+    fan_level: int | None = None
+    fan_max_level: int | None = None
+    fan_rpm: int | None = None
     ram_used_percent: float | None = None
     total_ram_gb: float | None = None
     memory_available_gb: float | None = None
@@ -42,6 +45,9 @@ class MetricsIngestResponse(BaseModel):
 class MetricSeriesPoint(BaseModel):
     reported_at: datetime
     cpu_temperature_c: float | None = None
+    fan_level: int | None = None  # cooling fan level (0 = off); the bucket's highest level when downsampled
+    fan_max_level: int | None = None
+    fan_rpm: int | None = None
     ram_used_percent: float | None = None
     memory_available_gb: float | None = None
     swap_used_percent: float | None = None

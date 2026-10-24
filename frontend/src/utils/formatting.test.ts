@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatUpdatedAge, getStaleHintClass, getStatusClass } from './formatting';
+import { formatBitsPerSecond, formatFan, formatUpdatedAge, getStaleHintClass, getStatusClass } from './formatting';
 
 describe('formatUpdatedAge', () => {
   const now = Date.parse('2026-01-01T12:00:00Z');
@@ -22,5 +22,25 @@ describe('status classes', () => {
     expect(getStatusClass('unknown')).toBe('quick-status--unknown');
     expect(getStaleHintClass('info')).toBe('quick-status--stale-hint-ok');
     expect(getStaleHintClass('warn')).toBe('quick-status--stale-hint-warn');
+  });
+});
+
+describe('formatBitsPerSecond', () => {
+  it('picks a unit that keeps the number readable', () => {
+    expect(formatBitsPerSecond(950)).toBe('950 bps');
+    expect(formatBitsPerSecond(12_500)).toBe('12.5 Kbps');
+    expect(formatBitsPerSecond(3_200_000)).toBe('3.2 Mbps');
+    expect(formatBitsPerSecond(125_000_000)).toBe('125 Mbps');
+    expect(formatBitsPerSecond(1_100_000_000)).toBe('1.1 Gbps');
+    expect(formatBitsPerSecond(null)).toBe('N/A');
+  });
+});
+
+describe('formatFan', () => {
+  it('describes the fan level and speed', () => {
+    expect(formatFan(1, 4, 2905)).toBe('level 1/4, 2905 rpm');
+    expect(formatFan(0, 4, 0)).toBe('off, 0 rpm');
+    expect(formatFan(2, null, null)).toBe('level 2');
+    expect(formatFan(null, null, null)).toBe('N/A');
   });
 });

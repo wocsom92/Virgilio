@@ -327,8 +327,17 @@ async def test_transition_notification_includes_top_processes_for_cpu_and_memory
         memory_available_gb=0.5,
         raw_payload={
             "top_processes": {
-                "cpu": [{"pid": 101, "name": "ffmpeg", "cpu_percent": 87.5, "memory_percent": 4.2}],
+                "cpu": [
+                    {"pid": 101, "name": "ffmpeg", "cpu_percent": 87.5, "memory_percent": 4.2, "container": "immich-ml"}
+                ],
                 "memory": [{"pid": 202, "name": "postgres", "cpu_percent": 12.0, "memory_percent": 33.3}],
+                "containers_cpu": [
+                    {"name": "immich-ml", "cpu_percent": 95.0, "memory_percent": 6.0, "process_count": 3},
+                    {"name": "homeassistant", "cpu_percent": 4.0, "memory_percent": 2.0, "process_count": 1},
+                ],
+                "containers_memory": [
+                    {"name": "immich-ml", "cpu_percent": 95.0, "memory_percent": 6.0, "process_count": 3},
+                ],
             }
         },
     )
@@ -348,9 +357,13 @@ async def test_transition_notification_includes_top_processes_for_cpu_and_memory
 
     assert text is not None
     assert "Top CPU Processes" in text
-    assert "ffmpeg" in text
+    assert "• ffmpeg (pid 101, immich-ml): CPU 87.5%, MEM 4.2%" in text
+    assert "Top CPU Containers" in text
+    assert "• immich-ml: CPU 95.0%, MEM 6.0%, 3 processes" in text
+    assert "• homeassistant: CPU 4.0%, MEM 2.0%, 1 process" in text
     assert "Top Memory Processes" in text
     assert "postgres" in text
+    assert "Top Memory Containers" in text
     assert sent
 
 

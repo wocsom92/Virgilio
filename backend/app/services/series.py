@@ -28,6 +28,9 @@ _LOAD_KEYS = ("one", "five", "fifteen")
 class SeriesRow:
     reported_at: datetime
     cpu_temperature_c: float | None
+    fan_level: int | None
+    fan_max_level: int | None
+    fan_rpm: int | None
     ram_used_percent: float | None
     memory_available_gb: float | None
     swap_used_percent: float | None
@@ -50,6 +53,9 @@ async def load_series_rows(
         select(
             MetricSnapshot.reported_at,
             MetricSnapshot.cpu_temperature_c,
+            MetricSnapshot.fan_level,
+            MetricSnapshot.fan_max_level,
+            MetricSnapshot.fan_rpm,
             MetricSnapshot.ram_used_percent,
             MetricSnapshot.memory_available_gb,
             MetricSnapshot.swap_used_percent,
@@ -163,6 +169,9 @@ def downsample_series(
                 MetricSeriesPoint(
                     reported_at=row.reported_at,
                     cpu_temperature_c=row.cpu_temperature_c,
+                    fan_level=row.fan_level,
+                    fan_max_level=row.fan_max_level,
+                    fan_rpm=row.fan_rpm,
                     ram_used_percent=row.ram_used_percent,
                     memory_available_gb=row.memory_available_gb,
                     swap_used_percent=row.swap_used_percent,
@@ -211,9 +220,16 @@ def downsample_series(
                     if isinstance(value, (int, float)):
                         load_values[key].append(float(value))
         cpu_load = {key: _mean(values) for key, values in load_values.items()} if any(load_values.values()) else None
+        # The fan level keeps the bucket's peak so short bursts stay visible; RPM is averaged.
+        fan_levels = [row.fan_level for row in group if row.fan_level is not None]
+        fan_max_levels = [row.fan_max_level for row in group if row.fan_max_level is not None]
+        fan_rpm_mean = _mean([float(row.fan_rpm) for row in group if row.fan_rpm is not None])
         points.append(
             MetricSeriesPoint(
                 reported_at=last.reported_at,
+                fan_level=max(fan_levels) if fan_levels else None,
+                fan_max_level=fan_max_levels[-1] if fan_max_levels else None,
+                fan_rpm=int(round(fan_rpm_mean)) if fan_rpm_mean is not None else None,
                 cpu_load=cpu_load,
                 mounted_usage=last.mounted_usage,
                 disk_temperatures=_disk_temperatures(last),

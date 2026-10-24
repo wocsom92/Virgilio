@@ -26,6 +26,9 @@ class MetricPayload(BaseModel):
     hostname: str | None = None
     monitor_version: str | None = None
     cpu_temperature_c: float | None = None
+    fan_level: int | None = None
+    fan_max_level: int | None = None
+    fan_rpm: int | None = None
     ram_used_percent: float | None = None
     total_ram_gb: float | None = None
     memory_available_gb: float | None = None
@@ -91,6 +94,7 @@ class MetricPayload(BaseModel):
     vpn_default_country_code: str | None = None
     warnings: list[str] | None = None
     configured_mounts: list[str] | None = None
+    top_processes: dict[str, list[dict[str, Any]]] | None = None
     raw_payload: dict[str, Any] | None = None
 
 

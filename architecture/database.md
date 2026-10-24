@@ -300,6 +300,9 @@ High-churn host metric history.
 | `swap_used_percent` | float | Optional |
 | `docker_container_count` | integer | Optional |
 | `docker_running_containers` | json | Optional |
+| `fan_level` | integer | Cooling fan level, 0 = off (9.1.0) |
+| `fan_max_level` | integer | Highest fan level (9.1.0) |
+| `fan_rpm` | integer | Fan speed (9.1.0) |
 | `disk_usage_percent` | float | Optional |
 | `mounted_usage` | json | Optional |
 | `cpu_load` | json | Optional |
