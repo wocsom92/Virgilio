@@ -232,7 +232,7 @@ Behavior summary:
 - `managed` purge mode removes only managed files in deploy path.
 - `full` purge mode removes entire deploy path before upload.
 - After services restart, the script always runs post-deploy checks for container state, endpoint health, and raw Telegram-token log redaction.
-- After a successful deployment, the script runs `sudo docker system prune -f` on the remote host.
+- After a successful deployment, the script runs `sudo docker image prune -f` on the remote host. Only dangling images are removed; stopped containers, networks, volumes and build cache of other projects on the host are left alone.
 
 ## API overview
 

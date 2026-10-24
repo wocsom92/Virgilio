@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Deploy no longer prunes the whole Docker host:** the final step of `scripts/deploy.sh` ran `docker system prune -f` on the remote host, which deleted stopped containers and networks belonging to other compose projects on the same machine. It now runs `docker image prune -f` and only removes dangling images.
+
 ## [9.1.0] - 2026-10-24
 
 ### Added

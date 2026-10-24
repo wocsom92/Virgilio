@@ -507,7 +507,7 @@ if [[ "${PROFILE}" == "full" ]]; then
   run_ssh "cd \"${DEPLOY_PATH}\" && chmod +x scripts/configure_logs_retention.sh && ./scripts/configure_logs_retention.sh --env-file \"${TARGET_REMOTE_ENV_NAME}\""
 fi
 
-log "Pruning unused Docker resources on remote host..."
-run_ssh "sudo docker system prune -f"
+log "Pruning dangling Docker images on remote host..."
+run_ssh "sudo docker image prune -f"
 
 log "Deploy completed successfully."
