@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Guided "Add server" flow in Settings:** replacing the raw backend form with a three-step dialog. Step 1 generates an agent token and shows the `docker-compose.monitor.yml` one-liner (with the token, port and host-root mount) to run on the new server; step 2 asks for a name, the agent address (`http://<host>:29000`, scheme added automatically) and the token with inline help and friendly validation (duplicate names, malformed URLs, short tokens); step 3 keeps sensible defaults (poll every 60 s, all charts on). After saving, the dialog links straight to the dashboard. The existing per-server settings page gained the same **Test connection** panel, which reuses the stored token.
+- **`POST /backends/test-connection`** (admin): fetches one `/metrics` sample from an agent with the given URL and token and always answers 200 with either the host details (hostname, agent version, OS, CPU temperature, RAM, uptime, latency) or a categorised error (`dns`, `refused`, `unreachable`, `timeout`, `tls`, `unauthorized`, `not_found`, `invalid_response`) plus a hint on what to fix. Transport errors are classified by the underlying OS exception, including the `ExceptionGroup` httpx raises when a hostname resolves to several addresses.
+
 ### Fixed
+- `GET /backends/{id}/mounts` crashed with a `NameError` when the agent was unreachable and the handler fell back to the newest stored snapshot (`MetricSnapshot` was never imported).
 - **Deploy no longer prunes the whole Docker host:** the final step of `scripts/deploy.sh` ran `docker system prune -f` on the remote host, which deleted stopped containers and networks belonging to other compose projects on the same machine. It now runs `docker image prune -f` and only removes dangling images.
 
 ## [9.1.0] - 2026-10-24

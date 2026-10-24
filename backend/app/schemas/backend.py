@@ -58,3 +58,32 @@ class BackendDashboardRead(MonitoredBackendRead):
 
     class Config:
         from_attributes = True
+
+
+class MonitorConnectionTestRequest(BaseModel):
+    """Payload for the admin "Test connection" button.
+
+    `api_token` may be omitted when `backend_id` points at an existing server so
+    the stored token is reused (the admin form never shows it).
+    """
+
+    base_url: HttpUrl
+    api_token: str | None = None
+    backend_id: int | None = None
+
+
+class MonitorConnectionTestResult(BaseModel):
+    ok: bool
+    base_url: str
+    latency_ms: int | None = None
+    hostname: str | None = None
+    monitor_version: str | None = None
+    os_version: str | None = None
+    cpu_temperature_c: float | None = None
+    ram_used_percent: float | None = None
+    disk_usage_percent: float | None = None
+    uptime_seconds: int | None = None
+    reported_at: datetime | None = None
+    error_kind: str | None = None
+    error: str | None = None
+    hint: str | None = None

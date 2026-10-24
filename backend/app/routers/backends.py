@@ -4,9 +4,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.security import get_current_user, require_admin_user
 from backend.app.db.session import get_session
-from backend.app.models.monitors import MonitoredBackend
+from backend.app.models.monitors import MetricSnapshot, MonitoredBackend
 from backend.app.schemas.backend import (
     BackendWithLatestSnapshot,
+    MonitorConnectionTestRequest,
+    MonitorConnectionTestResult,
     MonitoredBackendCreate,
     MonitoredBackendRead,
     MonitoredBackendUpdate,
@@ -14,7 +16,12 @@ from backend.app.schemas.backend import (
 from backend.app.schemas.metrics import MetricsIngestResponse
 from backend.app.services.backend_ingest import MetricsPayloadError, ingest_backend_metrics
 from backend.app.services.backend_queries import delete_monitored_backend, fetch_backends_with_latest_snapshots
-from backend.app.services.monitor_client import MonitorClientError, fetch_metrics, request_monitor_reboot
+from backend.app.services.monitor_client import (
+    MonitorClientError,
+    fetch_metrics,
+    probe_monitor,
+    request_monitor_reboot,
+)
 
 
 router = APIRouter(prefix="/backends", tags=["backends"])
@@ -65,6 +72,68 @@ async def create_backend(
     await session.refresh(backend)
     return _mask_backend_secret(MonitoredBackendRead.model_validate(backend))
 
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        return float(value) if isinstance(value, (int, float)) else None
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+
+@router.post(
+    "/test-connection",
+    response_model=MonitorConnectionTestResult,
+    dependencies=[Depends(require_admin_user)],
+)
+async def test_monitor_connection(
+    payload: MonitorConnectionTestRequest,
+    session: AsyncSession = Depends(get_session),
+) -> MonitorConnectionTestResult:
+    """Fetch `/metrics` once from a monitor agent and report what happened.
+
+    Always answers 200: the outcome (success details or a categorised error with
+    a hint) is in the body so the admin form can show it inline.
+    """
+    base_url = str(payload.base_url).rstrip("/")
+    token = (payload.api_token or "").strip()
+    if not token and payload.backend_id is not None:
+        existing = await session.get(MonitoredBackend, payload.backend_id)
+        if existing is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Backend not found")
+        token = existing.api_token or ""
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Enter the agent's MONITOR_API_TOKEN before testing the connection.",
+        )
+
+    result = await probe_monitor(base_url, token)
+    if not result.ok:
+        return MonitorConnectionTestResult(
+            ok=False,
+            base_url=base_url,
+            latency_ms=result.latency_ms,
+            error_kind=result.error_kind,
+            error=result.error,
+            hint=result.hint,
+        )
+
+    metrics = result.payload or {}
+    uptime = metrics.get("uptime_seconds")
+    reported_at = metrics.get("reported_at")
+    return MonitorConnectionTestResult(
+        ok=True,
+        base_url=base_url,
+        latency_ms=result.latency_ms,
+        hostname=metrics.get("hostname") if isinstance(metrics.get("hostname"), str) else None,
+        monitor_version=metrics.get("monitor_version") if isinstance(metrics.get("monitor_version"), str) else None,
+        os_version=metrics.get("os_version") if isinstance(metrics.get("os_version"), str) else None,
+        cpu_temperature_c=_coerce_float(metrics.get("cpu_temperature_c")),
+        ram_used_percent=_coerce_float(metrics.get("ram_used_percent")),
+        disk_usage_percent=_coerce_float(metrics.get("disk_usage_percent")),
+        uptime_seconds=int(uptime) if isinstance(uptime, (int, float)) else None,
+        reported_at=reported_at if isinstance(reported_at, str) else None,
+    )
 
 @router.get(
     "/{backend_id}",

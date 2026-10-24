@@ -463,6 +463,46 @@ export interface BackendCreatePayload {
   selected_metrics?: SelectedMetrics;
 }
 
+export interface MonitorConnectionTestRequest {
+  base_url: string;
+  api_token?: string;
+  backend_id?: number;
+}
+
+export type MonitorConnectionErrorKind =
+  | 'dns'
+  | 'refused'
+  | 'unreachable'
+  | 'timeout'
+  | 'tls'
+  | 'unauthorized'
+  | 'not_found'
+  | 'http'
+  | 'invalid_response';
+
+export interface MonitorConnectionTestResult {
+  ok: boolean;
+  base_url: string;
+  latency_ms?: number | null;
+  hostname?: string | null;
+  monitor_version?: string | null;
+  os_version?: string | null;
+  cpu_temperature_c?: number | null;
+  ram_used_percent?: number | null;
+  disk_usage_percent?: number | null;
+  uptime_seconds?: number | null;
+  reported_at?: string | null;
+  error_kind?: MonitorConnectionErrorKind | string | null;
+  error?: string | null;
+  hint?: string | null;
+}
+
+/** One-off probe of a monitor agent; the outcome (success or categorised error) is in the body. */
+export async function testMonitorConnection(payload: MonitorConnectionTestRequest) {
+  const { data } = await api.post<MonitorConnectionTestResult>('/backends/test-connection', payload);
+  return data;
+}
+
 export async function createBackend(payload: BackendCreatePayload) {
   const { data } = await api.post<MonitoredBackend>('/backends/', payload);
   return data;

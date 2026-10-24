@@ -193,7 +193,7 @@ export default function App() {
       <Layout activeView={view} onSwitch={setView} currentUser={currentUser} onLogout={handleLogout}>
         {view === 'admin' ? (
           <Suspense fallback={<div className="text-secondary">Loading settings…</div>}>
-            <AdminPanel currentUser={currentUser} />
+            <AdminPanel currentUser={currentUser} onOpenDashboard={() => setView('monitoring')} />
           </Suspense>
         ) : view === 'site-monitoring' ? (
           <SiteMonitoring />

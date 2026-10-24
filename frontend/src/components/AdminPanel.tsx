@@ -41,6 +41,8 @@ import {
   rebootBackendHost,
 } from '../api/client';
 import { DEFAULT_BACKEND_VERSION, DEFAULT_MONITOR_VERSION, FRONTEND_VERSION } from '../constants/versions';
+import { AddServerDialog } from './AddServerDialog';
+import { ConnectionTestPanel } from './ConnectionTestPanel';
 import { QuickStatusItemCard } from './QuickStatusItemCard';
 import { SiteMonitoringAdmin } from './SiteMonitoringAdmin';
 import { formatBinaryBytes } from '../utils/formatting';
@@ -49,6 +51,8 @@ import { normalizeMountMetricSelection } from '../utils/mountMetrics';
 
 interface AdminPanelProps {
   currentUser: AuthUser | null;
+  /** Switches the app to the dashboard; used by the "Open dashboard" button after adding a server. */
+  onOpenDashboard?: () => void;
 }
 
 const MOUNTED_USAGE_KEY = 'mounted_usage' as const;
@@ -618,7 +622,7 @@ const createQuickStatusForm = (): QuickStatusFormState => {
 
 const getQuickStatusGroupKey = (item: Pick<QuickStatusItem, 'backend_id'>): string => `backend:${item.backend_id}`;
 
-export function AdminPanel({ currentUser }: AdminPanelProps) {
+export function AdminPanel({ currentUser, onOpenDashboard }: AdminPanelProps) {
   const extractErrorMessage = (err: unknown, fallback: string): string => {
     return getUserFacingErrorMessage(err, fallback);
   };
@@ -651,7 +655,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
   } | null>(null);
   const [rebootingBackendId, setRebootingBackendId] = useState<number | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>(ADMIN_SECTIONS[0].id);
-  const [showNewForm, setShowNewForm] = useState(false);
+  const [addServerOpen, setAddServerOpen] = useState(false);
   const [quickStatusItems, setQuickStatusItems] = useState<QuickStatusItem[]>([]);
   const [quickStatusTiles, setQuickStatusTiles] = useState<QuickStatusTile[]>([]);
   const [quickStatusForm, setQuickStatusForm] = useState<QuickStatusFormState>(() => createQuickStatusForm());
@@ -904,10 +908,10 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
     const backendId = extractBackendIdFromSection(sectionId);
     if (backendId !== null) {
       prepareBackendEdit(backendId);
-      setShowNewForm(false);
+      setAddServerOpen(false);
     } else {
       resetForm();
-      setShowNewForm(false);
+      setAddServerOpen(false);
     }
     setActiveSection(sectionId);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -935,7 +939,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       setBackends(sortBackends(updated));
       resetForm();
       setStatus('Saved successfully.');
-      setShowNewForm(false);
+      setAddServerOpen(false);
       setError(null);
     } catch (err) {
       setError(extractErrorMessage(err, 'Could not save backend settings. Review the form and try again.'));
@@ -945,6 +949,22 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
 
   const handleEdit = (backend: MonitoredBackend) => {
     handleSectionChange(asBackendSectionId(backend.id));
+  };
+
+  const openAddServer = () => {
+    resetForm();
+    setError(null);
+    setAddServerOpen(true);
+  };
+
+  const handleServerAdded = async (created: MonitoredBackend) => {
+    try {
+      const updated = await listBackendsWithLatest();
+      setBackends(sortBackends(updated));
+    } catch {
+      setBackends((prev) => sortBackends([...prev.filter((item) => item.id !== created.id), created]));
+    }
+    setBackendActionStatus({ backendId: created.id, tone: 'success', message: `Added ${created.name}.` });
   };
 
   const withUpdatedMountSelection = (
@@ -1442,9 +1462,12 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   className="form-control"
                   value={form.base_url}
                   onChange={(event) => setForm({ ...form, base_url: event.target.value })}
-                  placeholder="http://server:9000"
+                  placeholder="http://192.168.1.20:29000"
                   required
                 />
+                <div className="form-text">
+                  The agent's URL as seen from the backend, e.g. <code>http://&lt;host&gt;:29000</code>.
+                </div>
               </div>
               <div className="col-md-6">
                 <label className="form-label">Monitor Token</label>
@@ -1457,7 +1480,11 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                   autoComplete="new-password"
                   placeholder={editingId ? 'Leave blank to keep current token' : ''}
                 />
-                {editingId && <div className="form-text">Leave blank to keep the current monitor token.</div>}
+                <div className="form-text">
+                  {editingId
+                    ? "Leave blank to keep the current token (the agent's MONITOR_API_TOKEN)."
+                    : "The agent's MONITOR_API_TOKEN."}
+                </div>
               </div>
               <div className="col-md-3">
                 <label className="form-label">Display Order</label>
@@ -1507,6 +1534,19 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
                 />
                 <div className="form-text text-secondary">Minimum 30 seconds.</div>
               </div>
+            </div>
+            <div className="card-panel rounded-3 p-3">
+              <div className="fw-semibold mb-1">Connection</div>
+              <p className="form-text mt-0 mb-2">
+                Fetch one sample from the agent with the address above
+                {editingId ? ' and the stored token, or the new token if you entered one.' : '.'}
+              </p>
+              <ConnectionTestPanel
+                baseUrl={form.base_url}
+                apiToken={form.api_token}
+                backendId={editingId ?? undefined}
+                compact
+              />
             </div>
             <div>
               <label className="form-label">Notes</label>
@@ -2139,7 +2179,7 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
 
   const renderBackendList = () => (
     <>
-      <h6 className="text-uppercase text-secondary">Existing Backends</h6>
+      <h6 className="text-uppercase text-secondary">Monitored servers</h6>
       {backendActionStatus && !backends.some((backend) => backend.id === backendActionStatus.backendId) ? (
         <div
           className={`small mb-3 ${backendActionStatus.tone === 'error' ? 'text-warning' : 'text-success'}`}
@@ -2149,7 +2189,16 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
       ) : null}
       <div className="list-group">
         {backends.length === 0 ? (
-          <div className="list-group-item text-secondary">No backends yet.</div>
+          <div className="servers-empty-state">
+            <div className="fw-semibold">No servers yet</div>
+            <p className="small mb-0">
+              Add your first server: the guided setup gives you the agent install command, checks the connection, and
+              puts the server on the dashboard.
+            </p>
+            <button className="btn btn-primary btn-sm" type="button" onClick={openAddServer} disabled={!isAdmin}>
+              Add server
+            </button>
+          </div>
         ) : (
           backends.map((backend, index) => (
             <div
@@ -2276,35 +2325,30 @@ export function AdminPanel({ currentUser }: AdminPanelProps) {
           <section id="manage-backends" className="d-flex flex-column gap-3">
             <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
               <div>
-                <h5 className="mb-0">Manage backends</h5>
-                <p className="text-secondary small mb-0">Create, edit, and organize monitored servers.</p>
+                <h5 className="mb-0">Servers</h5>
+                <p className="text-secondary small mb-0">Add, edit, and order the servers Virgilio monitors.</p>
               </div>
-              {!isAdmin && <span className="badge badge-warn">Admin access required to save changes</span>}
+              <div className="d-flex align-items-center gap-2 flex-wrap">
+                {!isAdmin && <span className="badge badge-warn">Admin access required to save changes</span>}
+                <button className="btn btn-primary" type="button" onClick={openAddServer} disabled={!isAdmin}>
+                  Add server
+                </button>
+              </div>
             </div>
             <div className="card">
-              <div className="card-body d-flex flex-column gap-3">
-                {renderBackendList()}
-                <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                  <h6 className="text-uppercase text-secondary mb-0">New backend</h6>
-                  <button
-                    className={`btn btn-sm ${showNewForm ? 'btn-ghost' : 'btn-primary'}`}
-                    type="button"
-                    onClick={() => {
-                      resetForm();
-                      setShowNewForm((prev) => !prev);
-                    }}
-                  >
-                    {showNewForm ? 'Hide form' : 'Add new backend'}
-                  </button>
-                </div>
-                {showNewForm &&
-                  renderBackendSection({
-                    title: 'Add backend',
-                    description: 'Enter details to add a new monitored server.',
-                    cardTitle: 'New Backend',
-                  })}
-              </div>
+              <div className="card-body d-flex flex-column gap-3">{renderBackendList()}</div>
             </div>
+            <AddServerDialog
+              open={addServerOpen}
+              onClose={() => setAddServerOpen(false)}
+              onSaved={(created) => void handleServerAdded(created)}
+              onOpenDashboard={onOpenDashboard}
+              existingNames={backends.map((backend) => backend.name)}
+              nextDisplayOrder={backends.length}
+              metricOptions={metricOptions}
+              createDefaultSelectedMetrics={createDefaultSelectedMetrics}
+              mountedUsageKey={MOUNTED_USAGE_KEY}
+            />
           </section>
         )}
         {activeBackend &&
