@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.3.0] - 2026-10-24
+
+### Changed
+- **Quick tiles redesigned:** tiles are now neutral surface cards with a readable sentence-case label, a status dot (pulsing for critical), a large tabular value and the 24-hour strip inside the card; only warning and critical tiles get a tinted background and coloured value so problems stand out. The grid uses wider tiles (two per row on phones), graph cards share the same look with a status pill, the sparkline and its fill in the status colour, the 24-hour strip under the value and a plain stats row, and section headers show the backend name with a count badge. Hover lifts interactive tiles; "Details ›" marks tiles with drill-down.
+- Project version updated from `9.2.0` to `9.3.0` across backend, frontend, monitor, README, package metadata and the displayed UI version constants.
+
 ## [9.2.0] - 2026-10-24
 
 ### Added
@@ -16,9 +22,6 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - Project version updated from `9.1.0` to `9.2.0` across backend, frontend, monitor, README, package metadata and the displayed UI version constants.
 - **Deploy no longer prunes the whole Docker host:** the final step of `scripts/deploy.sh` ran `docker system prune -f` on the remote host, which deleted stopped containers and networks belonging to other compose projects on the same machine. It now runs `docker image prune -f` and only removes dangling images.
-
-### Changed
-- **Quick tiles redesigned:** tiles are now neutral surface cards with a readable sentence-case label, a status dot (pulsing for critical), a large tabular value and the 24-hour strip inside the card; only warning and critical tiles get a tinted background and coloured value so problems stand out. The grid uses wider tiles (two per row on phones), graph cards share the same look with a status pill, the sparkline and its fill in the status colour, the 24-hour strip under the value and a plain stats row, and section headers show the backend name with a count badge. Hover lifts interactive tiles; "Details ›" marks tiles with drill-down.
 
 ## [9.1.0] - 2026-10-24
 
