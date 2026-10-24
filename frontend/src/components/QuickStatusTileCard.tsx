@@ -16,10 +16,19 @@ interface QuickStatusTileCardProps {
   onDrop?: DragEventHandler<HTMLDivElement>;
 }
 
-function renderHistorySegments(tile: QuickStatusTile) {
+export function quickStatusLabel(status: QuickStatusTile['status'], stale?: boolean): string {
+  if (stale) return 'Stale';
+  if (status === 'warn') return 'Warning';
+  if (status === 'critical') return 'Critical';
+  if (status === 'info') return 'Info';
+  if (status === 'unknown') return 'No data';
+  return 'OK';
+}
+
+export function renderHistorySegments(tile: QuickStatusTile) {
   if (!tile.history_loaded) {
     return (
-      <div className="quick-status-history" aria-hidden="true">
+      <div className="quick-status-history quick-status-history--loading" aria-hidden="true">
         {Array.from({ length: 12 }).map((_, index) => (
           <span key={`${tile.id}:loading:${index}`} className="quick-status-history__segment quick-status--unknown" />
         ))}
@@ -31,7 +40,7 @@ function renderHistorySegments(tile: QuickStatusTile) {
   }
 
   return (
-    <div className="quick-status-history" aria-hidden="true">
+    <div className="quick-status-history" aria-hidden="true" title="Last 24 hours">
       {tile.history.map((status, index) => (
         <span
           key={`${tile.id}:${index}`}
@@ -68,6 +77,7 @@ function QuickStatusTileCardComponent({
         }
       }
     : undefined;
+  const statusText = quickStatusLabel(tile.status, tile.stale);
   const tileClassName = classNames(
     'quick-status-tile',
     tile.stale ? ['quick-status--stale', getStaleHintClass(tile.status)] : getStatusClass(tile.status)
@@ -76,19 +86,28 @@ function QuickStatusTileCardComponent({
     'quick-status-card--interactive': Boolean(onClick),
     'quick-status-card--dragging': dragging,
   });
+  const hasDetails = Boolean(tile.details && tile.details.length > 0);
   const cardBody = (
-    <>
-      <div className={tileClassName}>
-        {action ? <div className="quick-status-tile__action">{action}</div> : null}
-        <div className="quick-status-content">
-          <div className="quick-status-value">{tile.display_value}</div>
-          <div className="quick-status-label">{tile.label}</div>
-          {updatedLabel ? <div className="quick-status-updated">{updatedLabel}</div> : null}
-        </div>
-        {tile.details && tile.details.length > 0 ? <div className="quick-status-hint">Details</div> : null}
+    <div className={tileClassName}>
+      {action ? <div className="quick-status-tile__action">{action}</div> : null}
+      <div className="quick-status-tile__head">
+        <span className="quick-status-label">{tile.label}</span>
+        <span className="quick-status-tile__status" title={statusText}>
+          <span className="quick-status-tile__dot" aria-hidden="true" />
+          <span className="visually-hidden">{statusText}</span>
+        </span>
       </div>
+      <div className="quick-status-content">
+        <div className="quick-status-value">{tile.display_value}</div>
+      </div>
+      {updatedLabel || hasDetails ? (
+        <div className="quick-status-tile__foot">
+          {updatedLabel ? <span className="quick-status-updated">{updatedLabel}</span> : <span />}
+          {hasDetails ? <span className="quick-status-hint">Details</span> : null}
+        </div>
+      ) : null}
       {renderHistorySegments(tile)}
-    </>
+    </div>
   );
 
   if (onClick && !action && !draggable && !onDragStart && !onDragOver && !onDragEnd && !onDrop) {

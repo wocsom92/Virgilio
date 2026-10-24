@@ -41,13 +41,11 @@ const QuickStatusSection = memo(function QuickStatusSection({
   return (
     <section className="quick-status-section">
       <div className="quick-status-section__header">
-        <div>
+        <div className="quick-status-section__heading">
           <h3 className="quick-status-section__title">{group.backendName}</h3>
-          <span className="quick-status-section__count">
-            {group.items.length} {group.items.length === 1 ? 'item' : 'items'}
-          </span>
+          <span className="quick-status-section__count">{group.items.length}</span>
         </div>
-        {hydrating ? <span className="text-secondary small">Loading 24h history…</span> : null}
+        {hydrating ? <span className="quick-status-section__note">Loading 24h history…</span> : null}
       </div>
       <div className="quick-status-grid">
         {group.items.map((tile) => (
@@ -132,15 +130,15 @@ export function QuickStatusLoadingShell({ groupNames }: QuickStatusLoadingShellP
       {sections.map((groupName, index) => (
         <section className="quick-status-section" key={`${groupName}-${index}`}>
           <div className="quick-status-section__header">
-            <div>
+            <div className="quick-status-section__heading">
               <h3 className="quick-status-section__title">{groupName}</h3>
-              <span className="quick-status-section__count">Loading quick tiles…</span>
             </div>
+            <span className="quick-status-section__note">Loading quick tiles…</span>
           </div>
           <div className="quick-status-grid">
             {Array.from({ length: 4 }).map((_, itemIndex) => (
               <div className="quick-status-grid__item" key={`${groupName}-${itemIndex}`}>
-                <div className="card-panel rounded-4 p-3">
+                <div className="quick-status-tile quick-status-tile--skeleton" aria-hidden="true">
                   <div className="placeholder-glow d-flex flex-column gap-2">
                     <span className="placeholder col-5" />
                     <span className="placeholder col-8" />
