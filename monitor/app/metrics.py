@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import glob
 import gzip
+import builtins
 import io
 import ipaddress
 import json
@@ -1324,10 +1325,23 @@ def _fail2ban_installed() -> bool:
     return any(os.path.isdir(path) for path in _host_file_candidates("/etc/fail2ban"))
 
 
-class _Fail2banUnpickler(pickle.Unpickler):
-    """fail2ban answers with plain lists/tuples/strings/numbers; refuse anything that needs a class."""
+# fail2ban answers with plain lists/tuples/strings/numbers, except that its IPAddr objects pickle as
+# ``str(value)`` calls, so a jail with a live ban references ``builtins.str``. Allow those plain
+# value types and nothing else (no classes, no functions).
+_F2B_SAFE_BUILTINS = frozenset({"str", "int", "float", "bool", "bytes", "list", "tuple", "dict", "set", "frozenset"})
+# Protocol <= 2 pickles spell these the Python 2 way (``__builtin__.unicode``); fail2ban 1.0.x
+# uses protocol 4 and ``builtins.str``, but accept both.
+_F2B_PY2_NAMES = {"unicode": "str", "long": "int", "basestring": "str"}
 
-    def find_class(self, module: str, name: str) -> Any:  # pragma: no cover - defensive
+
+class _Fail2banUnpickler(pickle.Unpickler):
+    """Restricted unpickler for fail2ban socket replies: plain value types only."""
+
+    def find_class(self, module: str, name: str) -> Any:
+        if module in ("builtins", "__builtin__"):
+            resolved = _F2B_PY2_NAMES.get(name, name)
+            if resolved in _F2B_SAFE_BUILTINS:
+                return getattr(builtins, resolved)
         raise pickle.UnpicklingError(f"fail2ban response referenced {module}.{name}")
 
 

@@ -786,6 +786,83 @@ def test_collect_fail2ban_snapshot_reads_socket_and_database(tmp_path, monkeypat
     assert 590 <= snapshot["fail2ban_last_ban_age_seconds"] <= 620
 
 
+class _PickledAsStr(str):
+    """Mimics fail2ban's IPAddr: pickles as a ``builtins.str(value)`` call, as fail2ban 1.0.x sends it."""
+
+    def __reduce__(self):
+        return (str, (str(self),))
+
+
+class _PickledAsOsSystem:
+    def __reduce__(self):
+        import os
+
+        return (os.system, ("true",))
+
+
+def _run_fail2ban_collector(monkeypatch, responses: dict[tuple, object]) -> dict:
+    import os
+    import tempfile
+
+    metrics._fail2ban_snapshot_cache = None
+    sock_path = os.path.join(tempfile.gettempdir(), f"f2b-test-{os.getpid()}-{len(responses)}.sock")
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
+    server = _fake_fail2ban_server(sock_path, responses)
+    monkeypatch.setattr(metrics, "_fail2ban_socket_path", lambda: sock_path)
+    monkeypatch.setattr(metrics, "_fail2ban_db_path", lambda: None)
+    try:
+        return metrics._collect_fail2ban_snapshot()
+    finally:
+        server.close()
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
+
+
+def test_collect_fail2ban_snapshot_accepts_banned_ips_pickled_as_str_calls(monkeypatch):
+    # Regression: a jail with a live ban used to come back as "stopped" because the restricted
+    # unpickler refused the builtins.str reference fail2ban emits for each banned IPAddr.
+    snapshot = _run_fail2ban_collector(
+        monkeypatch,
+        {
+            ("version",): "1.0.2",
+            ("status",): [("Number of jail", 1), ("Jail list", "sshd")],
+            ("status", "sshd"): [
+                ("Filter", [("Currently failed", 0), ("Total failed", 85)]),
+                ("Actions", [("Currently banned", 1), ("Total banned", 11), ("Banned IP list", [_PickledAsStr("195.178.110.218")])]),
+            ],
+        },
+    )
+    assert snapshot["fail2ban_error"] is None
+    assert snapshot["fail2ban_status"] == "running"
+    assert snapshot["fail2ban_banned_total"] == 1
+    assert snapshot["fail2ban_jails"][0]["banned_ips"] == ["195.178.110.218"]
+
+
+def test_fail2ban_unpickler_accepts_protocol_4_str_calls_only():
+    import io
+    import pickle
+
+    data = pickle.dumps((0, [("Banned IP list", [_PickledAsStr("198.51.100.9")])]), protocol=4)
+    assert b"builtins" in data
+    assert metrics._Fail2banUnpickler(io.BytesIO(data)).load() == (0, [("Banned IP list", ["198.51.100.9"])])
+    with pytest.raises(pickle.UnpicklingError):
+        metrics._Fail2banUnpickler(io.BytesIO(pickle.dumps(_PickledAsOsSystem(), protocol=4))).load()
+
+
+def test_collect_fail2ban_snapshot_still_refuses_code_references(monkeypatch):
+    snapshot = _run_fail2ban_collector(
+        monkeypatch,
+        {
+            ("version",): "1.0.2",
+            ("status",): [("Number of jail", 1), ("Jail list", "sshd")],
+            ("status", "sshd"): [("Actions", [("Banned IP list", [_PickledAsOsSystem()])])],
+        },
+    )
+    assert snapshot["fail2ban_status"] == "stopped"
+    assert "system" in (snapshot["fail2ban_error"] or "")  # os.system pickles as posix.system / nt.system
+
+
 def test_collect_fail2ban_snapshot_installed_but_stopped(tmp_path, monkeypatch):
     metrics._fail2ban_snapshot_cache = None
     db_path = tmp_path / "fail2ban.sqlite3"
