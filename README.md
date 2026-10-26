@@ -1,6 +1,6 @@
 # Virgilio - System Monitoring
 
-Current version: `9.3.0`
+Current version: `9.4.0`
 
 Virgilio is a full-stack monitoring suite built with FastAPI, React, SQLite, and Docker Compose, sized to run comfortably on a Raspberry Pi 5.
 

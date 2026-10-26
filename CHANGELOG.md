@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [9.4.0] - 2026-10-26
 
 ### Added
 - **Fail2ban tile** (`fail2ban_status`): the monitor agent reads the host's fail2ban over its own socket (through the host-root bind mount when it runs in Docker) and its sqlite history, reporting per-jail currently banned / total banned / failing counts, banned IPs, bans in the last 24 h and the last ban. The tile shows "N banned", turns critical when fail2ban is installed but not running, shows "—" when it is not installed, and optionally warns/alerts on the banned count via thresholds.
@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - The **running containers** tile is informational only, like swap: it no longer takes a target range or raises warning/error states.
 - **Fan chart:** the cooling fan level is now its own chart next to CPU temperature (a stepped line with an "off / 1 / 2 / …" axis and "Level N" values) instead of a dashed band and "Fan 2 / Fan off" labels squeezed onto the temperature chart. Time-axis labels on all charts keep a minimum gap so they no longer run into each other in narrow tiles.
 - **CPU temperature axis** spans 25–80 °C instead of 0–100 °C, so normal fluctuations are visible; it widens automatically when a sample falls outside that band.
+- Project version updated from `9.3.0` to `9.4.0` across backend, frontend, monitor, README, package metadata and the displayed UI version constants.
 
 ## [9.3.0] - 2026-10-24
 

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "Backend Monitor"
-    version: str = "9.3.0"
+    version: str = "9.4.0"
     debug: bool = False
     log_level: str = "INFO"
     log_service: str = "monitor"
