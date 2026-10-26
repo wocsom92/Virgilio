@@ -392,6 +392,7 @@ function QuickStatusItemCardComponent({
       <div className="quick-status-wide__body">
         <div className="quick-status-wide__value-wrap">
           <div className="quick-status-wide__value">{tile.display_value}</div>
+          {tile.display_caption ? <div className="quick-status-caption">{tile.display_caption}</div> : null}
           {renderHistorySegments(tile)}
         </div>
         {chartShell}

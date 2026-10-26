@@ -99,6 +99,7 @@ function QuickStatusTileCardComponent({
       </div>
       <div className="quick-status-content">
         <div className="quick-status-value">{tile.display_value}</div>
+        {tile.display_caption ? <div className="quick-status-caption">{tile.display_caption}</div> : null}
       </div>
       {updatedLabel || hasDetails ? (
         <div className="quick-status-tile__foot">

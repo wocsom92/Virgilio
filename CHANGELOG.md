@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+- **Fail2ban tile** shows three counts, "banned now / bans in the last 24 h / total bans across jails" (e.g. `1 / 4 / 11`), with a small "now / 24h / total" caption under the value; the quick-status API gained an optional `display_caption` field for this. Thresholds still apply to the currently banned count.
+
 ## [9.4.0] - 2026-10-26
 
 ### Added

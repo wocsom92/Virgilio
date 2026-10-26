@@ -1231,6 +1231,13 @@ def test_fail2ban_tile_value_status_and_details():
     )
     assert quick_status._metric_value(running, "fail2ban_status", None) == 3
     assert quick_status._format_value("fail2ban_status", 3) == "3 banned"
+    # The tile itself shows banned now / bans in the last 24 h / total bans across jails.
+    assert quick_status._fail2ban_display(running) == ("3 / 5 / 59", "now / 24h / total")
+    tile_item = QuickStatusItem(label="Fail2ban", metric_key="fail2ban_status", warning_threshold=0, critical_threshold=0)
+    evaluation = quick_status.evaluate_quick_status_item(tile_item, running)
+    assert (evaluation.display_value, evaluation.display_caption) == ("3 / 5 / 59", "now / 24h / total")
+    partial = _snapshot({"fail2ban_status_level": 0, "fail2ban_status": "running", "fail2ban_banned_total": 1})
+    assert quick_status._fail2ban_display(partial) == ("1 / – / –", "now / 24h / total")
     assert quick_status._resolve_status(3, 0, 0, "fail2ban_status") == "ok"
     assert quick_status._resolve_status(3, 2, 10, "fail2ban_status") == "warn"
     assert quick_status._resolve_status(12, 2, 10, "fail2ban_status") == "critical"
@@ -1250,6 +1257,9 @@ def test_fail2ban_tile_value_status_and_details():
     stopped = _snapshot({"fail2ban_status_level": 2, "fail2ban_status": "stopped"})
     assert quick_status._metric_value(stopped, "fail2ban_status", None) == quick_status._FAIL2BAN_STOPPED_VALUE
     assert quick_status._format_value("fail2ban_status", quick_status._FAIL2BAN_STOPPED_VALUE) == "STOPPED"
+    assert quick_status._fail2ban_display(stopped) is None
+    stopped_evaluation = quick_status.evaluate_quick_status_item(item, stopped)
+    assert (stopped_evaluation.display_value, stopped_evaluation.display_caption) == ("STOPPED", None)
     assert quick_status._resolve_status(quick_status._FAIL2BAN_STOPPED_VALUE, 0, 0, "fail2ban_status") == "critical"
     assert quick_status._build_detail_lines(item, stopped, status="critical")[0].text == "fail2ban: installed but not running"
 

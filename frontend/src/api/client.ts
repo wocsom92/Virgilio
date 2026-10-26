@@ -349,6 +349,8 @@ export interface QuickStatusTile {
   display_unit?: string | null;
   value?: number | null;
   display_value: string;
+  /** Small text under the value, e.g. "now / 24h / total" for the fail2ban tile. */
+  display_caption?: string | null;
   status: StatusLevel;
   stale?: boolean;
   show_updated_age?: boolean;

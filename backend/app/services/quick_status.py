@@ -168,6 +168,7 @@ class QuickStatusEvaluation:
     value: float | None
     display_value: str
     status: str
+    display_caption: str | None = None
 
 
 _PING_CACHE: dict[tuple[int, int | None, str], PingCheckResult] = {}
@@ -305,6 +306,32 @@ def _fail2ban_value(snapshot: MetricSnapshot) -> float | None:
         return _FAIL2BAN_STOPPED_VALUE
     banned = payload.get("fail2ban_banned_total")
     return float(banned) if isinstance(banned, (int, float)) else 0.0
+
+
+_FAIL2BAN_CAPTION = "now / 24h / total"
+
+
+def _fail2ban_display(snapshot: MetricSnapshot | None) -> tuple[str, str] | None:
+    """Tile text for a running fail2ban: "banned now / bans in 24h / total bans" plus its caption.
+
+    Returns None when fail2ban is stopped, absent or unreported, so the caller keeps the plain
+    value text ("STOPPED", "—").
+    """
+    if snapshot is None:
+        return None
+    payload = snapshot.raw_payload if isinstance(snapshot.raw_payload, dict) else {}
+    level = payload.get("fail2ban_status_level")
+    if not isinstance(level, (int, float)) or level >= 2:
+        return None
+
+    def count(value: object) -> str:
+        return str(int(value)) if isinstance(value, (int, float)) and not isinstance(value, bool) else "–"
+
+    jails = payload.get("fail2ban_jails")
+    totals = [jail.get("total_banned") for jail in jails if isinstance(jail, dict)] if isinstance(jails, list) else []
+    total = sum(t for t in totals if isinstance(t, int)) if any(isinstance(t, int) for t in totals) else None
+    parts = [count(payload.get("fail2ban_banned_total")), count(payload.get("fail2ban_bans_24h")), count(total)]
+    return " / ".join(parts), _FAIL2BAN_CAPTION
 
 
 def _telegram_bot_evaluation(snapshot: MetricSnapshot) -> tuple[int | None, list[tuple[str, str]]] | None:
@@ -1022,9 +1049,16 @@ def evaluate_quick_status_item(item: QuickStatusItem, snapshot: MetricSnapshot |
     if snapshot is None:
         return QuickStatusEvaluation(value=None, display_value="—", status="unknown")
     value = _metric_value(snapshot, item.metric_key, item.mount_path)
+    display_value = _format_item_value(item, value)
+    display_caption = None
+    if item.metric_key == "fail2ban_status":
+        fail2ban_display = _fail2ban_display(snapshot)
+        if fail2ban_display is not None:
+            display_value, display_caption = fail2ban_display
     return QuickStatusEvaluation(
         value=value,
-        display_value=_format_item_value(item, value),
+        display_value=display_value,
+        display_caption=display_caption,
         status=_resolve_status(
             value,
             item.warning_threshold,
@@ -2088,6 +2122,11 @@ async def build_quick_status_tiles(
             prometheus_threshold_direction=item.prometheus_threshold_direction,
         )
         display_value = _format_item_value(item, value)
+        display_caption = None
+        if item.metric_key == "fail2ban_status":
+            fail2ban_display = _fail2ban_display(snapshot)
+            if fail2ban_display is not None:
+                display_value, display_caption = fail2ban_display
         reported_at = _coerce_utc(snapshot.reported_at) if snapshot and snapshot.reported_at is not None else None
         if item.metric_key in _PING_METRICS:
             ping_evaluation = _evaluate_ping_result(item, ping_result)
@@ -2126,6 +2165,7 @@ async def build_quick_status_tiles(
                 display_unit=getattr(item, "display_unit", None),
                 value=value,
                 display_value=display_value,
+                display_caption=display_caption,
                 status=status,
                 stale=stale,
                 show_updated_age=item.show_updated_age,
@@ -2257,6 +2297,11 @@ async def build_quick_status_tile_summaries(
             prometheus_threshold_direction=item.prometheus_threshold_direction,
         )
         display_value = _format_item_value(item, value)
+        display_caption = None
+        if item.metric_key == "fail2ban_status":
+            fail2ban_display = _fail2ban_display(snapshot)
+            if fail2ban_display is not None:
+                display_value, display_caption = fail2ban_display
         reported_at = _coerce_utc(snapshot.reported_at) if snapshot and snapshot.reported_at is not None else None
 
         if item.metric_key in _PING_METRICS:
@@ -2300,6 +2345,7 @@ async def build_quick_status_tile_summaries(
                 display_unit=getattr(item, "display_unit", None),
                 value=value,
                 display_value=display_value,
+                display_caption=display_caption,
                 status=status,
                 stale=_is_reference_stale(reported_at, now=summary_now),
                 show_updated_age=item.show_updated_age,

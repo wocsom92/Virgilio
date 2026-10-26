@@ -204,6 +204,8 @@ class QuickStatusTileRead(BaseModel):
     display_unit: str | None = None
     value: float | None
     display_value: str
+    # Small text under the value, e.g. "now / 24h / total" for the fail2ban tile.
+    display_caption: str | None = None
     status: Literal["ok", "info", "warn", "critical", "unknown"]
     stale: bool = False
     show_updated_age: bool = False

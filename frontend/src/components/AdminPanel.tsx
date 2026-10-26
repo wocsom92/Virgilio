@@ -327,7 +327,7 @@ const quickStatusMetricOptions: Array<{
     label: 'Fail2ban',
     defaultWarning: 0,
     defaultCritical: 0,
-    helper: 'Currently banned IPs per jail from the host\'s fail2ban. Critical when fail2ban is installed but not running; details list jails, recent bans and the last banned IP.',
+    helper: 'Banned IPs from the host\'s fail2ban, shown as now / last 24 h / total. Critical when fail2ban is installed but not running; thresholds apply to the currently banned count; details list jails, recent bans and the last banned IP.',
     requiresThresholds: false,
     thresholdDirection: 'higher',
     requiresPing: false,
