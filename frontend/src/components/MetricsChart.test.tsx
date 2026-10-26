@@ -132,4 +132,36 @@ describe('MetricsChart', () => {
     expect(lastLineProps.data.datasets[0].fill).toBe('origin');
     expect(screen.getByText('55 °C')).toBeInTheDocument();
   });
+
+  it('draws a lone stepped series as a filled step line with its own axis labels', () => {
+    const end = Date.UTC(2026, 9, 24, 12, 0, 0);
+    const points = [
+      { reported_at: new Date(end - 60 * 1000).toISOString(), fan_level: 0 },
+      { reported_at: new Date(end).toISOString(), fan_level: 2 },
+    ];
+    const formatAxis = (value: number) => (value === 0 ? 'off' : `${value}`);
+    render(
+      <MetricsChart
+        title="Fan"
+        range="hourly"
+        points={points}
+        loading={false}
+        error={null}
+        datasets={[{ label: 'Fan', color: '#0ea5e9', extractor: (point: any) => point.fan_level ?? null, stepped: true }]}
+        suggestedMin={0}
+        suggestedMax={4}
+        formatValue={(value) => (value === 0 ? 'Off' : `Level ${value}`)}
+        formatAxis={formatAxis}
+        windowStart={end - 60 * 60 * 1000}
+        windowEnd={end}
+      />
+    );
+    const dataset = lastLineProps.data.datasets[0];
+    expect(dataset).toMatchObject({ yAxisID: 'y', stepped: 'before', fill: 'origin', borderWidth: 1.75 });
+    expect(lastLineProps.options.scales.y1).toBeUndefined();
+    expect(lastLineProps.options.scales.y.ticks.callback(0)).toBe('off');
+    expect(lastLineProps.options.scales.y.ticks.callback(3)).toBe('3');
+    expect(lastLineProps.options.scales.x.ticks.autoSkipPadding).toBeGreaterThan(3);
+    expect(screen.getByText('Level 2')).toBeInTheDocument();
+  });
 });

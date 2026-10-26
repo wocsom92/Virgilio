@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - The **running containers** tile is informational only, like swap: it no longer takes a target range or raises warning/error states.
+- **Fan chart:** the cooling fan level is now its own chart next to CPU temperature (a stepped line with an "off / 1 / 2 / …" axis and "Level N" values) instead of a dashed band and "Fan 2 / Fan off" labels squeezed onto the temperature chart. Time-axis labels on all charts keep a minimum gap so they no longer run into each other in narrow tiles.
 
 ## [9.3.0] - 2026-10-24
 

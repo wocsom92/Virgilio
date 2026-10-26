@@ -67,6 +67,8 @@ interface MetricsChartProps {
   markers?: number[] | null;
   annotations?: ChartAnnotation[] | null;
   formatValue?: (value: number) => string;
+  /** Formatter for the left axis ticks when they should be terser than the values (e.g. "off", "1"). */
+  formatAxis?: (value: number) => string;
   secondaryAxis?: SecondaryAxisConfig | null;
 }
 
@@ -77,6 +79,8 @@ const RANGE_TO_DURATION_MS: Record<MetricRange, number> = {
 };
 
 const X_TICK_LIMIT: Record<MetricRange, number> = { hourly: 6, daily: 6, weekly: 7 };
+/** Minimum gap between neighbouring time labels; Chart.js's default (3px) lets them touch. */
+const X_TICK_PADDING_PX = 16;
 
 const DEFAULT_FORMAT = (value: number) => (Number.isInteger(value) ? `${value}` : value.toFixed(1));
 
@@ -179,6 +183,7 @@ function MetricsChartComponent({
   markers = null,
   annotations = null,
   formatValue = DEFAULT_FORMAT,
+  formatAxis,
   secondaryAxis = null,
 }: MetricsChartProps) {
   const palette = useChartPalette();
@@ -250,10 +255,10 @@ function MetricsChartComponent({
       }
 
       const onPrimaryAxis = (dataset.axis ?? 'y') === 'y';
-      // Single series get a gradient fill; a stepped secondary series (fan level) becomes a faint
-      // band behind the data so it reads as context rather than competing with the metric.
-      const filled = (onPrimaryAxis && primaryCount === 1 && !dataset.stepped) || (!onPrimaryAxis && !!dataset.stepped);
+      // A lone primary series (stepped or not) gets a gradient fill; a stepped secondary series
+      // becomes a faint band behind the data so it reads as context rather than competing with it.
       const bandFill = !onPrimaryAxis && !!dataset.stepped;
+      const filled = (onPrimaryAxis && primaryCount === 1) || bandFill;
       const fillColor = (context: ScriptableContext<'line'>) => {
         const { chart } = context;
         const area = chart.chartArea;
@@ -272,7 +277,7 @@ function MetricsChartComponent({
         borderColor: dataset.color,
         backgroundColor: bandFill ? withAlpha(dataset.color, 0.12) : filled ? fillColor : dataset.color,
         fill: filled ? 'origin' : false,
-        borderWidth: dataset.stepped ? 1 : 1.75,
+        borderWidth: bandFill ? 1 : 1.75,
         borderDash: dataset.dashed ? [4, 3] : undefined,
         borderCapStyle: 'round' as const,
         borderJoinStyle: 'round' as const,
@@ -321,7 +326,7 @@ function MetricsChartComponent({
             font: tickFont,
             maxTicksLimit: 5,
             padding: 6,
-            callback: (value) => formatValue(Number(value)),
+            callback: (value) => (formatAxis ?? formatValue)(Number(value)),
           },
         },
         ...(hasSecondaryAxis
@@ -358,6 +363,7 @@ function MetricsChartComponent({
             font: tickFont,
             maxRotation: 0,
             autoSkip: true,
+            autoSkipPadding: X_TICK_PADDING_PX,
             maxTicksLimit: X_TICK_LIMIT[range],
             padding: 4,
           },
@@ -428,6 +434,7 @@ function MetricsChartComponent({
     hasSecondaryAxis,
     secondaryAxis,
     formatValue,
+    formatAxis,
     formatByLabel,
     range,
   ]);

@@ -10,7 +10,7 @@ import type {
 } from '../api/client';
 import { fetchMetricSeries } from '../api/client';
 import { usePolling } from '../hooks/usePolling';
-import { MetricsChart, type ChartAnnotation, type DatasetConfig, type SecondaryAxisConfig } from './MetricsChart';
+import { MetricsChart, type DatasetConfig } from './MetricsChart';
 import { getUserFacingErrorMessage } from '../utils/errors';
 import { formatBinarySizeFromGiB, formatBitsPerSecond, formatFan, formatTemperature } from '../utils/formatting';
 import { normalizeMountMetricSelection } from '../utils/mountMetrics';
@@ -31,7 +31,7 @@ const RANGE_OPTIONS: Array<{ value: MetricRange; label: string }> = [
 
 const CHART_COLORS = {
   cpuTemp: '#f97316',
-  fan: '#64748b',
+  fan: '#0ea5e9',
   ram: '#0d6efd',
   memoryAvailable: '#14b8a6',
   swap: '#f59e0b',
@@ -47,7 +47,8 @@ const formatPercent = (value: number) => `${Number.isInteger(value) ? value : va
 const formatCelsius = (value: number) => `${Number.isInteger(value) ? value : value.toFixed(1)} °C`;
 const formatGiB = (value: number) => `${Number.isInteger(value) ? value : value.toFixed(1)} GiB`;
 const formatLoad = (value: number) => value.toFixed(2);
-const formatFanLevel = (value: number) => (value === 0 ? 'off' : `L${value}`);
+const formatFanLevel = (value: number) => (value === 0 ? 'Off' : `Level ${Math.round(value)}`);
+const formatFanAxis = (value: number) => (value === 0 ? 'off' : `${Math.round(value)}`);
 
 interface MiniChartConfig {
   key: string;
@@ -57,8 +58,7 @@ interface MiniChartConfig {
   suggestedMax: number | undefined;
   emptyMessage: string;
   formatValue?: (value: number) => string;
-  secondaryAxis?: SecondaryAxisConfig | null;
-  annotations?: ChartAnnotation[] | null;
+  formatAxis?: (value: number) => string;
 }
 
 function parseDate(value: string | null | undefined): Date | null {
@@ -149,27 +149,17 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
     );
   }, [seriesResponse]);
 
-  // Fan level changes, drawn on the CPU temperature chart ("Fan 2", "Fan off").
+  // Whether the window has cooling-fan samples, and the top of the fan chart's axis.
   const fanInfo = useMemo(() => {
     let maxLevel = 0;
     let hasFan = false;
-    const changes: ChartAnnotation[] = [];
-    let previousLevel: number | null = null;
-    const ordered = series
-      .map((point) => ({ point, timestamp: parseDate(point.reported_at)?.getTime() ?? Number.NaN }))
-      .filter(({ timestamp }) => Number.isFinite(timestamp))
-      .sort((a, b) => a.timestamp - b.timestamp);
-    for (const { point, timestamp } of ordered) {
+    for (const point of series) {
       const level = point.fan_level;
       if (level === null || level === undefined) continue;
       hasFan = true;
       maxLevel = Math.max(maxLevel, level, point.fan_max_level ?? 0);
-      if (previousLevel !== null && level !== previousLevel) {
-        changes.push({ timestamp, label: level === 0 ? 'Fan off' : `Fan ${level}` });
-      }
-      previousLevel = level;
     }
-    return { hasFan, maxLevel: Math.max(maxLevel, 1), changes };
+    return { hasFan, maxLevel: Math.max(maxLevel, 1) };
   }, [series]);
 
   const rebootMarkers = useMemo(
@@ -235,36 +225,44 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
     const charts: MiniChartConfig[] = [];
 
     if (metricIsEnabled(selectedMetrics, 'cpu_temperature_c')) {
-      const datasets: DatasetConfig[] = [
-        {
-          label: 'CPU',
-          color: CHART_COLORS.cpuTemp,
-          extractor: (point: MetricSeriesPoint) => point.cpu_temperature_c ?? null,
-          format: formatCelsius,
-        },
-      ];
-      if (fanInfo.hasFan) {
-        datasets.push({
-          label: 'Fan level',
-          color: CHART_COLORS.fan,
-          extractor: (point: MetricSeriesPoint) => point.fan_level ?? null,
-          axis: 'y1',
-          stepped: true,
-          dashed: true,
-          format: formatFanLevel,
-        });
-      }
       charts.push({
         key: 'cpu-temp',
         title: 'CPU Temperature',
-        datasets,
+        datasets: [
+          {
+            label: 'CPU',
+            color: CHART_COLORS.cpuTemp,
+            extractor: (point: MetricSeriesPoint) => point.cpu_temperature_c ?? null,
+            format: formatCelsius,
+          },
+        ],
         suggestedMin: 0,
         suggestedMax: 100,
         emptyMessage: 'Waiting for CPU temperature samples.',
         formatValue: formatCelsius,
-        secondaryAxis: fanInfo.hasFan ? { min: 0, max: fanInfo.maxLevel, format: formatFanLevel } : null,
-        annotations: fanInfo.hasFan ? fanInfo.changes : null,
       });
+      // The cooling fan gets its own chart next to the temperature it reacts to: a stepped line of
+      // the discrete level (0 = off) rather than a band squeezed onto the temperature axes.
+      if (fanInfo.hasFan) {
+        charts.push({
+          key: 'fan',
+          title: 'Fan',
+          datasets: [
+            {
+              label: 'Fan',
+              color: CHART_COLORS.fan,
+              extractor: (point: MetricSeriesPoint) => point.fan_level ?? null,
+              stepped: true,
+              format: formatFanLevel,
+            },
+          ],
+          suggestedMin: 0,
+          suggestedMax: fanInfo.maxLevel,
+          emptyMessage: 'Waiting for fan samples.',
+          formatValue: formatFanLevel,
+          formatAxis: formatFanAxis,
+        });
+      }
     }
 
     if (metricIsEnabled(selectedMetrics, 'ram_used_percent')) {
@@ -546,9 +544,8 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                         windowStart={windowBounds?.start}
                         windowEnd={windowBounds?.end}
                         markers={rebootMarkers}
-                        annotations={chart.annotations ?? null}
                         formatValue={chart.formatValue}
-                        secondaryAxis={chart.secondaryAxis ?? null}
+                        formatAxis={chart.formatAxis}
                       />
                     </div>
                   </div>
