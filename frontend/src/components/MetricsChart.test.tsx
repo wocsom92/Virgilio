@@ -164,4 +164,31 @@ describe('MetricsChart', () => {
     expect(lastLineProps.options.scales.x.ticks.autoSkipPadding).toBeGreaterThan(3);
     expect(screen.getByText('Level 2')).toBeInTheDocument();
   });
+
+  it('keeps the preferred axis range unless a sample falls outside it', () => {
+    const end = Date.UTC(2026, 9, 24, 12, 0, 0);
+    const renderWith = (values: number[]) => {
+      render(
+        <MetricsChart
+          title="CPU Temperature"
+          range="hourly"
+          points={values.map((value, index) => ({
+            reported_at: new Date(end - (values.length - 1 - index) * 60 * 1000).toISOString(),
+            cpu_temperature_c: value,
+          }))}
+          loading={false}
+          error={null}
+          datasets={[{ label: 'CPU', color: '#f97316', extractor: (point: any) => point.cpu_temperature_c ?? null }]}
+          rangeMin={25}
+          rangeMax={80}
+          windowStart={end - 60 * 60 * 1000}
+          windowEnd={end}
+        />
+      );
+      return lastLineProps.options.scales.y;
+    };
+    expect(renderWith([42, 61.5])).toMatchObject({ min: 25, max: 80 });
+    expect(renderWith([42, 84])).toMatchObject({ min: 25, max: 90 });
+    expect(renderWith([18, 42])).toMatchObject({ min: 10, max: 80 });
+  });
 });

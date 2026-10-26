@@ -57,6 +57,12 @@ interface MetricsChartProps {
   datasets: DatasetConfig[];
   suggestedMin?: number;
   suggestedMax?: number;
+  /**
+   * Preferred left-axis bounds (e.g. 25-80 °C). Unlike `suggestedMin/Max`, these are used as-is
+   * when every sample fits inside them, and only widened (to the nearest 10) when one does not.
+   */
+  rangeMin?: number;
+  rangeMax?: number;
   emptyMessage?: string;
   pollIntervalSeconds?: number;
   /** Seconds per averaged bucket when the backend downsampled the window (see `bucket_seconds`). */
@@ -83,6 +89,17 @@ const X_TICK_LIMIT: Record<MetricRange, number> = { hourly: 6, daily: 6, weekly:
 const X_TICK_PADDING_PX = 16;
 
 const DEFAULT_FORMAT = (value: number) => (Number.isInteger(value) ? `${value}` : value.toFixed(1));
+
+/** Axis bound that honours the preferred value unless the data falls outside it. */
+function fitAxisBound(preferred: number | undefined, observed: number | null, side: 'min' | 'max'): number | undefined {
+  if (preferred === undefined || observed === null) {
+    return preferred;
+  }
+  if (side === 'min') {
+    return observed < preferred ? Math.floor(observed / 10) * 10 : preferred;
+  }
+  return observed > preferred ? Math.ceil(observed / 10) * 10 : preferred;
+}
 
 function parseTimestamp(value: string): number {
   if (!value) {
@@ -175,6 +192,8 @@ function MetricsChartComponent({
   datasets,
   suggestedMin,
   suggestedMax,
+  rangeMin,
+  rangeMax,
   emptyMessage = 'No data available.',
   pollIntervalSeconds,
   bucketSeconds = null,
@@ -210,6 +229,8 @@ function MetricsChartComponent({
 
     let hasAnyValues = false;
     let latest: number | null = null;
+    let primaryMin: number | null = null;
+    let primaryMax: number | null = null;
     const primaryCount = datasets.filter((dataset) => (dataset.axis ?? 'y') === 'y').length;
 
     const configuredDatasets = datasets.map((dataset, index) => {
@@ -231,6 +252,10 @@ function MetricsChartComponent({
         if (value !== null && value !== undefined) {
           hasAnyValues = true;
           lastValue = value;
+          if ((dataset.axis ?? 'y') === 'y') {
+            primaryMin = primaryMin === null ? value : Math.min(primaryMin, value);
+            primaryMax = primaryMax === null ? value : Math.max(primaryMax, value);
+          }
         }
         if (firstSampleTimestamp === null) {
           firstSampleTimestamp = timestamp;
@@ -298,6 +323,8 @@ function MetricsChartComponent({
       datasets: configuredDatasets,
       hasAnyValues,
       latest,
+      primaryMin,
+      primaryMax,
       window: { start: windowStartValue, end: windowEndValue },
     };
   }, [datasets, points, range, pollIntervalSeconds, bucketSeconds, windowEnd, windowStart, palette.surface]);
@@ -317,6 +344,8 @@ function MetricsChartComponent({
       scales: {
         y: {
           position: 'left',
+          min: fitAxisBound(rangeMin, processed.primaryMin, 'min'),
+          max: fitAxisBound(rangeMax, processed.primaryMax, 'max'),
           suggestedMin,
           suggestedMax,
           border: { display: false },
@@ -428,6 +457,10 @@ function MetricsChartComponent({
     datasets.length,
     suggestedMin,
     suggestedMax,
+    rangeMin,
+    rangeMax,
+    processed.primaryMin,
+    processed.primaryMax,
     processed.window.end,
     processed.window.start,
     palette,

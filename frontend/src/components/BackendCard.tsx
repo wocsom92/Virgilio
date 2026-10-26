@@ -54,8 +54,10 @@ interface MiniChartConfig {
   key: string;
   title: string;
   datasets: DatasetConfig[];
-  suggestedMin: number;
-  suggestedMax: number | undefined;
+  suggestedMin?: number;
+  suggestedMax?: number;
+  rangeMin?: number;
+  rangeMax?: number;
   emptyMessage: string;
   formatValue?: (value: number) => string;
   formatAxis?: (value: number) => string;
@@ -236,8 +238,10 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
             format: formatCelsius,
           },
         ],
-        suggestedMin: 0,
-        suggestedMax: 100,
+        // A Pi idles around 40-60 °C, so a 0-100 axis flattened the line; the axis covers 25-80 °C
+        // and widens only when a sample falls outside that band.
+        rangeMin: 25,
+        rangeMax: 80,
         emptyMessage: 'Waiting for CPU temperature samples.',
         formatValue: formatCelsius,
       });
@@ -538,6 +542,8 @@ function BackendCardComponent({ backend, onRefresh, disabled, hidden, onToggleHi
                         datasets={chart.datasets}
                         suggestedMin={chart.suggestedMin}
                         suggestedMax={chart.suggestedMax}
+                        rangeMin={chart.rangeMin}
+                        rangeMax={chart.rangeMax}
                         emptyMessage={chart.emptyMessage}
                         pollIntervalSeconds={backend.poll_interval_seconds}
                         bucketSeconds={seriesResponse?.bucket_seconds ?? null}
